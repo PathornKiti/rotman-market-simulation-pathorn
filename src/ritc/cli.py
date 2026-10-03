@@ -4,6 +4,7 @@ Command-line entry point.
     python -m ritc list                         # the five strategies
     python -m ritc doctor                       # check connection, print raw API data
     python -m ritc monitor                      # read-only dashboard (always safe)
+    python -m ritc analyze [TICKER ...]         # GARCH / mean-reversion diagnostics from price history
     python -m ritc sim <case>                   # offline simulator on :9999
     python -m ritc run <case>                   # DRY RUN (logs decisions, sends nothing)
     python -m ritc run <case> --live            # trade
@@ -90,6 +91,36 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_analyze(a: argparse.Namespace) -> int:
+    """Time-series diagnostics per ticker: should we use GARCH? Is it mean-reverting?"""
+    from .pricing.timeseries import Garch11, fit_ou, log_returns, volatility_clusters
+
+    c = RITClient(max_retries=1)
+    tickers = a.tickers or [s["ticker"] for s in c.securities()]
+    print(f"{'ticker':<10}{'n':>5}{'vol/tick':>10}{'LB Q(r^2)':>11}{'clusters':>10}"
+          f"{'alpha':>8}{'beta':>8}{'OU t':>8}{'half-life':>11}{'mean-rev':>10}")
+    for t in tickers:
+        closes = [float(h["close"]) for h in reversed(c.history(t, limit=a.limit)) if h.get("close")]
+        r = log_returns(closes)
+        if len(r) < 30:
+            print(f"{t:<10}{len(r):>5}  not enough history yet")
+            continue
+        clusters, q = volatility_clusters(r)
+        vol = (sum(x * x for x in r) / len(r)) ** 0.5
+        try:
+            g = Garch11.fit(r)
+            ab = f"{g.alpha:>8.3f}{g.beta:>8.3f}"
+        except ValueError:
+            ab = f"{'-':>8}{'-':>8}"
+        ou = fit_ou(closes)
+        hl = f"{ou.half_life:>11.1f}" if ou and ou.half_life < 1e6 else f"{'inf':>11}"
+        print(f"{t:<10}{len(r):>5}{vol:>10.5f}{q:>11.1f}{('YES' if clusters else 'no'):>10}{ab}"
+              f"{(ou.t_stat if ou else 0):>8.2f}{hl}{('YES' if ou and ou.significant() else 'no'):>10}")
+    print("\nclusters=YES -> try vol_model = \"garch\" (equity) / garch_weight > 0 (derivatives, no-news periods)"
+          "\nmean-rev=YES -> ou_weight leans equity quotes toward the OU forecast automatically")
+    return 0
+
+
 def cmd_monitor(a: argparse.Namespace) -> int:
     c = RITClient(max_retries=1)
     try:
@@ -128,6 +159,11 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--interval", type=float, default=1.0)
     m.add_argument("--once", action="store_true")
     m.set_defaults(fn=cmd_monitor)
+
+    an = sub.add_parser("analyze", help="time-series diagnostics: GARCH / mean reversion per ticker")
+    an.add_argument("tickers", nargs="*")
+    an.add_argument("--limit", type=int, default=1000, help="max history points per ticker")
+    an.set_defaults(fn=cmd_analyze)
 
     r = sub.add_parser("run", help="run a strategy (dry-run unless --live)")
     r.add_argument("case", choices=sorted(REGISTRY))

@@ -30,9 +30,11 @@ Copy these from the brief into `config/<case>.toml`:
    - tickers match your config
    - `/limits` names match your `[risk.groups.*]` names
    - a news headline parses (derivatives and commodity)
-3. Before the bell: `python -m ritc run <case> -v` (dry run). The bot waits for ACTIVE.
-4. Watch about 30 seconds of decisions. If they make sense, Ctrl-C and restart with `--live`.
-5. In a second terminal: `python -m ritc monitor`.
+3. In the practice round: `python -m ritc analyze`. If volatility clusters, set
+   `vol_model = "garch"` in `config/equity.toml` (see docs/TIME_SERIES.md).
+4. Before the bell: `python -m ritc run <case> -v` (dry run). The bot waits for ACTIVE.
+5. Watch about 30 seconds of decisions. If they make sense, Ctrl-C and restart with `--live`.
+6. In a second terminal: `python -m ritc monitor`.
 
 ## If something goes wrong
 

@@ -13,7 +13,9 @@ case family:
 | **Commodity trading** | `commodity` | Spot vs futures cost-of-carry arbitrage, plus short-term momentum trades on inventory news (bigger build than expected → short, bigger draw → long). | [docs](docs/strategies/commodity.md) |
 
 All five share one tested core: API client, order-book maths, execution, risk limits
-and the run loop. An **offline simulator** serves the same REST API, so you can rehearse
+and the run loop. **Time-series models** (GARCH(1,1) volatility, a Kalman fair-value
+level and Ornstein-Uhlenbeck mean reversion) feed the bots where they measurably help.
+See [docs/TIME_SERIES.md](docs/TIME_SERIES.md). An **offline simulator** serves the same REST API, so you can rehearse
 every case without the Windows-only RIT client.
 
 ---
@@ -53,7 +55,7 @@ Swap `liability` for `derivatives`, `etf`, `equity` or `commodity`.
 │   ├── equity.toml
 │   └── commodity.toml
 ├── src/ritc/
-│   ├── cli.py                  # python -m ritc {list,doctor,monitor,sim,run}
+│   ├── cli.py                  # python -m ritc {list,doctor,monitor,analyze,sim,run}
 │   ├── core/                   # case-independent building blocks
 │   │   ├── client.py           #   RIT REST API wrapper (retries, 429 handling, safe rounding)
 │   │   ├── book.py             #   order book: walk/VWAP, max size within a price, microprice
@@ -64,6 +66,7 @@ Swap `liability` for `derivatives`, `etf`, `equity` or `commodity`.
 │   ├── pricing/
 │   │   ├── options.py          #   Black-Scholes, Greeks, implied vol, put-call parity
 │   │   ├── stats.py            #   EWMA, volatility, rolling z-score
+│   │   ├── timeseries.py       #   GARCH(1,1), Kalman level, Ornstein-Uhlenbeck, ARCH test
 │   │   └── news.py             #   volatility and inventory headline parsers
 │   ├── strategies/             # THE FIVE BOTS: pure decision functions + a thin Strategy class
 │   │   ├── liability.py
@@ -115,6 +118,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 2. Copy tickers, fees, max order sizes and limits from the case brief into
    `config/<case>.toml`.
 3. Run `python -m ritc doctor`. Check field names and read a few real news headlines.
+   In the practice case, run `python -m ritc analyze` to choose between GARCH and EWMA.
 4. Run `python -m ritc run <case> -v` (dry run) for about 30 seconds, then `--live`.
 
 Step-by-step checklist: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.

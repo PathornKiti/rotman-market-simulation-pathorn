@@ -23,7 +23,14 @@ imbalance_lean = 0.25
 size = 2000                    # base quote size
 max_inventory = 20000          # size taper reaches zero here
 hard_inventory = 22000         # past this, cross the spread to cut inventory
-vol_halflife = 20
+vol_halflife = 20             # EWMA vol (used until GARCH has enough data, or if vol_model = "ewma")
+vol_model = "ewma"            # or "garch": GARCH(1,1) on mid log-returns, refit every 50 ticks.
+                              # GARCH lost to EWMA on 5/5 simulator seeds - but the simulator has no
+                              # volatility clustering, which is exactly what GARCH exploits. A/B both
+                              # in the official RIT practice case before choosing.
+garch_window = 600            # rolling window of returns used for the fit
+ou_weight = 0.5               # lean toward the mean-reversion forecast (only when significant)
+ou_horizon = 10               # ticks ahead for that forecast
 requote_tolerance = 0.01
 
 # Per-ticker overrides of any of the above:

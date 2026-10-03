@@ -21,6 +21,7 @@ competitive_margin = 0.05     # $/share kept when bidding on non-fixed tenders
 drift_halflife = 15           # ticks, for the adverse-drift estimate
 unwind_ticks_per_share = 0.0005  # expected unwind time per share (drift exposure)
 min_ticks_to_unwind = 15      # decline tenders this close to the bell
+risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind ticks)
 max_slippage = 0.04           # unwind slices keep VWAP within this of the touch
 participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end

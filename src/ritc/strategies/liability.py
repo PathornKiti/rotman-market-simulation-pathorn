@@ -11,7 +11,12 @@ understates how much you can unwind (it refills over the unwind horizon), but
 it also hides the fact that you push the price against yourself. So:
 
     expected unwind VWAP = walk( book scaled by refill_factor, quantity )
-    profit / share       = (unwind VWAP - tender price) * sign - fees - drift penalty
+    profit / share       = (unwind VWAP - tender price) * sign - fees - drift penalty - risk premium
+    risk premium         = risk_aversion * GARCH price vol/tick * sqrt(unwind ticks)
+
+The risk premium is the time-series part: holding a block while you unwind it
+exposes you to sigma * sqrt(time). GARCH tracks sigma tick by tick, so the same
+tender needs a fatter edge when the market has just turned volatile.
 
 Accept iff profit/share >= min_profit AND the block fits inside every risk limit
 AND there is enough time left in the period to unwind it.
@@ -35,6 +40,7 @@ from dataclasses import dataclass
 from ..core.book import Level, OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..pricing.stats import EWMA
+from ..pricing.timeseries import OnlineGarch
 
 log = logging.getLogger("ritc.liability")
 
@@ -68,6 +74,8 @@ def evaluate_tender(
     drift_per_tick: float = 0.0,
     unwind_ticks_per_lot: float = 0.0,
     min_ticks_to_unwind: int = 10,
+    price_vol_per_tick: float = 0.0,
+    risk_aversion: float = 0.0,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -119,6 +127,7 @@ def evaluate_tender(
     # Adverse drift over the time it takes to unwind (only counts against us).
     unwind_ticks = to_unwind * unwind_ticks_per_lot
     drift_cost = max(0.0, -sign * drift_per_tick) * unwind_ticks
+    drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
 
     if fixed:
@@ -174,13 +183,19 @@ class LiabilityStrategy(Strategy):
         self.p = s
         self.drift: dict[str, EWMA] = {t: EWMA(s.get("drift_halflife", 15)) for t in self.tickers}
         self.last_mid: dict[str, float] = {}
+        self.garch = {t: OnlineGarch() for t in self.tickers}
+        self.last_tick = -1
         self.seen: set[int] = set()
 
     def _update_drift(self, snap: Snapshot) -> None:
+        if snap.tick == self.last_tick:          # one time-series observation per tick
+            return
+        self.last_tick = snap.tick
         for t in self.tickers:
             m = snap.mid(t)
             if m is None:
                 continue
+            self.garch[t].add_price(m)
             if t in self.last_mid:
                 self.drift[t].update(m - self.last_mid[t])
             self.last_mid[t] = m
@@ -189,6 +204,10 @@ class LiabilityStrategy(Strategy):
         self._update_drift(snap)
         self.handle_tenders(snap)
         self.unwind(snap)
+
+    def price_vol(self, ticker: str, snap: Snapshot) -> float:
+        g, mid = self.garch.get(ticker), snap.mid(ticker)
+        return g.vol() * mid if g is not None and g.ready and mid else 0.0
 
     def handle_tenders(self, snap: Snapshot) -> None:
         positions = snap.positions
@@ -210,6 +229,8 @@ class LiabilityStrategy(Strategy):
                 drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
                 unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),
                 min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
+                price_vol_per_tick=self.price_vol(ticker, snap),
+                risk_aversion=self.p.get("risk_aversion", 0.0),
             )
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
