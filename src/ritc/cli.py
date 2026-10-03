@@ -8,6 +8,7 @@ Command-line entry point.
     python -m ritc sim <case>                   # offline simulator on :9999
     python -m ritc run <case>                   # DRY RUN (logs decisions, sends nothing)
     python -m ritc run <case> --live            # trade
+    python -m ritc tune <case> --grid section.key=a,b --seeds 8   # A/B test on the simulator
 """
 
 from __future__ import annotations
@@ -33,8 +34,19 @@ def cmd_list(_: argparse.Namespace) -> int:
     return 0
 
 
-def build(case: str, cfg_path: str | None, live: bool) -> tuple[Runner, dict]:
+def set_path(cfg: dict, dotted: str, value) -> None:
+    """set_path(cfg, "strategy.min_profit_per_share", 0.05)"""
+    *parents, leaf = dotted.split(".")
+    node = cfg
+    for k in parents:
+        node = node.setdefault(k, {})
+    node[leaf] = value
+
+
+def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = None) -> tuple[Runner, dict]:
     cfg = config.load_case_config(case, cfg_path)
+    for k, v in (overrides or {}).items():
+        set_path(cfg, k, v)
     client = RITClient()
     dry = not live and config.env_bool("RIT_DRY_RUN", True)
     if live:
@@ -47,7 +59,9 @@ def build(case: str, cfg_path: str | None, live: bool) -> tuple[Runner, dict]:
     strat = REGISTRY[case](Context(client, ex, risk, cfg))
     run = cfg.get("run", {})
     runner = Runner(strat, interval=float(run.get("interval", config.env_float("RIT_INTERVAL", 0.25))),
-                    wind_down_ticks=int(run.get("wind_down_ticks", 5)))
+                    wind_down_ticks=int(run.get("wind_down_ticks", 5)),
+                    max_drawdown=float(run.get("max_drawdown", 0.0)),
+                    feed_poll=float(run.get("feed_poll", 0.1)))
     return runner, cfg
 
 
@@ -63,6 +77,14 @@ def cmd_run(a: argparse.Namespace) -> int:
     except RITError:
         pass
     runner.run(once=a.once)
+    return 0
+
+
+def cmd_tune(a: argparse.Namespace) -> int:
+    from .tune import parse_grid, report, tune
+    seeds = list(range(a.first_seed, a.first_seed + a.seeds))
+    results = tune(a.case, parse_grid(a.grid or []), seeds, a.speed, a.workers, a.config)
+    print("\n" + report(results))
     return 0
 
 
@@ -172,6 +194,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--once", action="store_true", help="run a single loop then exit")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(fn=cmd_run)
+
+    tu = sub.add_parser("tune", help="grid-search / A-B test parameters on the simulator")
+    tu.add_argument("case", choices=sorted(REGISTRY))
+    tu.add_argument("--grid", action="append", help="section.key=v1,v2 (repeatable)")
+    tu.add_argument("--seeds", type=int, default=5)
+    tu.add_argument("--first-seed", type=int, default=1)
+    tu.add_argument("--speed", type=float, default=40.0, help="simulator ticks per second")
+    tu.add_argument("--workers", type=int)
+    tu.add_argument("--config")
+    tu.set_defaults(fn=cmd_tune)
 
     s = sub.add_parser("sim", help="offline RIT simulator")
     s.add_argument("case", choices=sorted(REGISTRY))

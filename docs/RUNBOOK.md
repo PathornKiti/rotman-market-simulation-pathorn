@@ -20,6 +20,7 @@ Copy these from the brief into `config/<case>.toml`:
 | `[risk.groups.*]` gross/net (name must match `/limits`) | "Trading limits" |
 | derivatives: `expiry_ticks`, `ticks_per_year`, `multiplier`, `option_regex` | "Options" section |
 | commodity: `futures` expiry ticks, `carry_per_tick`, `hedge_ratio` | "Storage costs", "Contract size" |
+| `[run] max_drawdown` (kill switch) | Not in the brief: set to 2–3× the worst drawdown you saw in practice |
 | etf: `components` weights, `fx_ticker`, `converter_cost` | "ETF composition", "Converter" |
 
 ## At the desk
@@ -46,5 +47,9 @@ Copy these from the brief into `config/<case>.toml`:
 | Bot doing something odd | **Ctrl-C** (cancels everything), switch to manual. |
 | News not parsed | Add the phrasing to `pricing/news.py` (add a test!), or set the value in config and restart. |
 | Position stuck at the end | `python -c "from ritc.core import RITClient as C; c=C(); c.cancel_all()"`, then flatten by hand. |
+
+After each heat, read the **TCA report** at the end of the log. A large positive $/unit on
+`aggressive` means you are paying too much spread; a low `fill%` on `passive` means
+your passive orders aren't getting filled (raise `front_load` or shorten the schedule).
 
 Every run writes a timestamped log to `logs/`. Keep them; they are your post-mortem.

@@ -123,6 +123,10 @@ class EquityStrategy(Strategy):
         self.hard = int(s.get("hard_inventory", 40000))
         self.qm = QuoteManager(self.ex, tolerance=s.get("requote_tolerance", 0.01))
 
+    @property
+    def book_tickers(self) -> list[str]:
+        return self.tickers
+
     def step(self, snap: Snapshot) -> None:
         open_ids = None
         if not self.ex.dry_run:

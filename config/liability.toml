@@ -27,6 +27,17 @@ participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
 decline_explicitly = false
 
+[execution]
+unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
+unwind_horizon_ticks = 30     # target: flat within this many ticks of accepting a tender
+max_slippage = 0.04           # aggressive catch-up slices: VWAP within this of the touch
+participation = 0.35          # max fraction of visible depth per aggressive slice
+display_qty = 5000            # iceberg: largest passive child shown in the book
+urgent_ticks = 6              # cross for everything left in the final ticks of the schedule
+front_load = 0.3              # 0 = linear schedule; >0 = unwind more early (less drift risk)
+
 [run]
+max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.25
 wind_down_ticks = 5

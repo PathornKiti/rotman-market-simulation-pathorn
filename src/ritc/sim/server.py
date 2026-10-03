@@ -327,6 +327,8 @@ class Market:
             elif at_touch and random.random() < 0.35:
                 take = min(left, s.lot * random.randint(1, 2))
             if take:
+                prev = o["quantity_filled"]
+                o["vwap"] = ((o.get("vwap") or 0.0) * prev + p * take) / (prev + take)
                 o["quantity_filled"] += take
                 self._apply_fill(s, o["action"], take, p, maker=True)
                 if o["quantity_filled"] >= o["quantity"]:

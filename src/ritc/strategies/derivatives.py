@@ -159,6 +159,7 @@ def blend_forecast(news_vol: float | None, garch_vol: float | None, garch_weight
 
 class DerivativesStrategy(Strategy):
     name = "derivatives"
+    wants_news = True              # vol / delta-limit headlines via the real-time feed
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -174,7 +175,6 @@ class DerivativesStrategy(Strategy):
         self.p = s
         self.forecast: float = float(s.get("initial_vol", 0.20))
         self.delta_limit: float = float(s.get("delta_limit", 5000))
-        self.last_news = 0
         self.news_seen = False
         self.specs: dict[str, OptionSpec] = {}
         self.garch = OnlineGarch(window=int(s.get("garch_window", 600)), min_obs=int(s.get("garch_min_obs", 60)))
@@ -206,11 +206,7 @@ class DerivativesStrategy(Strategy):
                               self.p.get("garch_weight", 0.0), self.forecast)
 
     def read_news(self) -> None:
-        for item in sorted(self.client.news(since=self.last_news), key=lambda n: n.get("news_id", 0)):
-            nid = int(item.get("news_id", 0))
-            if nid <= self.last_news:
-                continue
-            self.last_news = nid
+        for item in self.new_news():
             v = parse_vol_news(f"{item.get('headline', '')} {item.get('body', '')}")
             if v.delta_limit:
                 self.delta_limit = float(v.delta_limit)

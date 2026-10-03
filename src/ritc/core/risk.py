@@ -124,3 +124,26 @@ class RiskManager:
             if gross > g.gross or abs(net) > g.net:
                 return False
         return True
+
+
+@dataclass
+class DrawdownGuard:
+    """
+    Kill switch. Tracks peak NLV; once NLV falls `max_drawdown` dollars below the
+    peak it trips and stays tripped. The Runner then cancels everything, flattens
+    and stops adding risk - one bad regime should not be allowed to eat a heat.
+    `max_drawdown <= 0` disables it.
+    """
+    max_drawdown: float = 0.0
+    peak: float | None = None
+    tripped: bool = False
+
+    def update(self, nlv: float | None) -> bool:
+        """Feed the latest NLV. Returns True on the update that trips the guard."""
+        if self.max_drawdown <= 0 or nlv is None or self.tripped:
+            return False
+        self.peak = nlv if self.peak is None else max(self.peak, nlv)
+        if self.peak - nlv >= self.max_drawdown:
+            self.tripped = True
+            return True
+        return False
