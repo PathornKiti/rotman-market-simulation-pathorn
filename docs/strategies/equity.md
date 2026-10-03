@@ -28,3 +28,8 @@ Use `[strategy.per_ticker.<TICKER>]` to override any knob. Volatile names need a
 ## End of period
 
 `wind_down` cancels all quotes and flattens inventory, so no overnight risk.
+
+## Time series
+
+- `vol_model = "ewma" | "garch"`: run `python -m ritc analyze` first. GARCH only helps if volatility clusters.
+- The OU `fair_shift` leans quotes toward the expected price when (and only when) mean reversion is significant at about the 1% level. See [TIME_SERIES.md](../TIME_SERIES.md).

@@ -12,7 +12,8 @@ from __future__ import annotations
 import math
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import requests
@@ -46,9 +47,45 @@ class RITClient:
                              if min_interval is None else min_interval)
         self._last_call = 0.0
         self._lock = threading.Lock()
-        self.session = requests.Session()
-        if self.api_key:
-            self.session.headers["X-API-Key"] = self.api_key
+        # One HTTP session per thread: requests.Session is not guaranteed thread-safe,
+        # and the feed + parallel fetches call the API from several threads at once.
+        self._local = threading.local()
+        self._pool: ThreadPoolExecutor | None = None
+
+    @property
+    def session(self) -> requests.Session:
+        s = getattr(self._local, "session", None)
+        if s is None:
+            s = requests.Session()
+            if self.api_key:
+                s.headers["X-API-Key"] = self.api_key
+            self._local.session = s
+        return s
+
+    def parallel(self, calls: list[Callable[[], Any]], workers: int = 8) -> list[Any]:
+        """
+        Run independent API calls concurrently and return results in order.
+        Exceptions are returned in place of results so one failure doesn't lose the rest.
+        Fetching 5 order books takes ~1 round trip instead of 5.
+        """
+        if len(calls) <= 1:
+            out = []
+            for c in calls:
+                try:
+                    out.append(c())
+                except Exception as exc:          # noqa: BLE001 - surfaced to caller
+                    out.append(exc)
+            return out
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ritc-io")
+        futures = [self._pool.submit(c) for c in calls]
+        out = []
+        for f in futures:
+            try:
+                out.append(f.result())
+            except Exception as exc:              # noqa: BLE001
+                out.append(exc)
+        return out
 
     # ---------------------------------------------------------------- plumbing
     def _request(self, method: str, path: str, **params: Any) -> Any:

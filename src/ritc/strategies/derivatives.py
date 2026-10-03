@@ -20,6 +20,23 @@ What we trade
   per dollar of commission, so we weight by vega.
 * Put-call parity violations (risk-free), if `parity_arb = true`.
 * The underlying, only for delta hedging.
+
+Volatility through time
+-----------------------
+The forecast for each option blends two views (`blend_forecast`):
+
+* the NEWS forecast (exact realised vol this week, a range for next week), and
+* a GARCH(1,1) fitted on the underlying's tick returns, projected over the
+  option's REMAINING LIFE - so a 10-tick option and a 400-tick option get
+  different forecasts when current vol is far from its long-run level.
+
+    forecast = (1 - garch_weight) * news + garch_weight * garch_term_vol(ticks to expiry)
+
+Default garch_weight is 0: when the case TELLS you this week's realised vol, a
+model of the past only dilutes it (measured: blending 30% GARCH lost money on
+5 of 6 simulator seeds). GARCH is the forecast before the first vol headline and
+for any case with no vol news - set garch_weight > 0 only if practice shows the
+news is noisy.
 """
 
 from __future__ import annotations
@@ -32,6 +49,7 @@ from dataclasses import dataclass
 from ..core.bot import Snapshot, Strategy
 from ..pricing.news import parse_vol_news
 from ..pricing.options import bs_greeks, implied_vol, ticks_to_years
+from ..pricing.timeseries import OnlineGarch
 
 log = logging.getLogger("ritc.derivatives")
 
@@ -127,8 +145,21 @@ def parity_trades(call_bid, call_ask, put_bid, put_ask, s_bid, s_ask, K, T, r, c
     return None
 
 
+def blend_forecast(news_vol: float | None, garch_vol: float | None, garch_weight: float,
+                   fallback: float) -> float:
+    """Annualised vol forecast from news and/or GARCH. Pure function."""
+    if news_vol is not None and garch_vol is not None:
+        return (1 - garch_weight) * news_vol + garch_weight * garch_vol
+    if news_vol is not None:
+        return news_vol
+    if garch_vol is not None:
+        return garch_vol
+    return fallback
+
+
 class DerivativesStrategy(Strategy):
     name = "derivatives"
+    wants_news = True              # vol / delta-limit headlines via the real-time feed
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -144,8 +175,10 @@ class DerivativesStrategy(Strategy):
         self.p = s
         self.forecast: float = float(s.get("initial_vol", 0.20))
         self.delta_limit: float = float(s.get("delta_limit", 5000))
-        self.last_news = 0
+        self.news_seen = False
         self.specs: dict[str, OptionSpec] = {}
+        self.garch = OnlineGarch(window=int(s.get("garch_window", 600)), min_obs=int(s.get("garch_min_obs", 60)))
+        self.last_tick = -1
 
     def on_start(self, snap: Snapshot) -> None:
         for t in snap.securities:
@@ -155,13 +188,25 @@ class DerivativesStrategy(Strategy):
             if spec:
                 self.specs[t] = spec
         log.info("found %d options on %s", len(self.specs), self.und)
+        # Warm GARCH up from the price history the case already has (newest first).
+        try:
+            closes = [h.get("close") for h in reversed(self.client.history(self.und)) if h.get("close")]
+            for c in closes:
+                self.garch.add_price(float(c))
+            if closes:
+                log.info("GARCH warm-up on %d historical prices", len(closes))
+        except Exception as exc:
+            log.debug("no history for warm-up: %s", exc)
+
+    def vol_forecast(self, ticks_to_expiry: int) -> float:
+        g = None
+        if self.garch.ready and (self.p.get("garch_weight", 0.0) > 0 or not self.news_seen):
+            g = self.garch.annualised(ticks_to_expiry, self.ticks_per_year)
+        return blend_forecast(self.forecast if self.news_seen else None, g,
+                              self.p.get("garch_weight", 0.0), self.forecast)
 
     def read_news(self) -> None:
-        for item in sorted(self.client.news(since=self.last_news), key=lambda n: n.get("news_id", 0)):
-            nid = int(item.get("news_id", 0))
-            if nid <= self.last_news:
-                continue
-            self.last_news = nid
+        for item in self.new_news():
             v = parse_vol_news(f"{item.get('headline', '')} {item.get('body', '')}")
             if v.delta_limit:
                 self.delta_limit = float(v.delta_limit)
@@ -169,9 +214,11 @@ class DerivativesStrategy(Strategy):
             # Realised vol for the current week is the best forecast for the next few
             # ticks; a forecast range applies to next week. Blend toward the range mid.
             if v.realized is not None:
+                self.news_seen = True
                 self.forecast = v.realized
                 log.info("NEWS realised vol -> %.1f%%", 100 * v.realized)
             elif v.forecast_mid is not None:
+                self.news_seen = True
                 w = self.p.get("range_weight", 0.5)
                 self.forecast = (1 - w) * self.forecast + w * v.forecast_mid
                 log.info("NEWS vol range %.0f-%.0f%% -> forecast %.1f%%",
@@ -182,6 +229,9 @@ class DerivativesStrategy(Strategy):
         S = snap.mid(self.und)
         if not S:
             return
+        if snap.tick != self.last_tick:          # one GARCH observation per tick
+            self.last_tick = snap.tick
+            self.garch.add_price(S)
         abs_tick = (snap.period - 1) * snap.ticks_per_period + snap.tick
         positions = snap.positions
         deltas: dict[str, float] = {}
@@ -194,7 +244,8 @@ class DerivativesStrategy(Strategy):
                 continue          # expiring: no vega left, only pin risk
             T = ticks_to_years(spec.expiry_tick - abs_tick, self.ticks_per_year)
             bid, ask = snap.quote(t)
-            sig = option_signal(spec, S, bid, ask, T, self.r, self.forecast,
+            fcst = self.vol_forecast(spec.expiry_tick - abs_tick)
+            sig = option_signal(spec, S, bid, ask, T, self.r, fcst,
                                 self.p.get("vol_edge", 0.02), self.p.get("full_edge", 0.06),
                                 max_c, fee_per_unit, positions.get(t, 0), self.p.get("exit_edge", 0.0))
             if sig is None:
@@ -212,7 +263,7 @@ class DerivativesStrategy(Strategy):
             # Protective limit: never pay more than theo - costs (buy) / less than theo + costs (sell).
             px = sig.theo - fee_per_unit if action == "BUY" else sig.theo + fee_per_unit
             log.info("%s IV %.1f%% vs fcst %.1f%% -> target %+d (pos %+d)", t, 100 * sig.iv,
-                     100 * self.forecast, sig.target, pos)
+                     100 * fcst, sig.target, pos)
             self.ex.limit(t, action, qty, px)
             positions[t] = pos + (qty if action == "BUY" else -qty)
 

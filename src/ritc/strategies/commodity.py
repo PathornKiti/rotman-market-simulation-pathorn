@@ -82,6 +82,7 @@ class NewsPosition:
 
 class CommodityStrategy(Strategy):
     name = "commodity"
+    wants_news = True              # inventory reports via the real-time feed: first in wins
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -93,7 +94,6 @@ class CommodityStrategy(Strategy):
         self.ratio: dict[str, float] = {k: float(v) for k, v in c.get("hedge_ratio", {}).items()}
         self.spot_shortable = bool(c.get("spot_shortable", False))
         self.p = s
-        self.last_news = 0
         self.news_pos: list[NewsPosition] = []
         # Futures held by the carry engine only (news trades are tracked separately),
         # so a converged-basis exit never closes a news position by mistake.
@@ -163,16 +163,13 @@ class CommodityStrategy(Strategy):
         sb, sa = snap.quote(self.spot)
         if None in (fb, fa, sb, sa):
             return
-        self.ex.limit(fut, f_act, fq, fa + slip if f_act == "BUY" else fb - slip)
-        self.ex.limit(self.spot, s_act, sq, sa + slip if s_act == "BUY" else sb - slip)
+        # Both legs at once: the gap between legs is unhedged basis risk.
+        self.ex.limit_many([(fut, f_act, fq, fa + slip if f_act == "BUY" else fb - slip),
+                            (self.spot, s_act, sq, sa + slip if s_act == "BUY" else sb - slip)])
 
     def run_news(self, snap: Snapshot) -> None:
         now = self.abs_tick(snap)
-        for item in sorted(self.client.news(since=self.last_news), key=lambda n: n.get("news_id", 0)):
-            nid = int(item.get("news_id", 0))
-            if nid <= self.last_news:
-                continue
-            self.last_news = nid
+        for item in self.new_news():
             inv = parse_inventory_news(f"{item.get('headline', '')} {item.get('body', '')}")
             if inv is None:
                 continue

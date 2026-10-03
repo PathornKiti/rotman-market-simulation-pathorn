@@ -44,3 +44,14 @@ capped at `participation` × visible depth and the max order size. In the last
 
 - Learn `refill_factor` live: compare the visible depth before and after your unwinds.
 - When several tenders are open, rank them by profit per unit of limit used.
+
+## Time series
+
+The tender price includes a risk premium of `risk_aversion × GARCH price vol × √(unwind ticks)`. A block is worth less when the market has just turned volatile. See [TIME_SERIES.md](../TIME_SERIES.md).
+
+## Block execution
+
+Unwinds use the passive-then-aggressive block algorithm (`[execution]` section). It
+rests an iceberg at the touch while on schedule and crosses only to catch up. In the
+simulator it beat the always-aggressive slice unwind on 8 of 8 seeds (mean $49.7k vs
+$24.1k). Tenders arrive through the real-time feed. See [PERFORMANCE.md](../PERFORMANCE.md).

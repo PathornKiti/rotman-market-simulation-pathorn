@@ -11,7 +11,12 @@ understates how much you can unwind (it refills over the unwind horizon), but
 it also hides the fact that you push the price against yourself. So:
 
     expected unwind VWAP = walk( book scaled by refill_factor, quantity )
-    profit / share       = (unwind VWAP - tender price) * sign - fees - drift penalty
+    profit / share       = (unwind VWAP - tender price) * sign - fees - drift penalty - risk premium
+    risk premium         = risk_aversion * GARCH price vol/tick * sqrt(unwind ticks)
+
+The risk premium is the time-series part: holding a block while you unwind it
+exposes you to sigma * sqrt(time). GARCH tracks sigma tick by tick, so the same
+tender needs a fatter edge when the market has just turned volatile.
 
 Accept iff profit/share >= min_profit AND the block fits inside every risk limit
 AND there is enough time left in the period to unwind it.
@@ -19,12 +24,20 @@ AND there is enough time left in the period to unwind it.
 For competitive (non-fixed) tenders we bid the price that leaves exactly our
 required margin - the most aggressive price that is still profitable.
 
-Unwind
-------
-Each loop we sell (or buy) back a slice sized to the book: the largest quantity
-whose blended VWAP stays within `max_slippage` of the touch, capped by a
-participation rate. As the period end approaches, the slippage allowance
-grows so we are always flat by the bell.
+Unwind (block execution)
+------------------------
+`unwind_mode = "block"` (default) works each accepted block with the
+passive-then-aggressive BlockExecutor (core/algo.py): a schedule to flat within
+`unwind_horizon_ticks`, resting an iceberg at the touch to EARN the spread
+while on schedule and crossing only to catch up. A new tender on the same
+ticker restarts the schedule from the new position.
+
+`unwind_mode = "slice"` is the original purely aggressive unwind: each loop take
+the largest slice whose VWAP stays within `max_slippage` of the touch, capped by
+a participation rate. Kept for A/B testing (`python -m ritc tune`).
+
+Tenders arrive through the real-time feed (polled every ~100 ms), so a
+profitable block is evaluated and accepted as soon as it appears.
 """
 
 from __future__ import annotations
@@ -32,9 +45,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ..core.algo import AlgoParams, BlockExecutor
 from ..core.book import Level, OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..pricing.stats import EWMA
+from ..pricing.timeseries import OnlineGarch
 
 log = logging.getLogger("ritc.liability")
 
@@ -68,6 +83,8 @@ def evaluate_tender(
     drift_per_tick: float = 0.0,
     unwind_ticks_per_lot: float = 0.0,
     min_ticks_to_unwind: int = 10,
+    price_vol_per_tick: float = 0.0,
+    risk_aversion: float = 0.0,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -119,6 +136,7 @@ def evaluate_tender(
     # Adverse drift over the time it takes to unwind (only counts against us).
     unwind_ticks = to_unwind * unwind_ticks_per_lot
     drift_cost = max(0.0, -sign * drift_per_tick) * unwind_ticks
+    drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
 
     if fixed:
@@ -165,6 +183,7 @@ def unwind_slice(book: OrderBook, position: int, max_slippage: float, participat
 
 class LiabilityStrategy(Strategy):
     name = "liability"
+    wants_tenders = True           # tenders via the real-time feed
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -174,13 +193,28 @@ class LiabilityStrategy(Strategy):
         self.p = s
         self.drift: dict[str, EWMA] = {t: EWMA(s.get("drift_halflife", 15)) for t in self.tickers}
         self.last_mid: dict[str, float] = {}
+        self.garch = {t: OnlineGarch() for t in self.tickers}
+        self.last_tick = -1
         self.seen: set[int] = set()
+        ex_cfg = self.cfg.get("execution", {})
+        self.mode = ex_cfg.get("unwind_mode", "block")
+        self.horizon = int(ex_cfg.get("unwind_horizon_ticks", 30))
+        self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
+                                                         if k in AlgoParams.__dataclass_fields__}))
+
+    @property
+    def book_tickers(self) -> list[str]:
+        return self.tickers
 
     def _update_drift(self, snap: Snapshot) -> None:
+        if snap.tick == self.last_tick:          # one time-series observation per tick
+            return
+        self.last_tick = snap.tick
         for t in self.tickers:
             m = snap.mid(t)
             if m is None:
                 continue
+            self.garch[t].add_price(m)
             if t in self.last_mid:
                 self.drift[t].update(m - self.last_mid[t])
             self.last_mid[t] = m
@@ -190,9 +224,13 @@ class LiabilityStrategy(Strategy):
         self.handle_tenders(snap)
         self.unwind(snap)
 
+    def price_vol(self, ticker: str, snap: Snapshot) -> float:
+        g, mid = self.garch.get(ticker), snap.mid(ticker)
+        return g.vol() * mid if g is not None and g.ready and mid else 0.0
+
     def handle_tenders(self, snap: Snapshot) -> None:
         positions = snap.positions
-        for t in self.client.tenders():
+        for t in self.current_tenders():
             tid = int(t.get("tender_id", -1))
             ticker = t.get("ticker")
             if tid in self.seen or ticker is None:
@@ -210,6 +248,8 @@ class LiabilityStrategy(Strategy):
                 drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
                 unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),
                 min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
+                price_vol_per_tick=self.price_vol(ticker, snap),
+                risk_aversion=self.p.get("risk_aversion", 0.0),
             )
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
@@ -227,6 +267,29 @@ class LiabilityStrategy(Strategy):
                 log.warning("tender %s action failed: %s", tid, exc)
 
     def unwind(self, snap: Snapshot) -> None:
+        if self.mode == "block":
+            self.unwind_block(snap)
+        else:
+            self.unwind_slices(snap)
+
+    def unwind_block(self, snap: Snapshot) -> None:
+        now = snap.abs_tick
+        period_end = snap.period * snap.ticks_per_period - int(self.cfg.get("run", {}).get("wind_down_ticks", 5)) - 1
+        for t in self.tickers:
+            pos = snap.positions.get(t, 0)
+            b = self.algo.blocks.get(t)
+            if pos == 0:
+                if b:
+                    self.algo.cancel(t)
+                continue
+            # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
+            if b is None or (pos > 0) != (b.start_pos > 0) or abs(pos) > abs(b.start_pos):
+                self.algo.work(t, pos, 0, now, min(now + self.horizon, period_end))
+        if self.algo.active:
+            open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
+            self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)
+
+    def unwind_slices(self, snap: Snapshot) -> None:
         urgency = self.p.get("urgent_ticks", 30)
         for ticker in self.tickers:
             pos = snap.positions.get(ticker, 0)
@@ -243,6 +306,9 @@ class LiabilityStrategy(Strategy):
 
     def wind_down(self, snap: Snapshot) -> None:
         # Last ticks: dump what is left - an unclosed position is pure risk.
+        for t in list(self.algo.blocks):
+            self.algo.cancel(t)
+        self.ex.cancel_all()
         for ticker in self.tickers:
             pos = snap.positions.get(ticker, 0)
             if pos:

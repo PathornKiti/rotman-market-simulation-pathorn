@@ -5,10 +5,15 @@ A strategy only implements `step(snapshot)`. The runner handles everything that
 is the same across cases and that people get wrong under pressure:
 
 * waits for the case to go ACTIVE (safe to start before the bell)
-* polls at a fixed interval and survives transient API errors
-* tells the strategy when a new period starts
-* calls `wind_down()` in the last N ticks of each period
-* ALWAYS cancels resting orders on Ctrl-C or crash
+* REAL-TIME: a background EventFeed polls news/tenders every ~100 ms and wakes
+  the loop immediately when something arrives (no waiting for the next tick)
+* SPEED: case, securities, NLV and every order book the strategy needs are
+  fetched in PARALLEL - one round trip per loop instead of one per call
+* measures loop latency and warns when the bot is slower than the market
+* KILL SWITCH: trips on a configurable drawdown from peak NLV, then cancels,
+  flattens and stops adding risk
+* tells the strategy when a new period starts; `wind_down()` near the end
+* ALWAYS cancels resting orders on Ctrl-C or crash, and prints a TCA report
 """
 
 from __future__ import annotations
@@ -16,13 +21,15 @@ from __future__ import annotations
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
 from .book import OrderBook
 from .client import RITClient, RITError
 from .execution import Executor
-from .risk import RiskManager
+from .feed import EventFeed
+from .risk import DrawdownGuard, RiskManager
 
 log = logging.getLogger("ritc.bot")
 
@@ -35,6 +42,7 @@ class Snapshot:
     _client: RITClient | None = field(default=None, repr=False)
     _books: dict[str, OrderBook] = field(default_factory=dict, repr=False)
     trader_id: str = ""
+    nlv: float | None = None
 
     @property
     def tick(self) -> int:
@@ -53,11 +61,15 @@ class Snapshot:
         return self.ticks_per_period - self.tick
 
     @property
+    def abs_tick(self) -> int:
+        return (self.period - 1) * self.ticks_per_period + self.tick
+
+    @property
     def positions(self) -> dict[str, int]:
         return {t: int(s.get("position", 0)) for t, s in self.securities.items()}
 
     def book(self, ticker: str, depth: int = 20) -> OrderBook:
-        """Lazily fetched and cached for this loop, our own orders excluded."""
+        """Prefetched in parallel by the Runner; fetched lazily if not. Own orders excluded."""
         if ticker not in self._books:
             payload = self._client.book(ticker, depth) if self._client else {}
             self._books[ticker] = OrderBook.from_api(payload, ticker, self.trader_id or None)
@@ -88,6 +100,8 @@ class Strategy(ABC):
     """Subclass this. Keep decision logic in pure functions so it can be unit-tested."""
 
     name = "base"
+    wants_news = False         # set True to get news via the real-time feed
+    wants_tenders = False      # set True to get tenders via the real-time feed
 
     def __init__(self, ctx: Context):
         self.ctx = ctx
@@ -95,7 +109,31 @@ class Strategy(ABC):
         self.client = ctx.client
         self.ex = ctx.executor
         self.risk = ctx.risk
+        self.feed: EventFeed | None = None       # attached by the Runner
+        self._last_news_id = 0
 
+    # ----------------------------------------------------------- data helpers
+    @property
+    def book_tickers(self) -> list[str]:
+        """Tickers whose books the Runner prefetches in parallel each loop."""
+        return []
+
+    def new_news(self) -> list[dict]:
+        """New news items, oldest first - from the real-time feed when running."""
+        if self.feed is not None and self.feed.running:
+            return self.feed.drain_news()
+        items = sorted(self.client.news(since=self._last_news_id or None), key=lambda n: n.get("news_id", 0))
+        items = [n for n in items if int(n.get("news_id", 0)) > self._last_news_id]
+        if items:
+            self._last_news_id = int(items[-1]["news_id"])
+        return items
+
+    def current_tenders(self) -> list[dict]:
+        if self.feed is not None and self.feed.running:
+            return self.feed.tenders()
+        return self.client.tenders()
+
+    # ------------------------------------------------------------------ hooks
     def on_start(self, snap: Snapshot) -> None:
         """Called once when the case first goes ACTIVE."""
 
@@ -110,23 +148,73 @@ class Strategy(ABC):
         """Last ticks of a period. Default: cancel quotes, stop adding risk."""
         self.ex.cancel_all()
 
+    def flatten(self, snap: Snapshot, slippage: float = 0.10) -> None:
+        """Emergency exit: cancel everything and cross out of every position."""
+        self.ex.cancel_all()
+        for t, pos in snap.positions.items():
+            if not pos or not snap.securities.get(t, {}).get("is_tradeable", True):
+                continue
+            bid, ask = snap.quote(t)
+            touch = bid if pos > 0 else ask
+            if touch:
+                self.ex.limit(t, "SELL" if pos > 0 else "BUY", abs(pos),
+                              touch - slippage if pos > 0 else touch + slippage)
+
     def on_stop(self) -> None:
         """Ctrl-C or crash. The runner already cancels every resting order."""
 
 
+class LatencyStats:
+    def __init__(self, n: int = 500):
+        self.buf: deque[float] = deque(maxlen=n)
+
+    def add(self, ms: float) -> None:
+        self.buf.append(ms)
+
+    def pct(self, q: float) -> float:
+        if not self.buf:
+            return 0.0
+        s = sorted(self.buf)
+        return s[min(len(s) - 1, int(q * len(s)))]
+
+    def __str__(self) -> str:
+        return f"loop p50 {self.pct(0.5):.0f} ms, p95 {self.pct(0.95):.0f} ms, max {self.pct(1.0):.0f} ms"
+
+
 class Runner:
     def __init__(self, strategy: Strategy, interval: float = 0.25, wind_down_ticks: int = 5,
-                 max_errors: int = 50):
+                 max_errors: int = 50, max_drawdown: float = 0.0, feed_poll: float = 0.1,
+                 slow_loop_ms: float = 500.0, use_feed: bool = True):
         self.s = strategy
         self.client = strategy.client
         self.interval = interval
         self.wind_down_ticks = wind_down_ticks
         self.max_errors = max_errors
+        self.guard = DrawdownGuard(max_drawdown)
+        self.feed_poll = feed_poll
+        self.slow_loop_ms = slow_loop_ms
+        self.use_feed = use_feed
         self.trader_id = ""
+        self.latency = LatencyStats()
+        self.loops = 0
 
     def snapshot(self) -> Snapshot:
-        return Snapshot(case=self.client.case(), securities=self.client.security_map(),
-                        _client=self.client, trader_id=self.trader_id)
+        """Case + securities + trader + all prefetch books, in parallel."""
+        books = list(dict.fromkeys(self.s.book_tickers))
+        calls = [self.client.case, self.client.security_map, self.client.trader]
+        calls += [lambda t=t: self.client.book(t, 20) for t in books]
+        res = self.client.parallel(calls)
+        for r in res[:2]:
+            if isinstance(r, Exception):
+                raise r if isinstance(r, RITError) else RITError(str(r))
+        case, secs, trader = res[0], res[1], res[2]
+        snap = Snapshot(case=case, securities=secs, _client=self.client, trader_id=self.trader_id,
+                        nlv=float(trader.get("nlv")) if isinstance(trader, dict) and trader.get("nlv") is not None
+                        else None)
+        for t, payload in zip(books, res[3:]):
+            if isinstance(payload, dict):
+                snap._books[t] = OrderBook.from_api(payload, t, self.trader_id or None)
+        return snap
 
     def run(self, once: bool = False) -> None:
         log.info("strategy=%s dry_run=%s", self.s.name, self.s.ex.dry_run)
@@ -135,13 +223,22 @@ class Runner:
         except RITError as exc:
             log.warning("could not read trader id (%s); own orders will not be filtered", exc)
 
-        started, period, errors = False, None, 0
+        feed = None
+        if self.use_feed and (self.s.wants_news or self.s.wants_tenders):
+            feed = EventFeed(self.client, self.feed_poll, news=self.s.wants_news,
+                             tenders=self.s.wants_tenders).start()
+            self.s.feed = feed
+            log.info("real-time feed on (news=%s tenders=%s, every %.0f ms)",
+                     self.s.wants_news, self.s.wants_tenders, 1000 * self.feed_poll)
+
+        started, period, errors, halted = False, None, 0, False
         try:
             while True:
                 t0 = time.monotonic()
                 try:
                     self.s.ex.sweep()          # kill leftovers of last loop's aggressive orders
                     snap = self.snapshot()
+                    self.s.ex.arrival = snap.mid
                     status = snap.case.get("status")
                     if status != "ACTIVE":
                         if status == "STOPPED" and started:
@@ -157,7 +254,14 @@ class Runner:
                         log.info("--- period %d ---", period)
                         self.s.on_new_period(snap)
 
-                    if snap.ticks_left <= self.wind_down_ticks:
+                    if self.guard.update(snap.nlv):
+                        halted = True
+                        self.s.risk.halted = True
+                        log.error("KILL SWITCH: NLV %.2f is %.2f below peak %.2f - flattening and halting",
+                                  snap.nlv, self.guard.peak - snap.nlv, self.guard.peak)
+                    if halted:
+                        self.s.flatten(snap)
+                    elif snap.ticks_left <= self.wind_down_ticks:
                         self.s.wind_down(snap)
                     else:
                         self.s.step(snap)
@@ -167,14 +271,35 @@ class Runner:
                     log.warning("API error (%d/%d): %s", errors, self.max_errors, exc)
                     if errors >= self.max_errors:
                         raise
+
+                ms = 1000 * (time.monotonic() - t0)
+                self.latency.add(ms)
+                self.loops += 1
+                if ms > self.slow_loop_ms:
+                    log.warning("slow loop: %.0f ms (market may have moved under you)", ms)
+                if self.loops % 200 == 0:
+                    log.info("%s%s", self.latency, f", feed {feed.latency_ms:.0f} ms" if feed else "")
+                if self.loops % 20 == 0:
+                    self.s.ex.reconcile()
                 if once:
                     break
-                time.sleep(max(0.0, self.interval - (time.monotonic() - t0)))
+                remaining = max(0.0, self.interval - (time.monotonic() - t0))
+                if feed is not None:
+                    feed.wait(remaining)       # wakes early on news / new tenders
+                else:
+                    time.sleep(remaining)
         except KeyboardInterrupt:
             log.info("Ctrl-C received")
         except Exception:
             log.exception("strategy crashed")
         finally:
             log.info("shutting down: cancelling all resting orders")
+            if feed is not None:
+                feed.stop()
             self.s.ex.cancel_all()
             self.s.on_stop()
+            self.s.ex.reconcile()
+            if self.loops:
+                log.info("%s over %d loops", self.latency, self.loops)
+            if not self.s.ex.dry_run:
+                log.info("\n%s", self.s.ex.tca.report())

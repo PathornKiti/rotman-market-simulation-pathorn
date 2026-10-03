@@ -31,5 +31,7 @@ news_hold_ticks = 8
 news_take_profit = 0.8
 
 [run]
+max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.25
 wind_down_ticks = 3

@@ -130,6 +130,10 @@ class ETFStrategy(Strategy):
         self.converter_cost = float(c.get("converter_cost", 0.0))
         self.p = s
 
+    @property
+    def book_tickers(self) -> list[str]:
+        return [self.etf, *self.weights]
+
     def fx(self, snap: Snapshot) -> float:
         if not self.fx_ticker:
             return 1.0
@@ -183,9 +187,9 @@ class ETFStrategy(Strategy):
         log.info("ARB %s %d  edge/unit %.4f  premium %.3f", plan.direction, qty, plan.edge_per_unit, premium)
         etf_action = "SELL" if plan.direction == "SELL_ETF" else "BUY"
         comp_action = "BUY" if etf_action == "SELL" else "SELL"
-        self.ex.limit(self.etf, etf_action, qty, plan.etf_px)
-        for t, w in self.weights.items():
-            self.ex.limit(t, comp_action, int(round(qty * w)), plan.leg_px[t])
+        # All legs concurrently - sequential legs leave the arb half-done while the book moves.
+        self.ex.limit_many([(self.etf, etf_action, qty, plan.etf_px)] +
+                           [(t, comp_action, int(round(qty * w)), plan.leg_px[t]) for t, w in self.weights.items()])
 
     def _send_legs(self, etf_action: str, qty: int, etf_book: OrderBook,
                    comp_books: dict[str, OrderBook], slip: float) -> None:
@@ -193,9 +197,10 @@ class ETFStrategy(Strategy):
         touch = etf_book.best_ask if etf_action == "BUY" else etf_book.best_bid
         if touch is None:
             return
-        self.ex.limit(self.etf, etf_action, qty, touch + slip if etf_action == "BUY" else touch - slip)
+        orders = [(self.etf, etf_action, qty, touch + slip if etf_action == "BUY" else touch - slip)]
         for t, w in self.weights.items():
             b = comp_books[t]
             tp = b.best_ask if comp_action == "BUY" else b.best_bid
             if tp is not None:
-                self.ex.limit(t, comp_action, int(round(qty * w)), tp + slip if comp_action == "BUY" else tp - slip)
+                orders.append((t, comp_action, int(round(qty * w)), tp + slip if comp_action == "BUY" else tp - slip))
+        self.ex.limit_many(orders)

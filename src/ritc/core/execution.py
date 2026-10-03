@@ -15,14 +15,20 @@ Centralising this gives us three guarantees for free:
    fill keeps resting, the bot sees an unchanged position and sends another one
    every loop - positions balloon far past their targets. Only market-making
    quotes (`ioc=False`) are allowed to rest.
+5. **Every fill is measured** against the arrival mid (`tca`), see core/tca.py.
+6. **Multi-leg orders go out concurrently** (`limit_many`): the gap between legs
+   is leg risk, so ETF/basket and spread trades are sent in parallel.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .client import RITClient, RITError, slice_qty
+from .tca import TCA
 
 log = logging.getLogger("ritc.exec")
 
@@ -35,7 +41,11 @@ class Executor:
     default_max_order: int = 5_000
     decimals: int = 2
     sent: int = 0
+    tca: TCA = field(default_factory=TCA)
+    arrival: Callable[[str], float | None] | None = None    # set each loop by the Runner (snapshot mid)
     _ioc: list[int] = field(default_factory=list)
+    _tracked: dict[int, dict] = field(default_factory=dict)  # order_id -> fill-tracking state
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def max_size(self, ticker: str) -> int:
         return int(self.max_order_size.get(ticker, self.default_max_order))
@@ -45,7 +55,8 @@ class Executor:
 
     def sweep(self) -> int:
         """Cancel the unfilled remainder of every IOC order sent since the last sweep."""
-        ids, self._ioc = self._ioc, []
+        with self._lock:
+            ids, self._ioc = self._ioc, []
         for oid in ids:
             self.cancel(oid)
         return len(ids)
@@ -59,6 +70,8 @@ class Executor:
         quantity = int(quantity)
         if quantity <= 0:
             return out
+        style = "aggressive" if ioc else "passive"
+        arrival = self.arrival(ticker) if self.arrival else None
         for chunk in slice_qty(quantity, self.max_size(ticker)):
             px = RITClient.round_limit(price, action, self.decimals)
             log.info("%s %s %s %d @ %.*f", self._tag(), action.upper(), ticker, chunk, self.decimals, px)
@@ -66,15 +79,61 @@ class Executor:
                 continue
             try:
                 resp = self.client.limit_order(ticker, action, chunk, price, self.decimals)
-                out.append(resp)
-                self.sent += 1
-                if ioc and isinstance(resp, dict) and resp.get("order_id") is not None:
-                    if int(resp.get("quantity_filled", 0) or 0) < chunk:
-                        self._ioc.append(int(resp["order_id"]))
             except RITError as exc:
                 log.warning("order rejected: %s", exc)
                 break
+            out.append(resp)
+            with self._lock:
+                self.sent += 1
+                self.tca.record_sent(ticker, chunk, style)
+            if not isinstance(resp, dict) or resp.get("order_id") is None:
+                continue
+            oid = int(resp["order_id"])
+            filled = int(resp.get("quantity_filled", 0) or 0)
+            vwap = resp.get("vwap")
+            self.tca.record_fill(ticker, action, filled, vwap, arrival, style)
+            if filled < chunk:
+                with self._lock:
+                    if ioc:
+                        self._ioc.append(oid)
+                    self._tracked[oid] = {"ticker": ticker, "action": action.upper(), "arrival": arrival,
+                                          "style": style, "filled": filled,
+                                          "cost": filled * float(vwap) if filled and vwap else 0.0}
         return out
+
+    def limit_many(self, orders: list[tuple[str, str, int, float]], ioc: bool = True) -> list[list[dict]]:
+        """Send several (ticker, action, qty, price) orders concurrently - e.g. all legs of an arb."""
+        orders = [o for o in orders if int(o[2]) > 0]
+        if self.dry_run or len(orders) <= 1:
+            return [self.limit(t, a, q, p, ioc) for t, a, q, p in orders]
+        res = self.client.parallel([lambda o=o: self.limit(o[0], o[1], o[2], o[3], ioc) for o in orders])
+        return [r if isinstance(r, list) else [] for r in res]
+
+    def reconcile(self) -> int:
+        """
+        Pick up fills that happened AFTER submission (resting quotes, IOC remainders filled
+        before the sweep) so TCA sees passive fills too. Call every few loops and at shutdown.
+        """
+        if self.dry_run or not self._tracked:
+            return 0
+        n = 0
+        try:
+            done = self.client.orders("TRANSACTED") + self.client.orders("CANCELLED")
+        except RITError:
+            return 0
+        for o in done:
+            oid = int(o.get("order_id", -1))
+            st = self._tracked.pop(oid, None)
+            if st is None:
+                continue
+            total = int(o.get("quantity_filled", 0) or 0)
+            inc = total - st["filled"]
+            vwap = o.get("vwap")
+            if inc > 0 and vwap is not None:
+                inc_px = (float(vwap) * total - st["cost"]) / inc
+                self.tca.record_fill(st["ticker"], st["action"], inc, inc_px, st["arrival"], st["style"])
+                n += 1
+        return n
 
     def market(self, ticker: str, action: str, quantity: int) -> list[dict]:
         """Only for emergencies (flattening at the bell). Prefer `limit`."""

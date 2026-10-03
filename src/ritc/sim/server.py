@@ -53,6 +53,7 @@ class Sec:
     bids: list[list[float]] = field(default_factory=list)   # [price, qty]
     asks: list[list[float]] = field(default_factory=list)
     tradeable: bool = True
+    hist: list[dict] = field(default_factory=list)
 
     def rebuild(self, levels: int = 10) -> None:
         half = max(self.spread / 2, TICK)
@@ -156,6 +157,8 @@ class Market:
             for s in self.secs.values():
                 s.last = s.mid
                 s.rebuild()
+                s.hist.append({"period": self.period, "tick": self.tick, "open": s.mid, "high": s.mid,
+                               "low": s.mid, "close": round(s.mid, 4)})
             self._fill_resting()
 
     def _tick_liability(self) -> None:
@@ -324,6 +327,8 @@ class Market:
             elif at_touch and random.random() < 0.35:
                 take = min(left, s.lot * random.randint(1, 2))
             if take:
+                prev = o["quantity_filled"]
+                o["vwap"] = ((o.get("vwap") or 0.0) * prev + p * take) / (prev + take)
                 o["quantity_filled"] += take
                 self._apply_fill(s, o["action"], take, p, maker=True)
                 if o["quantity_filled"] >= o["quantity"]:
@@ -413,7 +418,11 @@ def make_handler(m: Market):
                 if path == "/securities/book":
                     s = m.secs.get(q.get("ticker", ""))
                     return self._send(200 if s else 404, m.book_view(s, int(q.get("limit", 20))) if s else {})
-                if path in ("/securities/history", "/securities/tas"):
+                if path == "/securities/history":
+                    s = m.secs.get(q.get("ticker", ""))
+                    rows = s.hist[::-1] if s else []
+                    return self._send(200, rows[: int(q["limit"])] if q.get("limit") else rows)
+                if path == "/securities/tas":
                     return self._send(200, [])
                 if path == "/news":
                     since = int(q.get("since", 0) or 0)

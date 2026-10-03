@@ -15,6 +15,15 @@ simplified Avellaneda-Stoikov market maker:
 
 Size shrinks on the side that would grow inventory, and past `hard_inventory`
 we stop quoting that side and actively work the position down.
+
+Time-series inputs (pricing/timeseries.py)
+-----------------------------------------
+* `vol` comes from an EWMA of tick price changes, or - with `vol_model = "garch"` -
+  an online GARCH(1,1) on mid log returns, which widens spreads BEFORE the next
+  burst of volatility when volatility clusters. Choose by A/B test in practice.
+* `fair_shift` comes from the Ornstein-Uhlenbeck fair-value model. It is
+  non-zero only when the stock is statistically mean-reverting, and then leans
+  quotes toward where the price is expected to be `ou_horizon` ticks ahead.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ from ..core.book import OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..core.execution import QuoteManager
 from ..pricing.stats import ReturnVol
+from ..pricing.timeseries import FairValueModel, OnlineGarch
 
 log = logging.getLogger("ritc.equity")
 
@@ -52,13 +62,19 @@ class Quotes:
     reservation: float
 
 
-def compute_quotes(book: OrderBook, inventory: int, vol: float, p: QuoteParams) -> Quotes | None:
-    """Pure quoting function - all of the market maker's brain is here."""
+def compute_quotes(book: OrderBook, inventory: int, vol: float, p: QuoteParams,
+                   fair_shift: float = 0.0) -> Quotes | None:
+    """
+    Pure quoting function - all of the market maker's brain is here.
+    `vol` is the per-tick price std in $; `fair_shift` the expected drift in $
+    from a time-series fair-value model (0 when there is no reliable signal).
+    """
     fair = book.microprice()
     if fair is None or book.best_bid is None or book.best_ask is None:
         return None
     half = max(p.min_half_spread, p.vol_mult * vol)
     fair += p.imbalance_lean * half * book.imbalance()
+    fair += max(-half, min(half, fair_shift))          # never lean more than a half-spread
     reservation = fair - p.skew_per_share * inventory
     bid = reservation - half
     ask = reservation + half
@@ -99,17 +115,34 @@ class EquityStrategy(Strategy):
         base = {k: v for k, v in s.items() if k in QuoteParams.__dataclass_fields__}
         self.params = {t: QuoteParams(**{**base, **per.get(t, {})}) for t in self.tickers}
         self.vol = {t: ReturnVol(s.get("vol_halflife", 20)) for t in self.tickers}
+        self.vol_model = s.get("vol_model", "ewma")           # "ewma" or "garch"
+        self.garch = {t: OnlineGarch(window=int(s.get("garch_window", 600))) for t in self.tickers}
+        self.fv = {t: FairValueModel(horizon=s.get("ou_horizon", 10), ou_weight=s.get("ou_weight", 0.5))
+                   for t in self.tickers}
+        self.last_tick = -1
         self.hard = int(s.get("hard_inventory", 40000))
         self.qm = QuoteManager(self.ex, tolerance=s.get("requote_tolerance", 0.01))
+
+    @property
+    def book_tickers(self) -> list[str]:
+        return self.tickers
 
     def step(self, snap: Snapshot) -> None:
         open_ids = None
         if not self.ex.dry_run:
             open_ids = {int(o["order_id"]) for o in self.client.orders("OPEN")}
         positions = snap.positions
+        new_tick = snap.tick != self.last_tick       # sample time series once per tick, not per loop
+        self.last_tick = snap.tick
         for t in self.tickers:
             book = snap.book(t)
-            vol = self.vol[t].update(book.mid)
+            if new_tick:
+                self.vol[t].update(book.mid)
+                self.garch[t].add_price(book.mid)
+                self.fv[t].update(book.mid)
+            vol = self.dollar_vol(t, book.mid)
+            fv = self.fv[t]
+            shift = (fv.value - fv.kalman.level) if fv.mean_reverting and fv.value is not None else 0.0
             inv = positions.get(t, 0)
 
             red = inventory_reduction(inv, self.hard, self.ex.max_size(t))
@@ -119,7 +152,7 @@ class EquityStrategy(Strategy):
                     log.info("INVENTORY %s %+d -> %s %d", t, inv, *red)
                     self.ex.limit(t, red[0], red[1], touch - 0.02 if red[0] == "SELL" else touch + 0.02)
 
-            q = compute_quotes(book, inv, vol, self.params[t])
+            q = compute_quotes(book, inv, vol, self.params[t], shift)
             if q is None:
                 continue
             bid_sz = min(q.bid_size, self.risk.room(t, "BUY", positions))
@@ -127,6 +160,13 @@ class EquityStrategy(Strategy):
             self.qm.sync(t, "BUY", q.bid, bid_sz, open_ids)
             self.qm.sync(t, "SELL", q.ask, ask_sz, open_ids)
             log.debug("%s inv %+d fair %.3f res %.3f  %s x %s", t, inv, q.fair, q.reservation, q.bid, q.ask)
+
+    def dollar_vol(self, t: str, mid: float | None) -> float:
+        """Per-tick price std in $. GARCH once warmed up, EWMA of price changes before that."""
+        g = self.garch[t]
+        if self.vol_model == "garch" and g.ready and mid:
+            return g.vol() * mid
+        return self.vol[t].std
 
     def wind_down(self, snap: Snapshot) -> None:
         self.qm.clear()

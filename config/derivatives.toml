@@ -23,6 +23,12 @@ pattern = '^RTM\d[CP]'     # every option counts 1 contract
 [strategy]
 initial_vol = 0.20            # used until the first news item
 range_weight = 0.5            # how far to move toward a forecast-range midpoint
+garch_weight = 0.0            # 0 = trust the news when there is any; GARCH fills in until the first
+                              # vol headline (or for cases without vol news). Blending 30% GARCH
+                              # into exact news LOST money on 5/6 simulator seeds: GARCH learns from
+                              # the past and lags the weekly regime switches the news announces.
+garch_window = 600            # rolling window of underlying tick returns
+garch_min_obs = 60            # EWMA until this many returns, then GARCH
 vol_edge = 0.02               # enter when |forecast - IV| >= 2 vol points
 exit_edge = 0.0               # ...and hold until the edge has converged to this
 full_edge = 0.06              # edge at which we hold max_contracts
@@ -37,5 +43,7 @@ parity_contracts = 10
 parity_edge = 0.05
 
 [run]
+max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.3
 wind_down_ticks = 3

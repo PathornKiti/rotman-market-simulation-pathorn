@@ -13,8 +13,19 @@ case family:
 | **Commodity trading** | `commodity` | Spot vs futures cost-of-carry arbitrage, plus short-term momentum trades on inventory news (bigger build than expected → short, bigger draw → long). | [docs](docs/strategies/commodity.md) |
 
 All five share one tested core: API client, order-book maths, execution, risk limits
-and the run loop. An **offline simulator** serves the same REST API, so you can rehearse
-every case without the Windows-only RIT client.
+and the run loop. **Time-series models** (GARCH(1,1) volatility, a Kalman fair-value
+level and Ornstein-Uhlenbeck mean reversion) feed the bots where they measurably help.
+See [docs/TIME_SERIES.md](docs/TIME_SERIES.md).
+
+**Speed and execution:** a real-time news/tender feed (~100 ms), parallel market-data
+fetches, and concurrent multi-leg orders. Block trades are worked with a
+passive-then-aggressive iceberg algorithm, which beat an always-aggressive unwind on
+8 of 8 simulator seeds. Every fill is measured against arrival price (TCA), a drawdown
+kill switch guards each heat, and `python -m ritc tune` A/B-tests settings across seeds.
+See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+An **offline simulator** serves the same REST API, so you can rehearse every case
+without the Windows-only RIT client.
 
 ---
 
@@ -53,17 +64,21 @@ Swap `liability` for `derivatives`, `etf`, `equity` or `commodity`.
 │   ├── equity.toml
 │   └── commodity.toml
 ├── src/ritc/
-│   ├── cli.py                  # python -m ritc {list,doctor,monitor,sim,run}
+│   ├── cli.py                  # python -m ritc {list,doctor,monitor,analyze,tune,sim,run}
 │   ├── core/                   # case-independent building blocks
 │   │   ├── client.py           #   RIT REST API wrapper (retries, 429 handling, safe rounding)
 │   │   ├── book.py             #   order book: walk/VWAP, max size within a price, microprice
-│   │   ├── execution.py        #   dry-run switch, protective limits, slicing, IOC sweep, quotes
-│   │   ├── risk.py             #   gross/net limit groups -> "how much more can I trade?"
-│   │   ├── bot.py              #   Strategy base class + Runner (start/stop/period/wind-down)
+│   │   ├── execution.py        #   dry-run, protective limits, slicing, IOC sweep, quotes, concurrent legs
+│   │   ├── algo.py             #   block execution: passive-then-aggressive iceberg schedule
+│   │   ├── feed.py             #   real-time news/tender feed (background thread, wakes the loop)
+│   │   ├── tca.py              #   transaction-cost analysis vs arrival price
+│   │   ├── risk.py             #   gross/net limit groups + drawdown kill switch
+│   │   ├── bot.py              #   Strategy base + Runner (parallel snapshot, latency, kill switch)
 │   │   └── config.py           #   .env + TOML loading
 │   ├── pricing/
 │   │   ├── options.py          #   Black-Scholes, Greeks, implied vol, put-call parity
 │   │   ├── stats.py            #   EWMA, volatility, rolling z-score
+│   │   ├── timeseries.py       #   GARCH(1,1), Kalman level, Ornstein-Uhlenbeck, ARCH test
 │   │   └── news.py             #   volatility and inventory headline parsers
 │   ├── strategies/             # THE FIVE BOTS: pure decision functions + a thin Strategy class
 │   │   ├── liability.py
@@ -71,6 +86,7 @@ Swap `liability` for `derivatives`, `etf`, `equity` or `commodity`.
 │   │   ├── etf.py
 │   │   ├── equity.py
 │   │   └── commodity.py
+│   ├── tune.py                 # parallel multi-seed parameter search / A-B testing
 │   └── sim/server.py           # offline RIT simulator for all five case types
 ├── tests/                      # unit tests for every decision function + end-to-end sim runs
 ├── docs/                       # getting started, architecture, competition-day runbook, strategies
@@ -107,6 +123,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | **Pre-trade risk check** | `RiskManager.room()` caps every order at the gross/net room you have left (using 98% of each limit). |
 | **Limit prices rounded the safe way** | Buy limits round down, sell limits round up. |
 | **Clean shutdown** | Ctrl-C or any crash cancels every open order. |
+| **Drawdown kill switch** | `[run] max_drawdown`: once NLV falls this far below its peak, cancel, flatten and stop adding risk. |
+| **Cost tracking** | A TCA report at shutdown shows execution cost vs arrival price for each ticker and order style. |
 
 ## Competition day
 
@@ -115,6 +133,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 2. Copy tickers, fees, max order sizes and limits from the case brief into
    `config/<case>.toml`.
 3. Run `python -m ritc doctor`. Check field names and read a few real news headlines.
+   In the practice case, run `python -m ritc analyze` to choose between GARCH and EWMA.
 4. Run `python -m ritc run <case> -v` (dry run) for about 30 seconds, then `--live`.
 
 Step-by-step checklist: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
@@ -126,6 +145,7 @@ make test        # pytest: 40+ unit tests + a full simulated case per bot
 make lint        # ruff
 make sim-etf     # simulator for one case
 make run-etf     # dry run against whatever is on :9999
+python -m ritc tune liability --grid execution.unwind_mode=block,slice --seeds 8
 ```
 
 > The simulator is for checking **logic and plumbing**, not for predicting results. Its
