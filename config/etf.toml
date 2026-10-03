@@ -1,0 +1,29 @@
+# ETF TRADING (ETF vs basket arbitrage)
+# Defaults match `python -m ritc sim etf`: RITC = 1 BULL + 1 BEAR.
+
+[case]
+etf = "RITC"
+components = { BULL = 1.0, BEAR = 1.0 }     # shares of each component per ETF unit
+fee = { RITC = 0.03, BULL = 0.02, BEAR = 0.02 }
+max_order = { RITC = 10000, BULL = 10000, BEAR = 10000 }
+fx_ticker = ""                 # e.g. "USD" if the ETF and basket trade in different currencies
+fx_mode = "multiply"           # NAV_in_ETF_ccy = NAV * fx  ("divide" for the inverse quote)
+converter_cost = 0.0           # amortised $/unit for create/redeem, if you use a converter
+
+[risk]
+[risk.groups.equity]
+gross = 300000
+net = 200000
+weights = { RITC = 1.0, BULL = 1.0, BEAR = 1.0 }
+
+[strategy]
+entry_edge = 0.08              # $/ETF unit after fees and slippage
+exit_edge = 0.01               # close when the mid premium is back inside this
+exit_slippage = 0.03
+clip = 5000                    # max ETF units per trade
+lot = 500
+hedge_tolerance = 100
+
+[run]
+interval = 0.2
+wind_down_ticks = 5

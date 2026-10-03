@@ -1,0 +1,41 @@
+# DERIVATIVES TRADING (volatility case: options on one underlying)
+# Defaults match `python -m ritc sim derivatives`.
+
+[case]
+underlying = "RTM"
+# Ticker pattern: RTM1C50 = underlying RTM, expiry code 1, Call, strike 50.
+option_regex = '^(?P<und>RTM)(?P<exp>\d)(?P<cp>[CP])(?P<strike>\d+(?:\.\d+)?)$'
+expiry_ticks = { "1" = 300, "2" = 600 }   # expiry code -> absolute tick of expiry
+default_expiry_tick = 600
+ticks_per_year = 3600         # 1 period (300 ticks) = 1 month
+rate = 0.0
+multiplier = 100              # shares per contract
+option_fee = 1.00             # $ per contract
+max_order = { RTM = 10000 }
+default_max_order = 100       # options: max contracts per order
+
+[risk]
+[risk.groups.options]
+gross = 2500
+net = 1000
+pattern = '^RTM\d[CP]'     # every option counts 1 contract
+
+[strategy]
+initial_vol = 0.20            # used until the first news item
+range_weight = 0.5            # how far to move toward a forecast-range midpoint
+vol_edge = 0.02               # enter when |forecast - IV| >= 2 vol points
+exit_edge = 0.0               # ...and hold until the edge has converged to this
+full_edge = 0.06              # edge at which we hold max_contracts
+max_contracts = 60            # per option
+min_trade_contracts = 5
+min_price_edge = 0.02         # $ beyond fees an option price must clear
+delta_limit = 7000            # overwritten by news
+min_ticks_to_expiry = 10      # stop trading an option this close to expiry
+hedge_band = 0.15             # re-hedge to zero when |delta| > 15% of the limit
+parity_arb = true
+parity_contracts = 10
+parity_edge = 0.05
+
+[run]
+interval = 0.3
+wind_down_ticks = 3
