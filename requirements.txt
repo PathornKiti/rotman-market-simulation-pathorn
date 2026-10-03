@@ -1,0 +1,2 @@
+# Runtime: this is all the bots need on competition day.
+requests>=2.28

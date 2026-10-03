@@ -1,0 +1,35 @@
+# EQUITY TRADING (algorithmic market making)
+# Defaults match `python -m ritc sim equity`.
+
+[case]
+tickers = ["SPNG", "SMMR", "ATMN"]
+max_order = { SPNG = 10000, SMMR = 10000, ATMN = 10000 }
+
+[risk]
+[risk.max_position]
+SPNG = 25000
+SMMR = 25000
+ATMN = 25000
+[risk.groups.equity]
+gross = 200000
+net = 100000
+weights = { SPNG = 1.0, SMMR = 1.0, ATMN = 1.0 }
+
+[strategy]
+min_half_spread = 0.02         # never quote tighter than this each side
+vol_mult = 1.5                 # half-spread >= vol_mult * per-tick price std
+skew_per_share = 0.000003      # reservation price shift per share of inventory
+imbalance_lean = 0.25
+size = 2000                    # base quote size
+max_inventory = 20000          # size taper reaches zero here
+hard_inventory = 22000         # past this, cross the spread to cut inventory
+vol_halflife = 20
+requote_tolerance = 0.01
+
+# Per-ticker overrides of any of the above:
+[strategy.per_ticker.ATMN]
+min_half_spread = 0.03
+
+[run]
+interval = 0.2
+wind_down_ticks = 8

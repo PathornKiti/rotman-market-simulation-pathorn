@@ -1,0 +1,35 @@
+# COMMODITY TRADING (spot + futures: carry arbitrage and inventory-news momentum)
+# Defaults match `python -m ritc sim commodity`.
+
+[case]
+spot = "CL"
+futures = { "CL-1F" = 300, "CL-2F" = 600 }  # ticker -> absolute expiry tick
+carry_per_tick = 0.002          # storage + financing, $/unit/tick (from the brief)
+fee = { CL = 0.02, "CL-1F" = 0.02, "CL-2F" = 0.02 }
+hedge_ratio = { "CL-1F" = 1.0, "CL-2F" = 1.0 }   # spot units per futures contract
+spot_shortable = true
+max_order = { CL = 50, "CL-1F" = 50, "CL-2F" = 50 }
+
+[risk]
+[risk.groups.crude]
+gross = 500
+net = 200
+weights = { CL = 1.0, "CL-1F" = 1.0, "CL-2F" = 1.0 }
+
+[strategy]
+carry_edge = 0.12               # $/unit beyond fair basis + fees to enter
+carry_exit = 0.03
+carry_clip = 20
+carry_max = 100                 # max carry contracts per future
+carry_slippage = 0.02
+min_ticks_to_expiry = 10
+impact_per_unit = 0.25          # $ move per 1m bbl inventory surprise (calibrate in practice!)
+news_threshold = 0.15           # min expected move to trade
+news_max_size = 40
+news_full_move = 0.75
+news_hold_ticks = 8
+news_take_profit = 0.8
+
+[run]
+interval = 0.25
+wind_down_ticks = 3
