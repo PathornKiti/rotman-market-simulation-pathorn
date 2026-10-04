@@ -253,7 +253,8 @@ class LiabilityStrategy(Strategy):
                 room=self.risk.room(ticker, t.get("action", "BUY"), positions),
                 ticks_left=snap.ticks_left,
                 refill_factor=self.p.get("refill_factor", 2.0),
-                min_profit=self.p.get("min_profit_per_share", 0.02),
+                # In a drawdown, only the best tenders: required margin scales with 1/throttle.
+                min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
                 competitive_margin=self.p.get("competitive_margin", 0.05),
                 drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
                 unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),

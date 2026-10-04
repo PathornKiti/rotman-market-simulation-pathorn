@@ -78,6 +78,13 @@ practice. Too tight and normal noise stops you trading.
 
 ## 5. Tuning harness
 
+**Lock-step simulator (default, `--speed 0`).** The market advances one tick every 4 bot
+loops instead of on a wall clock. The market and fill randomness use separate seeded
+generators, so a run depends only on the seed and the settings. Before this, the same code
+on the same seed varied by up to $10k between runs on equity: thread timing decided which
+quotes were resting when a price jumped, and every resting order shifted the random price
+path. Comparisons there were noise. `--speed N` still runs in real time.
+
 ```bash
 python -m ritc tune liability --grid execution.unwind_horizon_ticks=15,30,60 \
                               --grid execution.front_load=0,0.3 --seeds 6

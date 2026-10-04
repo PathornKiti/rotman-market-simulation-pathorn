@@ -110,3 +110,49 @@ def test_end_of_period_skew_ramps_and_shifts_reservation():
     base = compute_quotes(book, 5000, 0.0, p)
     late = compute_quotes(book, 5000, 0.0, p, skew_mult=4.0)
     assert late.reservation < base.reservation        # long inventory: lean harder to sell
+
+
+# ------------------------------------------------------------------ risk management
+def test_throttle_ramps_between_soft_start_and_kill():
+    from ritc.core.risk import DrawdownGuard
+    g = DrawdownGuard(max_drawdown=1000, soft_start=0.5, floor=0.25)
+    assert g.throttle() == 1.0
+    g.update(5000)
+    g.update(4600)                                     # 400 down: below soft start
+    assert g.throttle() == 1.0
+    g.update(4250)                                     # 750 down: halfway through the ramp
+    assert abs(g.throttle() - 0.625) < 1e-9
+    g.update(6000)                                     # new peak: full size again
+    assert g.throttle() == 1.0
+    assert g.update(5000) and g.throttle() == 0.0      # 1000 down: kill switch
+
+
+def test_throttle_shrinks_limits_but_never_blocks_reducing():
+    r = RiskManager(max_position={"X": 10_000}, buffer=1.0)
+    r.throttle = 0.5
+    assert r.room("X", "BUY", {"X": 0}) == 5_000
+    assert r.room("X", "BUY", {"X": 8_000}) == 0
+    assert r.room("X", "SELL", {"X": 8_000}) >= 8_000
+
+
+def test_vega_room():
+    from ritc.strategies.derivatives import vega_room
+    assert vega_room(0, 10, 0) == 10**9                # off
+    assert vega_room(800, 10, 1000) == 20              # adding long vega: 200 left
+    assert vega_room(1200, 10, 1000) == 0              # already over: no more on that side
+    assert vega_room(800, -10, 1000) == 180            # reducing may go to -cap
+
+
+def test_equity_jump_detection():
+    from ritc.strategies.equity import is_jump
+    assert is_jump(25.00, 25.20, 0.02, 4, 0.05)
+    assert not is_jump(25.00, 25.04, 0.02, 4, 0.05)    # inside max(4 x 0.02, floor)
+    assert not is_jump(None, 25.20, 0.02, 4, 0.05)
+    assert not is_jump(25.00, 25.20, 0.02, 0, 0.05)    # off
+
+
+def test_lockstep_simulator_is_reproducible():
+    from ritc.tune import run_one
+    a = run_one("commodity", {}, seed=3, speed=0)
+    b = run_one("commodity", {}, seed=3, speed=0)
+    assert abs(a - b) < 0.01                            # concurrent legs: float summation order only

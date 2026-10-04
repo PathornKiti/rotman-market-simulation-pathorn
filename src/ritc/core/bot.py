@@ -13,7 +13,8 @@ is the same across cases and that people get wrong under pressure:
   fetched in PARALLEL - one round trip per loop instead of one per call
 * measures loop latency and warns when the bot is slower than the market
 * KILL SWITCH: trips on a configurable drawdown from peak NLV, then cancels,
-  flattens and stops adding risk
+  flattens and stops adding risk. Before that, a THROTTLE shrinks every limit
+  gradually once the drawdown passes `drawdown_soft_start` of the maximum
 * tells the strategy when a new period starts; `wind_down()` near the end
 * ALWAYS cancels resting orders on Ctrl-C or crash, and prints a TCA report
 """
@@ -24,6 +25,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -135,6 +137,19 @@ class Strategy(ABC):
             return self.feed.tenders()
         return self.client.tenders()
 
+    # ----------------------------------------------------------- risk sizing
+    def sized(self, n: float) -> int:
+        """
+        Scale a RISK-ADDING size by the drawdown throttle (1.0 = full size). Use it on
+        entries only: exits and hedges always run at full size, so a throttled bot
+        still gets out of what it holds.
+        """
+        return int(n * self.risk.throttle)
+
+    def edge_mult(self) -> float:
+        """Demand proportionally more edge while throttled (1 / throttle, capped at 4x)."""
+        return 1.0 / max(self.risk.throttle, 0.25)
+
     # ------------------------------------------------------------------ hooks
     def on_start(self, snap: Snapshot) -> None:
         """Called once when the case first goes ACTIVE."""
@@ -186,18 +201,20 @@ class LatencyStats:
 class Runner:
     def __init__(self, strategy: Strategy, interval: float = 0.25, wind_down_ticks: int = 5,
                  max_errors: int = 50, max_drawdown: float = 0.0, feed_poll: float = 0.1,
+                 drawdown_soft_start: float = 0.5, drawdown_floor: float = 0.25,
                  slow_loop_ms: float = 500.0, use_feed: bool = True):
         self.s = strategy
         self.client = strategy.client
         self.interval = interval
         self.wind_down_ticks = wind_down_ticks
         self.max_errors = max_errors
-        self.guard = DrawdownGuard(max_drawdown)
+        self.guard = DrawdownGuard(max_drawdown, drawdown_soft_start, drawdown_floor)
         self.feed_poll = feed_poll
         self.slow_loop_ms = slow_loop_ms
         self.use_feed = use_feed
         self.trader_id = ""
         self.feed: EventFeed | None = None
+        self.on_loop: Callable[[], None] | None = None   # test/tuner hook, e.g. advance a lock-step simulator
         self.latency = LatencyStats()
         self.loops = 0
 
@@ -267,6 +284,12 @@ class Runner:
                         self.s.risk.halted = True
                         log.error("KILL SWITCH: NLV %.2f is %.2f below peak %.2f - flattening and halting",
                                   snap.nlv, self.guard.peak - snap.nlv, self.guard.peak)
+                    thr = self.guard.throttle()
+                    prev = self.s.risk.throttle
+                    if not halted and (abs(thr - prev) >= 0.1 or (thr < 1.0) != (prev < 1.0)):
+                        log.warning("RISK THROTTLE %.0f%% of limits (drawdown %.0f of max %.0f)",
+                                    100 * thr, self.guard.drawdown, self.guard.max_drawdown)
+                    self.s.risk.throttle = thr
                     if halted:
                         self.s.flatten(snap)
                     elif snap.ticks_left <= self.wind_down_ticks:
@@ -289,6 +312,8 @@ class Runner:
                     log.info("%s%s", self.latency, f", feed {feed.latency_ms:.0f} ms" if feed else "")
                 if self.loops % 20 == 0:
                     self.s.ex.reconcile()
+                if self.on_loop is not None:
+                    self.on_loop()
                 if once:
                     break
                 remaining = max(0.0, self.interval - (time.monotonic() - t0))

@@ -23,7 +23,8 @@ Two independent engines, both on a spot commodity and its futures:
    Inventory reports move price: a bigger-than-expected BUILD is bearish, a
    bigger DRAW is bullish. RIT prices adjust over several ticks, so we trade
    the front future immediately in the surprise direction and exit after
-   `news_hold_ticks` (or earlier if price already moved `news_target`).
+   `news_hold_ticks` (or earlier if price already moved `news_target`, or
+   stopped out once it moved `news_stop` x the expected move the wrong way).
 """
 
 from __future__ import annotations
@@ -187,7 +188,7 @@ class CommodityStrategy(Strategy):
             s_act = "BUY" if sig.direction > 0 else "SELL"
             f_sign = 1 if f_act == "BUY" else -1
             package = {fut: f_sign, self.spot: -f_sign * ratio}
-            q = min(clip, int(self.p.get("carry_max", 100)) - abs(fpos),
+            q = min(self.sized(clip), int(self.p.get("carry_max", 100)) - abs(fpos),
                     self.risk.room_package(package, positions, cap=clip))
             if q <= 0:
                 continue
@@ -224,7 +225,7 @@ class CommodityStrategy(Strategy):
             if inv is None:
                 continue
             size, move = news_trade(inv.surprise, self.p.get("impact_per_unit", 0.25),
-                                    self.p.get("news_threshold", 0.10), int(self.p.get("news_max_size", 30)),
+                                    self.p.get("news_threshold", 0.10), self.sized(self.p.get("news_max_size", 30)),
                                     self.p.get("news_full_move", 0.75))
             tgt = self.front(snap)
             log.info("NEWS inventory actual %+.2f exp %s surprise %+.2f -> move %+.3f size %+d on %s",
@@ -249,8 +250,12 @@ class CommodityStrategy(Strategy):
         for npos in self.news_pos:
             mid = snap.mid(npos.ticker)
             realised = (mid - npos.entry_px) if mid is not None else 0.0
-            done = now - npos.entry_tick >= hold or (
-                npos.target_move and realised / npos.target_move >= self.p.get("news_take_profit", 0.8))
+            progress = realised / npos.target_move if npos.target_move else 0.0
+            stop = self.p.get("news_stop", 0.0)
+            # Stop-loss: the market moved AGAINST the surprise by `news_stop` x the expected
+            # move - the read was wrong (or already priced), so don't hold it to the timer.
+            done = (now - npos.entry_tick >= hold or progress >= self.p.get("news_take_profit", 0.8)
+                    or (stop > 0 and progress <= -stop))
             if not done:
                 keep.append(npos)
                 continue

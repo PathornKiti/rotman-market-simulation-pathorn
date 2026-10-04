@@ -32,6 +32,9 @@ garch_window = 600            # rolling window of returns used for the fit
 ou_weight = 0.5               # lean toward the mean-reversion forecast (only when significant)
 ou_horizon = 10               # ticks ahead for that forecast
 requote_tolerance = 0.01
+jump_sigmas = 4.0              # jump guard: a one-tick move > max(jump_sigmas x vol, jump_floor) pulls quotes
+jump_floor = 0.05              #   ($ floor so quiet stocks don't trip it on one tick of noise)
+jump_pause_ticks = 2           #   for this many ticks. 0 sigmas = off.
 end_skew_ticks = 60            # over the last N ticks of a period...
 end_skew_boost = 0.0           # ...ramp the inventory skew up to (1 + boost)x to shed inventory passively.
                                # Off by default: on the simulator (no drift, so little inventory risk) 0 vs 3
@@ -42,7 +45,11 @@ end_skew_boost = 0.0           # ...ramp the inventory skew up to (1 + boost)x t
 min_half_spread = 0.03
 
 [run]
-max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+max_drawdown = 4000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
+                             # worst normal drawdown on 8 sim seeds: $2.6k; $2k cost $2.7k of mean NLV.
+                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
+drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.2
 wind_down_ticks = 8

@@ -118,6 +118,20 @@ def option_signal(spec: OptionSpec, S: float, bid: float | None, ask: float | No
     return OptionSignal(spec.ticker, iv, g.price, g.delta, g.vega, target)
 
 
+def vega_room(total_vega: float, vega_per_contract: float, cap: float) -> int:
+    """
+    Contracts we can add without |portfolio vega| exceeding `cap` ($ per vol point).
+    `vega_per_contract` is signed for the trade direction (buying a long-vega option
+    is +, selling it is -). Trades that reduce |vega| may go up to `cap` on the
+    other side. cap <= 0 disables the limit.
+    """
+    if cap <= 0 or vega_per_contract == 0:
+        return 10**9
+    if vega_per_contract * total_vega >= 0:            # adds to the exposure we already have
+        return max(0, int((cap - abs(total_vega)) / abs(vega_per_contract)))
+    return int((abs(total_vega) + cap) / abs(vega_per_contract))
+
+
 def portfolio_delta(positions: dict[str, int], deltas: dict[str, float], underlying: str,
                     multiplier: int) -> float:
     d = float(positions.get(underlying, 0))
@@ -241,9 +255,10 @@ class DerivativesStrategy(Strategy):
         positions = snap.positions
         deltas: dict[str, float] = {}
         fee_per_unit = self.opt_fee / self.mult + self.p.get("min_price_edge", 0.02)
-        max_c = int(self.p.get("max_contracts", 100))
+        max_c = self.sized(self.p.get("max_contracts", 100))   # held positions are kept, not dumped
 
         min_ticks = int(self.p.get("min_ticks_to_expiry", 10))
+        sigs: dict[str, tuple[OptionSignal, float]] = {}
         for t, spec in self.specs.items():
             if spec.expiry_tick - abs_tick < min_ticks:
                 continue          # expiring: no vega left, only pin risk
@@ -253,16 +268,23 @@ class DerivativesStrategy(Strategy):
             sig = option_signal(spec, S, bid, ask, T, self.r, fcst,
                                 self.p.get("vol_edge", 0.02), self.p.get("full_edge", 0.06),
                                 max_c, fee_per_unit, positions.get(t, 0), self.p.get("exit_edge", 0.0))
-            if sig is None:
-                continue
-            deltas[t] = sig.delta
+            if sig is not None:
+                sigs[t] = (sig, fcst)
+                deltas[t] = sig.delta
+
+        # VEGA BUDGET: the edge-scaled targets can line up 20 options the same way, so
+        # cap the portfolio's $ per vol point and spend the budget on the biggest edges first.
+        max_vega = float(self.p.get("max_vega", 0.0))
+        vega = sum(positions.get(t, 0) * self.mult * sg.vega / 100 for t, (sg, _) in sigs.items())
+        for t, (sig, fcst) in sorted(sigs.items(), key=lambda kv: -abs(kv[1][1] - kv[1][0].iv)):
             pos = positions.get(t, 0)
             diff = sig.target - pos
             # Hysteresis: don't churn for a handful of contracts.
             if abs(diff) < self.p.get("min_trade_contracts", 5):
                 continue
             action = "BUY" if diff > 0 else "SELL"
-            qty = min(abs(diff), self.risk.room(t, action, positions))
+            vpc = (1 if action == "BUY" else -1) * self.mult * sig.vega / 100
+            qty = min(abs(diff), self.risk.room(t, action, positions), vega_room(vega, vpc, max_vega))
             if qty <= 0:
                 continue
             # Protective limit: never pay more than theo - costs (buy) / less than theo + costs (sell).
@@ -273,6 +295,7 @@ class DerivativesStrategy(Strategy):
             # Hedge what actually FILLED: hedging an unfilled IOC order puts on the very
             # delta we meant to remove, and the next loop flips it back (paying twice).
             positions[t] = pos + (got if action == "BUY" else -got)
+            vega += got * vpc
 
         if self.p.get("parity_arb", True):
             self.parity(snap, abs_tick, positions)

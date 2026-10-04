@@ -61,6 +61,8 @@ def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = 
     runner = Runner(strat, interval=float(run.get("interval", config.env_float("RIT_INTERVAL", 0.25))),
                     wind_down_ticks=int(run.get("wind_down_ticks", 5)),
                     max_drawdown=float(run.get("max_drawdown", 0.0)),
+                    drawdown_soft_start=float(run.get("drawdown_soft_start", 0.5)),
+                    drawdown_floor=float(run.get("drawdown_floor", 0.25)),
                     feed_poll=float(run.get("feed_poll", 0.1)))
     return runner, cfg
 
@@ -200,7 +202,8 @@ def main(argv: list[str] | None = None) -> int:
     tu.add_argument("--grid", action="append", help="section.key=v1,v2 (repeatable)")
     tu.add_argument("--seeds", type=int, default=5)
     tu.add_argument("--first-seed", type=int, default=1)
-    tu.add_argument("--speed", type=float, default=40.0, help="simulator ticks per second")
+    tu.add_argument("--speed", type=float, default=0.0,
+                    help="0 = lock-step, reproducible (default); N = real-time at N ticks/second")
     tu.add_argument("--workers", type=int)
     tu.add_argument("--config")
     tu.set_defaults(fn=cmd_tune)

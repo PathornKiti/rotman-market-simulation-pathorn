@@ -39,7 +39,11 @@ urgent_ticks = 6              # cross for everything left in the final ticks of 
 front_load = 0.3              # 0 = linear schedule; >0 = unwind more early (less drift risk)
 
 [run]
-max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+max_drawdown = 15000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
+                             # worst normal drawdown on 8 sim seeds: $9.4k.
+                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
+drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.25
 wind_down_ticks = 5

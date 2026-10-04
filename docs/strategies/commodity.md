@@ -31,6 +31,10 @@ move     = -impact_per_unit x surprise  (build is bearish)
 exit after news_hold_ticks, or once news_take_profit of the expected move has been captured
 ```
 
+**Stop-loss** (`news_stop = 0.5`): if the price moves half the expected move *against* the
+surprise, the read was wrong or already priced in. The trade exits instead of waiting for
+`news_hold_ticks`.
+
 `impact_per_unit` is the knob that matters most. Calibrate it in the practice case:
 record the price change in the 5–10 ticks after each report and regress it on the surprise.
 

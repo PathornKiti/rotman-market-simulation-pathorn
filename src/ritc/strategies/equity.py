@@ -108,6 +108,17 @@ def compute_quotes(book: OrderBook, inventory: int, vol: float, p: QuoteParams,
     return Quotes(bid if bid_size else None, ask if ask_size else None, bid_size, ask_size, fair, reservation)
 
 
+def is_jump(prev_mid: float | None, mid: float | None, vol: float, k: float, floor: float) -> bool:
+    """
+    True when the mid moved more than max(k x per-tick vol, floor) in one tick.
+    Outsized moves are where a market maker gets picked off: informed flow is
+    trading, and stale quotes on the far side are the ones that fill.
+    """
+    if prev_mid is None or mid is None or k <= 0:
+        return False
+    return abs(mid - prev_mid) > max(k * vol, floor)
+
+
 def inventory_reduction(inventory: int, hard: int, clip: int) -> tuple[str, int] | None:
     """Past the hard limit, cross the spread to get back under it."""
     if abs(inventory) <= hard:
@@ -135,6 +146,13 @@ class EquityStrategy(Strategy):
         self.hard = int(s.get("hard_inventory", 40000))
         self.end_window = int(s.get("end_skew_ticks", 60))
         self.end_boost = float(s.get("end_skew_boost", 0.0))
+        # Jump guard: after an outsized move, pull quotes on that ticker for a few ticks
+        # instead of re-quoting straight into informed flow.
+        self.jump_k = float(s.get("jump_sigmas", 4.0))          # 0 = off
+        self.jump_floor = float(s.get("jump_floor", 0.05))
+        self.jump_pause = int(s.get("jump_pause_ticks", 2))
+        self.prev_mid: dict[str, float | None] = {t: None for t in self.tickers}
+        self.paused_until: dict[str, int] = {t: -1 for t in self.tickers}
         self.qm = QuoteManager(self.ex, tolerance=s.get("requote_tolerance", 0.01))
 
     @property
@@ -152,6 +170,11 @@ class EquityStrategy(Strategy):
         for t in self.tickers:
             book = snap.book(t)
             if new_tick:
+                if is_jump(self.prev_mid[t], book.mid, self.dollar_vol(t, book.mid), self.jump_k, self.jump_floor):
+                    self.paused_until[t] = snap.abs_tick + self.jump_pause
+                    log.info("JUMP %s %.3f -> %.3f: quotes off for %d ticks", t, self.prev_mid[t], book.mid,
+                             self.jump_pause)
+                self.prev_mid[t] = book.mid
                 self.vol[t].update(book.mid)
                 self.garch[t].add_price(book.mid)
                 self.fv[t].update(book.mid)
@@ -168,10 +191,17 @@ class EquityStrategy(Strategy):
                     self.ex.limit(t, red[0], red[1], touch - 0.02 if red[0] == "SELL" else touch + 0.02)
 
             q = compute_quotes(book, inv, vol, self.params[t], shift, skew_mult)
-            if q is None:
+            if q is None or snap.abs_tick <= self.paused_until[t]:
+                self.qm.sync(t, "BUY", None, 0, open_ids)
+                self.qm.sync(t, "SELL", None, 0, open_ids)
                 continue
             bid_sz = min(q.bid_size, self.risk.room(t, "BUY", positions))
             ask_sz = min(q.ask_size, self.risk.room(t, "SELL", positions))
+            # Drawdown throttle shrinks only the side that ADDS inventory.
+            if inv >= 0:
+                bid_sz = self.sized(bid_sz) // 100 * 100
+            if inv <= 0:
+                ask_sz = self.sized(ask_sz) // 100 * 100
             self.qm.sync(t, "BUY", q.bid, bid_sz, open_ids)
             self.qm.sync(t, "SELL", q.ask, ask_sz, open_ids)
             log.debug("%s inv %+d fair %.3f res %.3f  %s x %s", t, inv, q.fair, q.reservation, q.bid, q.ask)

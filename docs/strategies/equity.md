@@ -29,11 +29,19 @@ Use `[strategy.per_ticker.<TICKER>]` to override any knob. Volatile names need a
 
 `wind_down` cancels all quotes and flattens inventory, so no overnight risk.
 
+**Jump guard** (`jump_sigmas = 4`, on by default): when the mid moves more than
+`max(jump_sigmas × per-tick vol, jump_floor)` in one tick, quotes on that ticker are pulled
+for `jump_pause_ticks`. Outsized moves are where a market maker gets picked off. A jump
+crosses the whole resting quote, while normal flow fills only about 1–2 lots per tick. On 8
+lock-step seeds, mean NLV went from $7.6k to $8.1k and the worst seed from $3.2k to $5.9k.
+Measured P&L split (seed 8): passive fills +$4.1k, fills during jumps −$4.3k.
+
 Optional: `end_skew_boost` ramps the inventory skew to `(1 + boost)×` over the last
 `end_skew_ticks`. This follows Avellaneda-Stoikov, where skew grows as time runs out.
 Inventory is then shed passively before the bell instead of crossed out in `wind_down`.
-It is off by default because 0 vs 3 was within noise on the simulator, which has no drift
-and so little inventory risk. Try 3 in the practice case if wind-down crossing is costly.
+It is off by default. On the reproducible lock-step simulator, 3 lowered the mean
+($7.6k vs $8.1k) and the worst seed. The simulator has no drift, so there is little
+inventory risk for it to remove. Try 3 in the practice case if wind-down crossing is costly.
 
 ## Time series
 

@@ -241,7 +241,7 @@ class ETFStrategy(Strategy):
         # 3) Open new arbitrage, sized against every limit for the WHOLE package.
         entry = self.p.get("entry_edge", 0.10)
         room = {d: self.risk.room_package(self._package(d), positions) for d in ("SELL_ETF", "BUY_ETF")}
-        cap = min(int(self.p.get("clip", 5000)), max(room.values()))
+        cap = min(self.sized(self.p.get("clip", 5000)), max(room.values()))
         if cap < lot:
             return
         plan = plan_arb(etf_book, comp_books, self.weights, self.fees, self.etf, entry, cap, lot,

@@ -35,6 +35,11 @@ The delta limit is read from the news when it is published. Positions used for t
 are updated from **reported fills**, not orders sent. Hedging an IOC order that did not
 fill puts on the delta we meant to remove, and the next loop then flips it back.
 
+**Vega budget** (`max_vega`, $ per vol point, 0 = off): the edge-scaled targets can line up
+every option the same way. The cap bounds the portfolio's vega exposure, and the budget goes
+to the biggest edges first (options are traded in order of |forecast − IV|). Trades that
+reduce |vega| are always allowed.
+
 Parity trades are sized with `room_package` against every limit, because a violation can
 persist for many loops. Note that the vol engine treats parity legs like any other
 position and may trade them toward its own target.

@@ -21,7 +21,9 @@ See [docs/TIME_SERIES.md](docs/TIME_SERIES.md).
 fetches, and concurrent multi-leg orders. Block trades are worked with a
 passive-then-aggressive iceberg algorithm, which beat an always-aggressive unwind on
 8 of 8 simulator seeds. Every fill is measured against arrival price (TCA), a drawdown
-kill switch guards each heat, and `python -m ritc tune` A/B-tests settings across seeds.
+kill switch with a graduated throttle guards each heat, and every case has its own risk guards
+([docs/RISK.md](docs/RISK.md)). `python -m ritc tune` A/B-tests settings across seeds on a
+**lock-step** simulator, so the same seed is the same market for every setting.
 See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 An **offline simulator** serves the same REST API, so you can rehearse every case
@@ -123,7 +125,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | **Pre-trade risk check** | `RiskManager.room()` caps every order at the gross/net room you have left (using 98% of each limit). |
 | **Limit prices rounded the safe way** | Buy limits round down, sell limits round up. |
 | **Clean shutdown** | Ctrl-C or any crash cancels every open order. |
-| **Drawdown kill switch** | `[run] max_drawdown`: once NLV falls this far below its peak, cancel, flatten and stop adding risk. |
+| **Drawdown kill switch** | `[run] max_drawdown`: once NLV falls this far below its peak, cancel, flatten and stop adding risk. Before that, from `drawdown_soft_start`, new-risk sizes shrink gradually. See [docs/RISK.md](docs/RISK.md). |
 | **Cost tracking** | A TCA report at shutdown shows execution cost vs arrival price for each ticker and order style. |
 
 ## Competition day
