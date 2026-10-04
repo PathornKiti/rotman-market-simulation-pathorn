@@ -14,6 +14,14 @@ exit     : |F_mid - S_mid - basis| < carry_exit
 Carry positions are tracked separately from news positions, so a convergence exit never
 closes the wrong trade. `carry_max` caps the build-up on each future.
 
+Bookkeeping is driven by **fills**. The carry book only counts futures that actually
+filled, and every loop `rehedge_spot` trades the spot until it exactly offsets the carry
+futures (`spot_target`). This repairs one-legged fills. When a future expires and
+cash-settles, `expire` drops it from the carry book, and the now-naked spot hedge is
+unwound automatically. Before this fix, that spot leg stayed open as a directional
+position. Each pair is sized with `room_package`, because the future and spot share the
+gross limit. News trades are recorded only if they filled.
+
 ## Engine 2: inventory-news momentum
 
 ```

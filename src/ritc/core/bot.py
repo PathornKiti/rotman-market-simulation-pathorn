@@ -6,7 +6,9 @@ is the same across cases and that people get wrong under pressure:
 
 * waits for the case to go ACTIVE (safe to start before the bell)
 * REAL-TIME: a background EventFeed polls news/tenders every ~100 ms and wakes
-  the loop immediately when something arrives (no waiting for the next tick)
+  the loop immediately when something arrives (no waiting for the next tick).
+  The feed is ALSO polled inside every snapshot, in parallel with the prices, so
+  a strategy never sees a repriced market without the headline that moved it
 * SPEED: case, securities, NLV and every order book the strategy needs are
   fetched in PARALLEL - one round trip per loop instead of one per call
 * measures loop latency and warns when the bot is slower than the market
@@ -195,6 +197,7 @@ class Runner:
         self.slow_loop_ms = slow_loop_ms
         self.use_feed = use_feed
         self.trader_id = ""
+        self.feed: EventFeed | None = None
         self.latency = LatencyStats()
         self.loops = 0
 
@@ -203,6 +206,10 @@ class Runner:
         books = list(dict.fromkeys(self.s.book_tickers))
         calls = [self.client.case, self.client.security_map, self.client.trader]
         calls += [lambda t=t: self.client.book(t, 20) for t in books]
+        if self.feed is not None and self.feed.running:
+            # News must be at least as fresh as the prices: otherwise the bot can trade a
+            # repriced market against a stale forecast in the gap before the feed thread polls.
+            calls.append(self.feed.poll_once)
         res = self.client.parallel(calls)
         for r in res[:2]:
             if isinstance(r, Exception):
@@ -211,7 +218,7 @@ class Runner:
         snap = Snapshot(case=case, securities=secs, _client=self.client, trader_id=self.trader_id,
                         nlv=float(trader.get("nlv")) if isinstance(trader, dict) and trader.get("nlv") is not None
                         else None)
-        for t, payload in zip(books, res[3:]):
+        for t, payload in zip(books, res[3:3 + len(books)]):
             if isinstance(payload, dict):
                 snap._books[t] = OrderBook.from_api(payload, t, self.trader_id or None)
         return snap
@@ -228,6 +235,7 @@ class Runner:
             feed = EventFeed(self.client, self.feed_poll, news=self.s.wants_news,
                              tenders=self.s.wants_tenders).start()
             self.s.feed = feed
+            self.feed = feed
             log.info("real-time feed on (news=%s tenders=%s, every %.0f ms)",
                      self.s.wants_news, self.s.wants_tenders, 1000 * self.feed_poll)
 

@@ -9,8 +9,15 @@ Two independent engines, both on a spot commodity and its futures:
    than costs + `carry_edge`:
        F too rich -> SELL future, BUY spot  (cash-and-carry)
        F too cheap -> BUY future, SELL spot (reverse; needs shortable spot)
-   The same logic runs on the spread between two futures (calendar spread).
-   The trade is closed once the basis converges inside `carry_exit`.
+   The trade is closed once the basis converges inside `carry_exit`, or held to
+   expiry, where the future settles to spot and the basis is exactly zero.
+
+   Bookkeeping: the carry book is tracked from FILLS, not orders, and the spot
+   leg is re-hedged every loop to exactly offset the carry futures. A one-legged
+   fill, or a future that expired and cash-settled, would otherwise leave a naked
+   spot position (the expired-future case left the whole spot hedge open).
+   Each pair is sized against every limit for the PACKAGE (future + spot), since
+   both legs use the same gross limit.
 
 2. News momentum (directional, sized small)
    Inventory reports move price: a bigger-than-expected BUILD is bearish, a
@@ -110,12 +117,44 @@ class CommodityStrategy(Strategy):
 
     # -------------------------------------------------------------------- step
     def step(self, snap: Snapshot) -> None:
+        self.expire(snap)
         self.run_news(snap)
-        self.run_carry(snap)
+        positions = snap.positions         # shared, so the re-hedge sees this loop's carry fills
+        self.run_carry(snap, positions)
+        self.rehedge_spot(snap, positions)
 
-    def run_carry(self, snap: Snapshot) -> None:
+    def expire(self, snap: Snapshot) -> None:
+        """Forget carry/news positions in futures that have expired (cash-settled to spot)."""
         now = self.abs_tick(snap)
-        positions = snap.positions
+        for fut in list(self.carry_pos):
+            sec = snap.securities.get(fut)
+            if self.futures.get(fut, 0) <= now or sec is None or not sec.get("is_tradeable", True):
+                if self.carry_pos.pop(fut):
+                    log.info("CARRY %s expired - spot hedge will be unwound", fut)
+        self.news_pos = [n for n in self.news_pos
+                         if self.futures.get(n.ticker, 0) > now
+                         and snap.securities.get(n.ticker, {}).get("is_tradeable", True)]
+
+    def spot_target(self) -> int:
+        return -int(round(sum(q * self.ratio.get(f, 1.0) for f, q in self.carry_pos.items())))
+
+    def rehedge_spot(self, snap: Snapshot, positions: dict[str, int]) -> None:
+        """Keep the spot leg exactly offsetting the carry futures we actually hold."""
+        if self.ex.dry_run:
+            return                         # nothing fills in a dry run: positions never move
+        diff = self.spot_target() - positions.get(self.spot, 0)
+        if abs(diff) < int(self.p.get("spot_tolerance", 1)):
+            return
+        bid, ask = snap.quote(self.spot)
+        if bid is None or ask is None:
+            return
+        action = "BUY" if diff > 0 else "SELL"
+        slip = self.p.get("carry_slippage", 0.02)
+        log.info("SPOT REHEDGE %s %d %s (target %+d)", action, abs(diff), self.spot, self.spot_target())
+        self.ex.limit(self.spot, action, abs(diff), ask + slip if action == "BUY" else bid - slip)
+
+    def run_carry(self, snap: Snapshot, positions: dict[str, int]) -> None:
+        now = self.abs_tick(snap)
         clip = int(self.p.get("carry_clip", 20))
         for fut, exp in self.futures.items():
             if fut not in snap.securities or exp <= now + self.p.get("min_ticks_to_expiry", 10):
@@ -135,8 +174,8 @@ class CommodityStrategy(Strategy):
                 f_act = "BUY" if fpos < 0 else "SELL"
                 s_act = "SELL" if f_act == "BUY" else "BUY"
                 log.info("CARRY converged on %s (%.3f) -> close %d", fut, mid_mis, q)
-                self._pair(fut, f_act, q, s_act, int(q * ratio), snap)
-                self.carry_pos[fut] = fpos + (q if f_act == "BUY" else -q)
+                got = self._pair(fut, f_act, q, s_act, int(q * ratio), snap, positions)
+                self.carry_pos[fut] = fpos + (got if f_act == "BUY" else -got)
                 continue
 
             if sig.direction == 0:
@@ -146,26 +185,37 @@ class CommodityStrategy(Strategy):
                 continue
             f_act = "SELL" if sig.direction > 0 else "BUY"
             s_act = "BUY" if sig.direction > 0 else "SELL"
-            q = min(clip, self.risk.room(fut, f_act, positions),
-                    int(self.risk.room(self.spot, s_act, positions) / ratio))
+            f_sign = 1 if f_act == "BUY" else -1
+            package = {fut: f_sign, self.spot: -f_sign * ratio}
+            q = min(clip, int(self.p.get("carry_max", 100)) - abs(fpos),
+                    self.risk.room_package(package, positions, cap=clip))
             if q <= 0:
                 continue
             log.info("CARRY %s mispricing %.3f -> %s %d %s / %s %d %s", fut, sig.mispricing,
                      f_act, q, fut, s_act, int(q * ratio), self.spot)
-            self._pair(fut, f_act, q, s_act, int(q * ratio), snap)
-            signed = q if f_act == "BUY" else -q
-            positions[fut] = positions.get(fut, 0) + signed
-            self.carry_pos[fut] = fpos + signed
+            got = self._pair(fut, f_act, q, s_act, int(q * ratio), snap, positions)
+            self.carry_pos[fut] = fpos + f_sign * got
 
-    def _pair(self, fut: str, f_act: str, fq: int, s_act: str, sq: int, snap: Snapshot) -> None:
+    def _pair(self, fut: str, f_act: str, fq: int, s_act: str, sq: int, snap: Snapshot,
+              positions: dict[str, int]) -> int:
+        """
+        Send both legs, book each leg's FILLS into `positions` and return the futures
+        contracts filled. Any leg mismatch is squared by rehedge_spot.
+        """
         slip = self.p.get("carry_slippage", 0.02)
         fb, fa = snap.quote(fut)
         sb, sa = snap.quote(self.spot)
-        if None in (fb, fa, sb, sa):
-            return
+        if None in (fb, fa, sb, sa) or fq <= 0:
+            return 0
         # Both legs at once: the gap between legs is unhedged basis risk.
-        self.ex.limit_many([(fut, f_act, fq, fa + slip if f_act == "BUY" else fb - slip),
-                            (self.spot, s_act, sq, sa + slip if s_act == "BUY" else sb - slip)])
+        res = self.ex.limit_many([(fut, f_act, fq, fa + slip if f_act == "BUY" else fb - slip),
+                                  (self.spot, s_act, sq, sa + slip if s_act == "BUY" else sb - slip)])
+        if len(res) < 2:
+            return 0
+        f_got, s_got = self.ex.filled(res[0], fq), self.ex.filled(res[1], sq)
+        positions[fut] = positions.get(fut, 0) + (f_got if f_act == "BUY" else -f_got)
+        positions[self.spot] = positions.get(self.spot, 0) + (s_got if s_act == "BUY" else -s_got)
+        return f_got
 
     def run_news(self, snap: Snapshot) -> None:
         now = self.abs_tick(snap)
@@ -188,9 +238,11 @@ class CommodityStrategy(Strategy):
                 continue
             # Pay up to a third of the expected move to get in first.
             px = ask + abs(move) / 3 if action == "BUY" else bid - abs(move) / 3
-            self.ex.limit(tgt, action, qty, px)
+            got = self.ex.filled(self.ex.limit(tgt, action, qty, px), qty)
+            if got <= 0:
+                continue          # missed the move: there is nothing to exit later
             entry = ask if action == "BUY" else bid
-            self.news_pos.append(NewsPosition(tgt, qty if size > 0 else -qty, now, entry, move))
+            self.news_pos.append(NewsPosition(tgt, got if size > 0 else -got, now, entry, move))
 
         hold = int(self.p.get("news_hold_ticks", 15))
         keep = []

@@ -85,6 +85,7 @@ def evaluate_tender(
     min_ticks_to_unwind: int = 10,
     price_vol_per_tick: float = 0.0,
     risk_aversion: float = 0.0,
+    price_queue: bool = True,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -110,17 +111,26 @@ def evaluate_tender(
     # never has to touch the book and is valued at the touch we would have paid.
     offset = min(qty, max(0, -sign * position))
     to_unwind = qty - offset
+    # A same-side position is still being unwound into the SAME book, ahead of this
+    # block. Price only the marginal cost: walk(queued + new) - walk(queued). Pricing
+    # the new block against the full book double-counts the liquidity.
+    queued = max(0, sign * position) if price_queue else 0
 
     deep = scaled_book(book, refill_factor)
+
+    def unwind_cost(n: int) -> float:
+        """Total proceeds/cost of unwinding n units into the refilled book."""
+        if n <= 0:
+            return 0.0
+        fill = deep.walk(unwind_side, n)
+        if fill.complete:
+            return fill.vwap * n
+        # Price the unfilled remainder at the worst visible level, minus a penalty tick.
+        worst = fill.worst - sign * 0.05 if fill.filled else (book.mid or 0.0)
+        return fill.vwap * fill.filled + worst * (n - fill.filled)
+
     if to_unwind > 0:
-        fill = deep.walk(unwind_side, to_unwind)
-        if not fill.complete:
-            # Price the unfilled remainder at the worst visible level, minus a penalty tick.
-            missing = to_unwind - fill.filled
-            worst = fill.worst - sign * 0.05 if fill.filled else (book.mid or 0.0)
-            vwap_unwind = (fill.vwap * fill.filled + worst * missing) / to_unwind
-        else:
-            vwap_unwind = fill.vwap
+        vwap_unwind = (unwind_cost(queued + to_unwind) - unwind_cost(queued)) / to_unwind
     else:
         vwap_unwind = (book.best_bid if action == "BUY" else book.best_ask) or (book.mid or 0.0)
 
@@ -134,7 +144,7 @@ def evaluate_tender(
         return TenderDecision(False, None, 0.0, 0.0, "no market to unwind into")
 
     # Adverse drift over the time it takes to unwind (only counts against us).
-    unwind_ticks = to_unwind * unwind_ticks_per_lot
+    unwind_ticks = (queued + to_unwind) * unwind_ticks_per_lot if to_unwind else 0.0
     drift_cost = max(0.0, -sign * drift_per_tick) * unwind_ticks
     drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
@@ -250,6 +260,7 @@ class LiabilityStrategy(Strategy):
                 min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
                 price_vol_per_tick=self.price_vol(ticker, snap),
                 risk_aversion=self.p.get("risk_aversion", 0.0),
+                price_queue=self.p.get("price_queue", False),
             )
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
@@ -258,7 +269,10 @@ class LiabilityStrategy(Strategy):
                 continue
             try:
                 if d.accept:
-                    self.client.accept_tender(tid, None if t.get("is_fixed_bid", True) else d.price)
+                    resp = self.client.accept_tender(tid, None if t.get("is_fixed_bid", True) else d.price)
+                    if isinstance(resp, dict) and resp.get("success") is False:
+                        log.info("TENDER %s not filled (competitive bid %s rejected)", tid, d.price)
+                        continue          # we hold nothing: don't spend risk room on it
                     sign = 1 if str(t.get("action")).upper() == "BUY" else -1
                     positions[ticker] = positions.get(ticker, 0) + sign * int(t["quantity"])
                 elif self.p.get("decline_explicitly", False):

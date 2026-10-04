@@ -29,6 +29,12 @@ Use `[strategy.per_ticker.<TICKER>]` to override any knob. Volatile names need a
 
 `wind_down` cancels all quotes and flattens inventory, so no overnight risk.
 
+Optional: `end_skew_boost` ramps the inventory skew to `(1 + boost)×` over the last
+`end_skew_ticks`. This follows Avellaneda-Stoikov, where skew grows as time runs out.
+Inventory is then shed passively before the bell instead of crossed out in `wind_down`.
+It is off by default because 0 vs 3 was within noise on the simulator, which has no drift
+and so little inventory risk. Try 3 in the practice case if wind-down crossing is costly.
+
 ## Time series
 
 - `vol_model = "ewma" | "garch"`: run `python -m ritc analyze` first. GARCH only helps if volatility clusters.

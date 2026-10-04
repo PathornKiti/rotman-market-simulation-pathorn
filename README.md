@@ -8,7 +8,7 @@ case family:
 |---|---|---|---|
 | **Liability trading** | `liability` | Price each tender offer against the cost of unwinding it into the book. Accept only when profit/share clears fees, slippage and adverse drift, then unwind in book-sized slices. | [docs](docs/strategies/liability.md) |
 | **Derivatives trading** | `derivatives` | Volatility arbitrage. Buy options when implied vol is below the vol forecast from the news, sell when above. Stay delta-hedged inside the delta limit and pick up put-call parity breaks. | [docs](docs/strategies/derivatives.md) |
-| **ETF trading** | `etf` | ETF vs basket arbitrage, sized by walking every leg's book. Legs are re-hedged after partial fills and positions close on convergence. Supports an FX leg. | [docs](docs/strategies/etf.md) |
+| **ETF trading** | `etf` | ETF vs basket arbitrage, sized by walking every leg's book. Missed legs are completed or repaired, and positions close when the reverse arb pays after costs. Supports an FX leg. | [docs](docs/strategies/etf.md) |
 | **Equity trading** | `equity` | Market making that manages inventory (Avellaneda-Stoikov style). Quotes are centred on the microprice, spread widens with volatility, and quotes skew to reduce inventory. | [docs](docs/strategies/equity.md) |
 | **Commodity trading** | `commodity` | Spot vs futures cost-of-carry arbitrage, plus short-term momentum trades on inventory news (bigger build than expected → short, bigger draw → long). | [docs](docs/strategies/commodity.md) |
 

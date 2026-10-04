@@ -32,6 +32,10 @@ garch_window = 600            # rolling window of returns used for the fit
 ou_weight = 0.5               # lean toward the mean-reversion forecast (only when significant)
 ou_horizon = 10               # ticks ahead for that forecast
 requote_tolerance = 0.01
+end_skew_ticks = 60            # over the last N ticks of a period...
+end_skew_boost = 0.0           # ...ramp the inventory skew up to (1 + boost)x to shed inventory passively.
+                               # Off by default: on the simulator (no drift, so little inventory risk) 0 vs 3
+                               # was within noise. Try 3 in the practice case if wind-down crossing is costly.
 
 # Per-ticker overrides of any of the above:
 [strategy.per_ticker.ATMN]

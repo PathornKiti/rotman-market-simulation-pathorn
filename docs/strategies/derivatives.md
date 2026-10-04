@@ -20,17 +20,24 @@ edge      = forecast - IV
 |edge| >= vol_edge   -> target = sign(edge) x max_contracts x min(1, |edge| / full_edge)
                ...only if the EXECUTABLE price (ask for buys, bid for sells) still clears fees
 hold until edge * sign(position) <= exit_edge (hysteresis, no churn)
+never TRIM a position while the edge is still on our side: exit once, when it is gone
 ```
 
 ## Hedging
 
 ```
-portfolio delta = stock + sum(position x multiplier x delta)
+portfolio delta = stock + sum(position x multiplier x delta)   # every HELD option, incl. near expiry
 |delta| > hedge_band x delta_limit  ->  trade the stock back to zero delta
 no options left                     ->  flatten the stock
 ```
 
-The delta limit is read from the news when it is published.
+The delta limit is read from the news when it is published. Positions used for the hedge
+are updated from **reported fills**, not orders sent. Hedging an IOC order that did not
+fill puts on the delta we meant to remove, and the next loop then flips it back.
+
+Parity trades are sized with `room_package` against every limit, because a violation can
+persist for many loops. Note that the vol engine treats parity legs like any other
+position and may trade them toward its own target.
 
 ## Put-call parity
 
@@ -45,6 +52,16 @@ For every strike/expiry with both a call and a put:
    Fixed by the core IOC sweep.
 2. Without hysteresis, the bot paid the spread in and out on IV noise.
 3. Leftover stock hedges after options were closed were naked directional bets.
+4. **Trimming as the edge converged** was the biggest cost. The target scales with the
+   edge, so every tick of IV convergence sold a few contracts and paid the spread each
+   time (~7,000 contracts a run). Positions are now held until the edge is gone.
+5. **News race:** prices could reprice before the feed thread had polled the headline,
+   so the bot sold vol against last week's forecast just before a high-vol week. The
+   Runner now polls the feed in parallel with every snapshot.
+6. The delta hedge left out held options that were near expiry or had no quote, and it
+   counted orders as fills. Together these made the hedge flip-flop by ±6–8k shares.
+
+Fixes 4–6 took the 6-seed simulator mean from **-$20.3k to about +$21–27k**.
 
 ## On the day
 

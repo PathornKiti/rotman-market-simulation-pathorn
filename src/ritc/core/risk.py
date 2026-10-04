@@ -115,6 +115,49 @@ class RiskManager:
                 best = min(best, abs(pos) + max(0.0, (gross_lim - gross) / w))
         return 10**9 if best == float("inf") else int(best)
 
+    def room_package(self, legs: dict[str, float], positions: dict[str, int], cap: int = 10**7) -> int:
+        """
+        Max number of whole PACKAGES (e.g. 1 ETF unit + its basket, 1 future + its spot hedge)
+        we can add without breaching any limit. `legs` is signed units per package.
+        `room()` checks one ticker at a time and misses that every leg of a multi-leg
+        trade uses the same gross limit. A constraint that is already breached may not
+        get worse, but trades that reduce it are allowed.
+        """
+        if self.halted or not legs:
+            return 0
+
+        def after(k: int) -> dict[str, float]:
+            out = dict(positions)
+            for t, u in legs.items():
+                out[t] = out.get(t, 0) + k * u
+            return out
+
+        g0 = {g.name: g.exposure(positions) for g in self.groups}
+
+        def fits(k: int) -> bool:
+            new = after(k)
+            for t, lim in self.max_position.items():
+                q = abs(new.get(t, 0))
+                if q > lim * self.buffer and q > abs(positions.get(t, 0)):
+                    return False
+            for g in self.groups:
+                gross, net = g.exposure(new)
+                gross0, net0 = g0[g.name]
+                if gross > g.gross * self.buffer and gross > gross0 + 1e-9:
+                    return False
+                if abs(net) > g.net * self.buffer and abs(net) > abs(net0) + 1e-9:
+                    return False
+            return True
+
+        lo, hi = 0, int(cap)               # the feasible set is an interval [0, k*]: binary search it
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if fits(mid):
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
     def within(self, positions: dict[str, int]) -> bool:
         for t, cap in self.max_position.items():
             if abs(positions.get(t, 0)) > cap:

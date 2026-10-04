@@ -90,3 +90,28 @@ python -m ritc tune liability --grid execution.unwind_horizon_ticks=15,30,60 \
   mean.
 - Use it to reject bad ideas and compare variants, then confirm in the RIT practice case.
   The simulator's other traders are noise, not teams.
+
+## 6. Per-case review: what changed and what it measured
+
+Same 6 simulator seeds (`python -m ritc tune <case> --seeds 6`), mean final NLV, before → after.
+Simulator P&L is noise-driven: read these numbers as direction, not as a forecast.
+
+| Case | Before | After | Main change |
+|---|---|---|---|
+| derivatives | **-$20.3k** (worst -$45.8k) | **+$21.5k to +$27.2k** (worst -$0.7k to -$6.2k) | no trimming while the edge holds; news polled with every snapshot; hedge counts fills and every held option |
+| etf | **-$0.5k** (worst -$5.8k) | **+$16.0k to +$17.7k** (worst +$3.5k to +$5.6k) | executable exit instead of mid-premium exit; leg completion; slippage budget; package risk room |
+| commodity | +$291 (worst -$244, stdev $321) | **+$373** (worst **+$309**, stdev $64) | fill-tracked carry book, spot re-hedge, expiry handling, package risk room |
+| liability | +$47.3k | +$46.1k (noise) | rejected competitive accepts no longer booked; `price_queue` opt-in |
+| equity | +$1.3k | -$3.0k to +$1.1k across repeat runs (noise) | `end_skew_boost` opt-in; the simulator cannot tell it apart |
+
+Cross-cutting (`core/`):
+
+- **News race.** `Runner.snapshot` polls the event feed *in parallel with* the prices.
+  The bot never sees a repriced market without the headline that moved it. This
+  matters for derivatives (vol news), commodity (inventory reports) and liability
+  (tenders).
+- **`RiskManager.room_package(legs, positions)`** gives the max number of whole
+  multi-leg packages that fit every limit. All legs share the gross limit, so
+  checking one ticker at a time over-sizes ETF and carry trades.
+- **`Executor.filled(responses, qty)`** counts what actually filled. Strategies that
+  keep their own books (carry, news, hedges) must count fills, not orders.
