@@ -34,6 +34,11 @@ exit_edge = 0.0               # ...and hold until the edge has converged to this
 full_edge = 0.06              # edge at which we hold max_contracts
 max_contracts = 60            # per option
 min_trade_contracts = 5
+max_vega = 0                  # cap on |portfolio vega| in $ per vol point (0 = off); best edges get it first.
+                              # Emergency limit only: with 100 contracts, caps of 4000/2500/1500 gave mean
+                              # $17.1k/$9.2k/$4.7k - a binding cap cuts exposure exactly when the edge is biggest.
+                              # 60 contracts uncapped ($17.3k, worst +$0.3k) beat 100 uncapped ($19.3k, worst -$2.6k)
+                              # on risk-adjusted terms, so size is controlled by max_contracts instead.
 min_price_edge = 0.02         # $ beyond fees an option price must clear
 delta_limit = 7000            # overwritten by news
 min_ticks_to_expiry = 10      # stop trading an option this close to expiry
@@ -43,7 +48,11 @@ parity_contracts = 10
 parity_edge = 0.05
 
 [run]
-max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+max_drawdown = 40000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
+                             # worst normal drawdown on 8 sim seeds: $32k; $20k flattened at the bottom and turned the worst seed from +$0.3k to -$14.7k.
+                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
+drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.3
 wind_down_ticks = 3

@@ -101,6 +101,16 @@ class Executor:
                                           "cost": filled * float(vwap) if filled and vwap else 0.0}
         return out
 
+    def filled(self, responses: list[dict], requested: int) -> int:
+        """
+        Units that filled immediately, from `limit()`'s responses. Strategies that track
+        their own legs must count FILLS, not orders: an IOC remainder is cancelled at the
+        next sweep. Dry run assumes a full fill so the decision log stays coherent.
+        """
+        if self.dry_run:
+            return int(requested)
+        return sum(int(r.get("quantity_filled", 0) or 0) for r in responses if isinstance(r, dict))
+
     def limit_many(self, orders: list[tuple[str, str, int, float]], ioc: bool = True) -> list[list[dict]]:
         """Send several (ticker, action, qty, price) orders concurrently - e.g. all legs of an arb."""
         orders = [o for o in orders if int(o[2]) > 0]

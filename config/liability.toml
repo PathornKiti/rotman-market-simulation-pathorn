@@ -15,7 +15,8 @@ net = 150000
 weights = { CRZY = 1.0, TAME = 1.0 }
 
 [strategy]
-min_profit_per_share = 0.03   # accept only if expected profit/share after costs >= this
+min_profit_per_share = 0.01   # accept only if expected profit/share after costs >= this (0.01: mean $34.1k vs $31.6k at 0.03,
+                              # same worst seed; scaled up automatically by the drawdown throttle)
 refill_factor = 2.0           # visible depth is ~this fraction of what you can unwind into
 competitive_margin = 0.05     # $/share kept when bidding on non-fixed tenders
 drift_halflife = 15           # ticks, for the adverse-drift estimate
@@ -26,6 +27,8 @@ max_slippage = 0.04           # unwind slices keep VWAP within this of the touch
 participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
 decline_explicitly = false
+price_queue = false           # opt-in; lowered variance but cost mean NLV on 5/6 sim seeds.
+                              # price a tender's unwind BEHIND inventory we are still unwinding on that ticker
 
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
@@ -37,7 +40,11 @@ urgent_ticks = 6              # cross for everything left in the final ticks of 
 front_load = 0.3              # 0 = linear schedule; >0 = unwind more early (less drift risk)
 
 [run]
-max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+max_drawdown = 15000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
+                             # worst normal drawdown on 8 sim seeds: $9.4k.
+                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
+drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.25
 wind_down_ticks = 5

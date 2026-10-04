@@ -25,13 +25,18 @@ carry_slippage = 0.02
 min_ticks_to_expiry = 10
 impact_per_unit = 0.25          # $ move per 1m bbl inventory surprise (calibrate in practice!)
 news_threshold = 0.15           # min expected move to trade
-news_max_size = 40
+news_max_size = 60              # 8 lock-step seeds: 60 beat 40 on 7/8 (mean $409 vs $368), with news_stop on
 news_full_move = 0.75
 news_hold_ticks = 8
 news_take_profit = 0.8
+news_stop = 0.5                 # exit early if price moves this fraction of the expected move AGAINST us (0 = off)
 
 [run]
-max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+max_drawdown = 200          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
+                             # worst normal drawdown on 8 sim seeds: $100.
+                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
+drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.25
 wind_down_ticks = 3

@@ -90,6 +90,10 @@ def option_signal(spec: OptionSpec, S: float, bid: float | None, ask: float | No
     Hysteresis: enter at |edge| >= vol_edge, but keep an existing position until the
     edge has converged to `exit_edge` - otherwise IV noise around the entry threshold
     makes us pay the spread in and out over and over.
+    Size hysteresis: while the edge is still on our side, never trim a position just
+    because the edge shrank. The target scales with the edge, so trimming on every
+    tick of convergence pays the spread on each trim to earn nothing - exit once,
+    when the edge is gone. (This churn was the largest cost in simulator runs.)
     """
     if not bid or not ask or bid <= 0 or ask <= bid or T <= 0 or S <= 0:
         return None
@@ -108,9 +112,24 @@ def option_signal(spec: OptionSpec, S: float, bid: float | None, ask: float | No
             target = -1
         scale = min(1.0, abs(edge) / max(full_edge, 1e-9))
         target *= int(round(max_contracts * scale))
-    if target == 0 and position != 0 and edge * (1 if position > 0 else -1) > exit_edge:
-        target = position          # edge still on our side: hold, don't churn
+    if position != 0 and edge * (1 if position > 0 else -1) > exit_edge and (
+            target == 0 or (target * position > 0 and abs(target) < abs(position))):
+        target = position          # edge still on our side: hold, don't trim or churn
     return OptionSignal(spec.ticker, iv, g.price, g.delta, g.vega, target)
+
+
+def vega_room(total_vega: float, vega_per_contract: float, cap: float) -> int:
+    """
+    Contracts we can add without |portfolio vega| exceeding `cap` ($ per vol point).
+    `vega_per_contract` is signed for the trade direction (buying a long-vega option
+    is +, selling it is -). Trades that reduce |vega| may go up to `cap` on the
+    other side. cap <= 0 disables the limit.
+    """
+    if cap <= 0 or vega_per_contract == 0:
+        return 10**9
+    if vega_per_contract * total_vega >= 0:            # adds to the exposure we already have
+        return max(0, int((cap - abs(total_vega)) / abs(vega_per_contract)))
+    return int((abs(total_vega) + cap) / abs(vega_per_contract))
 
 
 def portfolio_delta(positions: dict[str, int], deltas: dict[str, float], underlying: str,
@@ -236,9 +255,10 @@ class DerivativesStrategy(Strategy):
         positions = snap.positions
         deltas: dict[str, float] = {}
         fee_per_unit = self.opt_fee / self.mult + self.p.get("min_price_edge", 0.02)
-        max_c = int(self.p.get("max_contracts", 100))
+        max_c = self.sized(self.p.get("max_contracts", 100))   # held positions are kept, not dumped
 
         min_ticks = int(self.p.get("min_ticks_to_expiry", 10))
+        sigs: dict[str, tuple[OptionSignal, float]] = {}
         for t, spec in self.specs.items():
             if spec.expiry_tick - abs_tick < min_ticks:
                 continue          # expiring: no vega left, only pin risk
@@ -248,27 +268,47 @@ class DerivativesStrategy(Strategy):
             sig = option_signal(spec, S, bid, ask, T, self.r, fcst,
                                 self.p.get("vol_edge", 0.02), self.p.get("full_edge", 0.06),
                                 max_c, fee_per_unit, positions.get(t, 0), self.p.get("exit_edge", 0.0))
-            if sig is None:
-                continue
-            deltas[t] = sig.delta
+            if sig is not None:
+                sigs[t] = (sig, fcst)
+                deltas[t] = sig.delta
+
+        # VEGA BUDGET: the edge-scaled targets can line up 20 options the same way, so
+        # cap the portfolio's $ per vol point and spend the budget on the biggest edges first.
+        max_vega = float(self.p.get("max_vega", 0.0))
+        vega = sum(positions.get(t, 0) * self.mult * sg.vega / 100 for t, (sg, _) in sigs.items())
+        for t, (sig, fcst) in sorted(sigs.items(), key=lambda kv: -abs(kv[1][1] - kv[1][0].iv)):
             pos = positions.get(t, 0)
             diff = sig.target - pos
             # Hysteresis: don't churn for a handful of contracts.
             if abs(diff) < self.p.get("min_trade_contracts", 5):
                 continue
             action = "BUY" if diff > 0 else "SELL"
-            qty = min(abs(diff), self.risk.room(t, action, positions))
+            vpc = (1 if action == "BUY" else -1) * self.mult * sig.vega / 100
+            qty = min(abs(diff), self.risk.room(t, action, positions), vega_room(vega, vpc, max_vega))
             if qty <= 0:
                 continue
             # Protective limit: never pay more than theo - costs (buy) / less than theo + costs (sell).
             px = sig.theo - fee_per_unit if action == "BUY" else sig.theo + fee_per_unit
             log.info("%s IV %.1f%% vs fcst %.1f%% -> target %+d (pos %+d)", t, 100 * sig.iv,
                      100 * fcst, sig.target, pos)
-            self.ex.limit(t, action, qty, px)
-            positions[t] = pos + (qty if action == "BUY" else -qty)
+            got = self.ex.filled(self.ex.limit(t, action, qty, px), qty)
+            # Hedge what actually FILLED: hedging an unfilled IOC order puts on the very
+            # delta we meant to remove, and the next loop flips it back (paying twice).
+            positions[t] = pos + (got if action == "BUY" else -got)
+            vega += got * vpc
 
         if self.p.get("parity_arb", True):
             self.parity(snap, abs_tick, positions)
+
+        # Every option we HOLD contributes delta - including ones skipped above because
+        # they are close to expiry or have no two-sided quote. Leaving them out hedges
+        # the wrong number, and a near-expiry option has the most delta-per-tick risk.
+        for t, spec in self.specs.items():
+            if t in deltas or not positions.get(t, 0) or spec.expiry_tick <= abs_tick:
+                continue
+            T = ticks_to_years(max(spec.expiry_tick - abs_tick, 1), self.ticks_per_year)
+            deltas[t] = bs_greeks(S, spec.strike, T, self.r, self.vol_forecast(spec.expiry_tick - abs_tick),
+                                  spec.is_call).delta
 
         delta = portfolio_delta(positions, deltas, self.und, self.mult)
         if not any(positions.get(t, 0) for t in self.specs) and positions.get(self.und, 0):
@@ -289,7 +329,7 @@ class DerivativesStrategy(Strategy):
                 continue
             by_key.setdefault((sp.strike, sp.expiry_tick), {})["call" if sp.is_call else "put"] = t
         s_bid, s_ask = snap.quote(self.und)
-        size = int(self.p.get("parity_contracts", 10))
+        base = int(self.p.get("parity_contracts", 10))
         for (K, exp), legs in by_key.items():
             if "call" not in legs or "put" not in legs:
                 continue
@@ -300,12 +340,22 @@ class DerivativesStrategy(Strategy):
             trades = parity_trades(cb, ca, pb, pa, s_bid, s_ask, K, T, self.r, cost)
             if not trades:
                 continue
-            log.info("PARITY K=%.1f exp=%d %s", K, exp, trades)
+            # Size the whole package against every limit: the violation persists across
+            # loops, and an unbounded arb repeats until the options limit is breached.
+            sgn = {"BUY": 1, "SELL": -1}
+            package = {(legs[leg] if leg != "stock" else self.und): sgn[a] * (self.mult if leg == "stock" else 1)
+                       for leg, a in trades}
+            size = min(base, self.risk.room_package(package, positions, cap=base))
+            if size <= 0:
+                continue
+            log.info("PARITY K=%.1f exp=%d %s x%d", K, exp, trades, size)
+            orders = []
             for leg, action in trades:
                 if leg == "stock":
-                    px = s_ask if action == "BUY" else s_bid
-                    self.ex.limit(self.und, action, size * self.mult, px)
+                    orders.append((self.und, action, size * self.mult, s_ask if action == "BUY" else s_bid))
                 else:
-                    t = legs[leg]
                     b, a = (cb, ca) if leg == "call" else (pb, pa)
-                    self.ex.limit(t, action, size, a if action == "BUY" else b)
+                    orders.append((legs[leg], action, size, a if action == "BUY" else b))
+            for (t, action, q, _), resps in zip(orders, self.ex.limit_many(orders)):
+                got = self.ex.filled(resps, q)
+                positions[t] = positions.get(t, 0) + (got if action == "BUY" else -got)

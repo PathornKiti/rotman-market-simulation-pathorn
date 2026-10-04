@@ -17,15 +17,20 @@ net = 200000
 weights = { RITC = 1.0, BULL = 1.0, BEAR = 1.0 }
 
 [strategy]
-entry_edge = 0.08              # $/ETF unit after fees and slippage
-exit_edge = 0.01               # close when the mid premium is back inside this
-exit_slippage = 0.03
+entry_edge = 0.06              # $/ETF unit after fees and slippage (0.06 beat 0.08: mean $32.8k vs $31.1k, worst $10.4k vs $7.8k)
+exit_mode = "executable"       # close when the REVERSE arb clears exit_edge after costs ("mid" = old rule)
+exit_edge = 0.01               # executable mode: $/unit the closing trade must clear after fees+slippage
+                               # mid mode: close when the mid premium is back inside this
+exit_slippage = 0.03           # mid mode only
+slippage_share = 0.5           # spend this share of the surplus edge on wider protective limits
 clip = 5000                    # max ETF units per trade
 lot = 500
 hedge_tolerance = 100
 
 [run]
-max_drawdown = 0             # kill switch: $ below peak NLV that halts + flattens (0 = off; set from the case's typical P&L)
+max_drawdown = 0             # OFF on purpose: a hedged arb's mark-to-market is worst exactly when the mispricing is
+                             # widest - the best time to hold. Sim runs finishing +$8k..+$51k had $19k..$42k drawdowns.
+                             # Protection here = package risk room, leg repair and [risk] limits, not P&L stops.
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.2
 wind_down_ticks = 5

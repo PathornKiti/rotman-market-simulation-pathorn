@@ -34,6 +34,7 @@ class EventFeed:
         self.want_tenders = tenders
         self.event = threading.Event()
         self._lock = threading.Lock()
+        self._poll_lock = threading.Lock()    # the Runner also polls inline, alongside each snapshot
         self._news: list[dict] = []
         self._last_news_id = 0
         self._tenders: dict[int, dict] = {}
@@ -69,6 +70,10 @@ class EventFeed:
 
     def poll_once(self) -> bool:
         """One poll of the event endpoints. Returns True if anything new arrived."""
+        with self._poll_lock:
+            return self._poll()
+
+    def _poll(self) -> bool:
         fresh = False
         if self.want_news:
             items = self.client.news(since=self._last_news_id or None)

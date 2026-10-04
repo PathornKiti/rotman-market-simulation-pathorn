@@ -20,7 +20,7 @@ Copy these from the brief into `config/<case>.toml`:
 | `[risk.groups.*]` gross/net (name must match `/limits`) | "Trading limits" |
 | derivatives: `expiry_ticks`, `ticks_per_year`, `multiplier`, `option_regex` | "Options" section |
 | commodity: `futures` expiry ticks, `carry_per_tick`, `hedge_ratio` | "Storage costs", "Contract size" |
-| `[run] max_drawdown` (kill switch) | Not in the brief: set to 2–3× the worst drawdown you saw in practice |
+| `[run] max_drawdown` (kill switch) | Not in the brief. Defaults are calibrated on the simulator. Rescale to about 1.5–2× the worst drawdown you saw in practice (never near it). Keep ETF at 0. See [RISK.md](RISK.md) |
 | etf: `components` weights, `fx_ticker`, `converter_cost` | "ETF composition", "Converter" |
 
 ## At the desk

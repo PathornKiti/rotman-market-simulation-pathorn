@@ -55,7 +55,7 @@ class Sec:
     tradeable: bool = True
     hist: list[dict] = field(default_factory=list)
 
-    def rebuild(self, levels: int = 10) -> None:
+    def rebuild(self, rng: random.Random, levels: int = 10) -> None:
         half = max(self.spread / 2, TICK)
         bb = math.floor((self.mid - half) / TICK + 1e-9) * TICK
         ba = math.ceil((self.mid + half) / TICK - 1e-9) * TICK
@@ -65,14 +65,20 @@ class Sec:
             self.bids, self.asks = [], []
             return
         bb, ba = max(bb, TICK), max(ba, 2 * TICK)
-        self.bids = [[round(bb - i * TICK * (1 + i // 3), 2), self.lot * random.randint(1, 4)] for i in range(levels)]
+        self.bids = [[round(bb - i * TICK * (1 + i // 3), 2), self.lot * rng.randint(1, 4)] for i in range(levels)]
         self.bids = [lv for lv in self.bids if lv[0] >= TICK]
-        self.asks = [[round(ba + i * TICK * (1 + i // 3), 2), self.lot * random.randint(1, 4)] for i in range(levels)]
+        self.asks = [[round(ba + i * TICK * (1 + i // 3), 2), self.lot * rng.randint(1, 4)] for i in range(levels)]
 
 
 class Market:
     def __init__(self, case: str, ticks_per_period: int, periods: int, seed: int | None):
-        random.seed(seed)
+        # Two independent streams. `rng` drives the MARKET (prices, news, tenders, book
+        # sizes) and `fill_rng` decides passive fills. With a single stream, every resting
+        # order the bot posts consumes draws and shifts the whole future price path, so the
+        # "same seed" was a different market on every run - A/B tests of a market maker
+        # were pure noise. Now a seed is the same market for every setting being compared.
+        self.rng = random.Random(seed)
+        self.fill_rng = random.Random(None if seed is None else seed + 10_007)
         self.case = case
         self.tpp = ticks_per_period
         self.periods = periods
@@ -91,7 +97,7 @@ class Market:
         getattr(self, f"_setup_{case}")()
         for s in self.secs.values():
             s.last = s.mid
-            s.rebuild()
+            s.rebuild(self.rng)
 
     # ===================================================== case universes
     def _setup_liability(self) -> None:
@@ -152,11 +158,11 @@ class Market:
                 self.period, self.tick = self.period + 1, 1
             for s in self.secs.values():
                 if s.sigma:
-                    s.mid = max(0.5, s.mid + random.gauss(0, s.sigma))
+                    s.mid = max(0.5, s.mid + self.rng.gauss(0, s.sigma))
             getattr(self, f"_tick_{self.case}")()
             for s in self.secs.values():
                 s.last = s.mid
-                s.rebuild()
+                s.rebuild(self.rng)
                 s.hist.append({"period": self.period, "tick": self.tick, "open": s.mid, "high": s.mid,
                                "low": s.mid, "close": round(s.mid, 4)})
             self._fill_resting()
@@ -165,13 +171,13 @@ class Market:
         for tid in [k for k, v in self.tenders.items() if v["expires"] <= self.abs_tick]:
             self.tenders.pop(tid)
         if self.abs_tick % 12 == 5:
-            t = random.choice(list(self.secs))
+            t = self.rng.choice(list(self.secs))
             s = self.secs[t]
-            action = random.choice(["BUY", "SELL"])
-            qty = random.choice([10_000, 20_000, 30_000, 50_000])
-            edge = random.uniform(-0.10, 0.25)
+            action = self.rng.choice(["BUY", "SELL"])
+            qty = self.rng.choice([10_000, 20_000, 30_000, 50_000])
+            edge = self.rng.uniform(-0.10, 0.25)
             price = round(s.mid - edge if action == "BUY" else s.mid + edge, 2)
-            fixed = random.random() > 0.25
+            fixed = self.rng.random() > 0.25
             tid = next(self.ids)
             self.tenders[tid] = {
                 "tender_id": tid, "period": self.period, "tick": self.tick, "expires": self.abs_tick + 10,
@@ -181,14 +187,14 @@ class Market:
             }
 
     def _tick_etf(self) -> None:
-        p = 0.92 * self.state["premium"] + random.gauss(0, 0.06)
+        p = 0.92 * self.state["premium"] + self.rng.gauss(0, 0.06)
         self.state["premium"] = p
         self.secs["RITC"].mid = self.secs["BULL"].mid + self.secs["BEAR"].mid + p
 
     def _tick_equity(self) -> None:
-        if random.random() < 0.02:                   # occasional informed jump
-            s = random.choice(list(self.secs.values()))
-            s.mid += random.choice([-1, 1]) * random.uniform(0.10, 0.30)
+        if self.rng.random() < 0.02:                   # occasional informed jump
+            s = self.rng.choice(list(self.secs.values()))
+            s.mid += self.rng.choice([-1, 1]) * self.rng.uniform(0.10, 0.30)
 
     def _tick_derivatives(self) -> None:
         week = (self.abs_tick - 1) // 75
@@ -197,7 +203,7 @@ class Market:
             if week == 0:
                 self._news("Delta limit", "The delta limit for this heat is 7,000 shares. Penalty $0.01/share/tick.")
             prev = self.state["true_vol"]
-            self.state["true_vol"] = random.choice([0.15, 0.20, 0.25, 0.30, 0.35])
+            self.state["true_vol"] = self.rng.choice([0.15, 0.20, 0.25, 0.30, 0.35])
             # The market only half-believes the news: implied vol lags true vol.
             self.state["mkt_vol"] = 0.5 * prev + 0.5 * self.state["true_vol"]
             self._news(f"Volatility week {week + 1}",
@@ -206,9 +212,9 @@ class Market:
             v = self.state["true_vol"]
             self._news("Volatility forecast", f"The annualized volatility of RTM next week will be between "
                        f"{round(v * 100) - 3}% and {round(v * 100) + 3}%")
-        self.state["mkt_vol"] += 0.05 * (self.state["true_vol"] - self.state["mkt_vol"]) + random.gauss(0, 0.002)
+        self.state["mkt_vol"] += 0.05 * (self.state["true_vol"] - self.state["mkt_vol"]) + self.rng.gauss(0, 0.002)
         rtm = self.secs["RTM"]
-        rtm.mid = max(1.0, rtm.mid * math.exp(random.gauss(0, self.state["true_vol"] * math.sqrt(1 / 3600))))
+        rtm.mid = max(1.0, rtm.mid * math.exp(self.rng.gauss(0, self.state["true_vol"] * math.sqrt(1 / 3600))))
         self._price_options()
 
     def _price_options(self) -> None:
@@ -232,8 +238,8 @@ class Market:
             p[0] -= 1
         self.state["pending"] = [p for p in self.state["pending"] if p[0] > 0]
         if self.abs_tick % 40 == 20:
-            exp = round(random.uniform(-2, 2), 1)
-            act = round(exp + random.gauss(0, 2), 1)
+            exp = round(self.rng.uniform(-2, 2), 1)
+            act = round(exp + self.rng.gauss(0, 2), 1)
             word = lambda x: "build" if x >= 0 else "draw"   # noqa: E731
             self._news("EIA inventory report",
                        f"Crude inventories show a {word(act)} of {abs(act)} million barrels vs expected "
@@ -253,7 +259,7 @@ class Market:
                     s.position, s.cost, s.tradeable = 0, 0.0, False
                     s.mid = S
                 continue
-            n = 0.9 * self.state["basis_noise"][t] + random.gauss(0, 0.08)
+            n = 0.9 * self.state["basis_noise"][t] + self.rng.gauss(0, 0.08)
             self.state["basis_noise"][t] = n
             s.mid = S + self.state["carry"] * ttx + n
 
@@ -324,8 +330,8 @@ class Market:
             take = 0
             if crossed:
                 take = left
-            elif at_touch and random.random() < 0.35:
-                take = min(left, s.lot * random.randint(1, 2))
+            elif at_touch and self.fill_rng.random() < 0.35:
+                take = min(left, s.lot * self.fill_rng.randint(1, 2))
             if take:
                 prev = o["quantity_filled"]
                 o["vwap"] = ((o.get("vwap") or 0.0) * prev + p * take) / (prev + take)
@@ -503,6 +509,14 @@ def serve(case: str, port: int = 9999, speed: float = 4.0, delay: float = 2.0, s
     m = Market(case, tpp, periods, seed)
     srv = ThreadingHTTPServer(("127.0.0.1", port), make_handler(m))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    if speed <= 0:
+        # LOCK-STEP: no clock thread. The caller advances the market itself with
+        # `m.advance()` (the tuner does it every N bot loops), so a run depends only on
+        # the seed and the settings - not on thread timing.
+        if block:
+            raise ValueError("lock-step mode (speed <= 0) is for programmatic use; pass block=False")
+        m.status = "ACTIVE"
+        return srv, m
 
     def clock():
         time.sleep(delay)

@@ -56,6 +56,7 @@ class RiskManager:
     groups: list[LimitGroup] = field(default_factory=list)
     buffer: float = 0.98          # use at most 98% of a limit - fills can overshoot
     halted: bool = False
+    throttle: float = 1.0         # set by the Runner from DrawdownGuard.throttle(); scales every limit
 
     @classmethod
     def from_config(cls, cfg: dict) -> RiskManager:
@@ -97,15 +98,16 @@ class RiskManager:
         best = float("inf")
 
         cap = self.max_position.get(ticker)
+        scale = self.buffer * self.throttle
         if cap is not None:
-            best = min(best, max(0, cap * self.buffer - sign * pos))
+            best = min(best, max(0, cap * scale - sign * pos))
 
         for g in self.groups:
             w = g.weight(ticker)
             if not w:
                 continue
             gross, net = g.exposure(positions)
-            gross_lim, net_lim = g.gross * self.buffer, g.net * self.buffer
+            gross_lim, net_lim = g.gross * scale, g.net * scale
             # Net: moving in `sign` direction changes net by sign*w per unit.
             best = min(best, max(0.0, (net_lim - sign * net) / w))
             # Gross: trading toward zero reduces gross, so only binds past zero.
@@ -114,6 +116,50 @@ class RiskManager:
             else:
                 best = min(best, abs(pos) + max(0.0, (gross_lim - gross) / w))
         return 10**9 if best == float("inf") else int(best)
+
+    def room_package(self, legs: dict[str, float], positions: dict[str, int], cap: int = 10**7) -> int:
+        """
+        Max number of whole PACKAGES (e.g. 1 ETF unit + its basket, 1 future + its spot hedge)
+        we can add without breaching any limit. `legs` is signed units per package.
+        `room()` checks one ticker at a time and misses that every leg of a multi-leg
+        trade uses the same gross limit. A constraint that is already breached may not
+        get worse, but trades that reduce it are allowed.
+        """
+        if self.halted or not legs:
+            return 0
+
+        def after(k: int) -> dict[str, float]:
+            out = dict(positions)
+            for t, u in legs.items():
+                out[t] = out.get(t, 0) + k * u
+            return out
+
+        g0 = {g.name: g.exposure(positions) for g in self.groups}
+        scale = self.buffer * self.throttle
+
+        def fits(k: int) -> bool:
+            new = after(k)
+            for t, lim in self.max_position.items():
+                q = abs(new.get(t, 0))
+                if q > lim * scale and q > abs(positions.get(t, 0)):
+                    return False
+            for g in self.groups:
+                gross, net = g.exposure(new)
+                gross0, net0 = g0[g.name]
+                if gross > g.gross * scale and gross > gross0 + 1e-9:
+                    return False
+                if abs(net) > g.net * scale and abs(net) > abs(net0) + 1e-9:
+                    return False
+            return True
+
+        lo, hi = 0, int(cap)               # the feasible set is an interval [0, k*]: binary search it
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if fits(mid):
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
 
     def within(self, positions: dict[str, int]) -> bool:
         for t, cap in self.max_position.items():
@@ -135,15 +181,39 @@ class DrawdownGuard:
     `max_drawdown <= 0` disables it.
     """
     max_drawdown: float = 0.0
+    soft_start: float = 0.5       # throttle begins at this fraction of max_drawdown...
+    floor: float = 0.25           # ...and shrinks every limit linearly down to this fraction at the kill
     peak: float | None = None
+    last: float | None = None
     tripped: bool = False
 
     def update(self, nlv: float | None) -> bool:
         """Feed the latest NLV. Returns True on the update that trips the guard."""
         if self.max_drawdown <= 0 or nlv is None or self.tripped:
             return False
+        self.last = nlv
         self.peak = nlv if self.peak is None else max(self.peak, nlv)
         if self.peak - nlv >= self.max_drawdown:
             self.tripped = True
             return True
         return False
+
+    @property
+    def drawdown(self) -> float:
+        return 0.0 if self.peak is None or self.last is None else self.peak - self.last
+
+    def throttle(self) -> float:
+        """
+        Risk multiplier in [floor, 1] - the graduated part of the kill switch.
+        Full size while the drawdown is below `soft_start` x max_drawdown, then limits
+        shrink linearly to `floor` at max_drawdown (where the kill switch trips).
+        Losing streaks get smaller bets instead of an all-or-nothing stop; recovering
+        to a new peak restores full size.
+        """
+        if self.max_drawdown <= 0 or self.tripped:
+            return 0.0 if self.tripped else 1.0
+        start = self.soft_start * self.max_drawdown
+        if self.drawdown <= start:
+            return 1.0
+        frac = min(1.0, (self.drawdown - start) / max(self.max_drawdown - start, 1e-9))
+        return 1.0 - frac * (1.0 - self.floor)
