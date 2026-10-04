@@ -15,7 +15,8 @@ net = 150000
 weights = { CRZY = 1.0, TAME = 1.0 }
 
 [strategy]
-min_profit_per_share = 0.03   # accept only if expected profit/share after costs >= this
+min_profit_per_share = 0.01   # accept only if expected profit/share after costs >= this (0.01: mean $34.1k vs $31.6k at 0.03,
+                              # same worst seed; scaled up automatically by the drawdown throttle)
 refill_factor = 2.0           # visible depth is ~this fraction of what you can unwind into
 competitive_margin = 0.05     # $/share kept when bidding on non-fixed tenders
 drift_halflife = 15           # ticks, for the adverse-drift estimate
