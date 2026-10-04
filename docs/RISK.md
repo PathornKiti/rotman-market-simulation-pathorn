@@ -70,6 +70,14 @@ controlled by package room, leg repair and `[risk]` limits instead.
 | commodity | Spot re-hedge to the carry book; expiry handling | — | No naked spot leg |
 | commodity | **News stop-loss** | `news_stop` | Exit when the move goes the wrong way |
 
+### Finding: a binding vega cap costs more than it saves
+
+With `max_contracts = 100`, caps of $4k / $2.5k / $1.5k per vol point gave mean NLV of
+$17.1k / $9.2k / $4.7k, against $19.3k uncapped. The cap removes exposure exactly when the
+vol edge is biggest. Sizing through `max_contracts` is better: 60 uncapped gave $17.3k
+with a worst seed of +$0.3k, versus −$2.6k at 100. `max_vega` stays available (off) as
+an emergency limit.
+
 ## Results
 
 See [PERFORMANCE.md §7](PERFORMANCE.md) for the before/after numbers with all protections

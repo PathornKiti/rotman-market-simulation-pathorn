@@ -122,3 +122,27 @@ Cross-cutting (`core/`):
   checking one ticker at a time over-sizes ETF and carry trades.
 - **`Executor.filled(responses, qty)`** counts what actually filled. Strategies that
   keep their own books (carry, news, hedges) must count fills, not orders.
+
+## 7. Risk-managed and tuned (lock-step simulator)
+
+8 seeds, lock-step (`python -m ritc tune <case> --seeds 8`). "Before" is the first lock-step
+measurement after §6's fixes. "After" adds the jump guard, the graduated throttle, the
+kill-switch defaults, the case guards and the tuned sizes. Every case runs with its
+protections ON.
+
+| Case | Before: mean / worst seed | After: mean / worst seed | What moved it |
+|---|---|---|---|
+| liability | $31.6k / $16.9k | **$34.1k / $16.9k** | `min_profit_per_share` 0.03 → 0.01 (the throttle raises it again in a drawdown); kill at $15k |
+| derivatives | $17.4k / −$1.1k | **$17.3k / +$0.3k** | throttle + $40k kill; size kept at 60 contracts (100 = more mean, worse tail) |
+| etf | $31.1k / $7.8k | **$32.8k / $10.4k** | `entry_edge` 0.08 → 0.06; package room, leg repair |
+| equity | $7.6k / $3.2k | **$8.1k / $5.9k** | jump guard (4σ, 2-tick pause); kill at $4k |
+| commodity | $367 / $317 | **$409 / $349** | `news_max_size` 40 → 60 with the new `news_stop` |
+
+What did **not** help, and stays off or at its old setting:
+- a drawdown stop near the normal drawdown (derivatives $20k: worst seed −$14.7k)
+- a binding vega cap
+- equity end-of-period skew
+- liability `price_queue`
+- larger ETF `clip` or commodity `carry_clip`
+
+Details are in [RISK.md](RISK.md).
