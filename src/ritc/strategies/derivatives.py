@@ -148,6 +148,37 @@ def hedge_order(delta: float, limit: float, band: float, max_order: int) -> tupl
     return ("SELL" if delta > 0 else "BUY"), qty
 
 
+def ww_band(half_spread: float, gamma: float, risk_aversion: float) -> float:
+    """
+    Whalley & Wilmott (1997) asymptotically optimal no-trade band for a delta hedge
+    under proportional costs, in shares:
+
+        H = (3/2 * cost_per_share * Gamma^2 / gamma)^(1/3)
+
+    cost_per_share = half-spread paid per share of stock, Gamma = portfolio gamma in
+    shares per $1 move, gamma = risk aversion. A big book (high Gamma) or a wide
+    spread earns a wider band: re-hedging every wiggle pays the spread to remove
+    risk that would mostly have reversed. 0 when there is no gamma (or gamma <= 0).
+    """
+    if risk_aversion <= 0 or gamma == 0 or half_spread <= 0:
+        return 0.0
+    return (1.5 * half_spread * gamma * gamma / risk_aversion) ** (1.0 / 3.0)
+
+
+def band_hedge(delta: float, band: float, limit: float, max_order: int,
+               max_band_frac: float = 0.9) -> tuple[str, int] | None:
+    """
+    Whalley-Wilmott rebalancing: inside the band do nothing; outside it trade back
+    to the NEAREST EDGE of the band (not to zero) - the part of the move inside the
+    band is not worth paying for. The band never reaches the fined delta limit.
+    """
+    band = min(band, max_band_frac * limit)
+    if abs(delta) <= band:
+        return None
+    qty = min(max(1, int(abs(delta) - band)), max_order)
+    return ("SELL" if delta > 0 else "BUY"), qty
+
+
 def parity_trades(call_bid, call_ask, put_bid, put_ask, s_bid, s_ask, K, T, r, cost) -> list[tuple[str, str]] | None:
     """
     Executable put-call parity arbitrage per unit (1 option vs 1 share).
@@ -314,6 +345,20 @@ class DerivativesStrategy(Strategy):
         if not any(positions.get(t, 0) for t in self.specs) and positions.get(self.und, 0):
             delta = float(positions[self.und])     # no options left: the stock is pure risk, flatten it
             h = (("SELL" if delta > 0 else "BUY"), min(abs(int(delta)), self.ex.max_size(self.und)))
+        elif self.p.get("hedge_mode", "fixed") == "whalley_wilmott":
+            gamma = 0.0
+            for t, spec in self.specs.items():
+                n = positions.get(t, 0)
+                if n and spec.expiry_tick > abs_tick:
+                    T = ticks_to_years(max(spec.expiry_tick - abs_tick, 1), self.ticks_per_year)
+                    gamma += n * self.mult * bs_greeks(S, spec.strike, T, self.r,
+                                                       self.vol_forecast(spec.expiry_tick - abs_tick),
+                                                       spec.is_call).gamma
+            bid, ask = snap.quote(self.und)
+            half = (ask - bid) / 2 if bid and ask else 0.01
+            band = ww_band(half + float(self.p.get("stock_fee", 0.0)), abs(gamma),
+                           float(self.p.get("ww_risk_aversion", 1e-3)))
+            h = band_hedge(delta, band, self.delta_limit, self.ex.max_size(self.und))
         else:
             h = hedge_order(delta, self.delta_limit, self.p.get("hedge_band", 0.15), self.ex.max_size(self.und))
         if h:

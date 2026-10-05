@@ -43,6 +43,9 @@ min_price_edge = 0.02         # $ beyond fees an option price must clear
 delta_limit = 7000            # overwritten by news
 min_ticks_to_expiry = 10      # stop trading an option this close to expiry
 hedge_band = 0.15             # re-hedge to zero when |delta| > 15% of the limit
+hedge_mode = "fixed"          # or "whalley_wilmott": band from gamma + spread, rebalance to the band EDGE
+ww_risk_aversion = 0.001      # Whalley-Wilmott gamma: higher = narrower band, more hedging
+stock_fee = 0.01              # $/share commission on the underlying, added to the half-spread
 parity_arb = true
 parity_contracts = 10
 parity_edge = 0.05

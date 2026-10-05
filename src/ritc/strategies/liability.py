@@ -45,7 +45,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from ..core.algo import AlgoParams, BlockExecutor
+from ..core.algo import AlgoParams, BlockExecutor, ac_kappa, book_eta
 from ..core.book import Level, OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..pricing.stats import EWMA
@@ -209,6 +209,8 @@ class LiabilityStrategy(Strategy):
         ex_cfg = self.cfg.get("execution", {})
         self.mode = ex_cfg.get("unwind_mode", "block")
         self.horizon = int(ex_cfg.get("unwind_horizon_ticks", 30))
+        self.schedule = ex_cfg.get("schedule", "front_load")          # or "almgren_chriss"
+        self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 1e-5))
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
 
@@ -299,7 +301,12 @@ class LiabilityStrategy(Strategy):
                 continue
             # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
             if b is None or (pos > 0) != (b.start_pos > 0) or abs(pos) > abs(b.start_pos):
-                self.algo.work(t, pos, 0, now, min(now + self.horizon, period_end))
+                kappa = 0.0
+                if self.schedule == "almgren_chriss":
+                    # sigma: GARCH $/share/tick; eta: from the side we unwind INTO.
+                    kappa = ac_kappa(self.price_vol(t, snap), book_eta(snap.book(t), "bid" if pos > 0 else "ask"),
+                                     self.ac_lambda)
+                self.algo.work(t, pos, 0, now, min(now + self.horizon, period_end), kappa=kappa)
         if self.algo.active:
             open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
             self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)

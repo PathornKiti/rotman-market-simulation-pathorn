@@ -23,6 +23,9 @@ exit_edge = 0.01               # executable mode: $/unit the closing trade must 
                                # mid mode: close when the mid premium is back inside this
 exit_slippage = 0.03           # mid mode only
 slippage_share = 0.5           # spend this share of the surplus edge on wider protective limits
+threshold_mode = "fixed"       # or "bertram": entry/exit edges from an OU fit of the premium (Bertram 2010)
+bertram_window = 300           # ticks of premium history for the fit
+bertram_min_edge = 0.0         # never trade on less executable edge than this
 clip = 5000                    # max ETF units per trade
 lot = 500
 hedge_tolerance = 100

@@ -44,6 +44,7 @@ from dataclasses import dataclass
 
 from ..core.book import OrderBook
 from ..core.bot import Snapshot, Strategy
+from ..pricing.timeseries import bertram_band, fit_ou, ou_continuous
 
 log = logging.getLogger("ritc.etf")
 
@@ -182,6 +183,10 @@ class ETFStrategy(Strategy):
         self.fx_mode: str = c.get("fx_mode", "multiply")
         self.converter_cost = float(c.get("converter_cost", 0.0))
         self.p = s
+        # Bertram thresholds: premium history (one point per tick), refit periodically.
+        self.prem_hist: list[float] = []
+        self.last_tick = -1
+        self.band: float | None = None          # Bertram a* on the mid premium, once fitted
 
     @property
     def book_tickers(self) -> list[str]:
@@ -203,6 +208,7 @@ class ETFStrategy(Strategy):
             return
         premium = etf_book.mid - nav(mids, self.weights, fx)
         lot = int(self.p.get("lot", 100))
+        entry, exit_edge = self.thresholds(snap, premium, etf_book, comp_books, fx)
 
         # 1) Repair any leg imbalance from a partial fill before doing anything new.
         repairs = repair_legs(positions, self.etf, self.weights, premium, self.p.get("hedge_tolerance", 100))
@@ -227,7 +233,6 @@ class ETFStrategy(Strategy):
                 return
         elif etf_pos:
             close_dir = "BUY_ETF" if etf_pos < 0 else "SELL_ETF"
-            exit_edge = self.p.get("exit_edge", 0.01)
             plan = plan_arb(etf_book, comp_books, self.weights, self.fees, self.etf, exit_edge,
                             min(abs(etf_pos), int(self.p.get("clip", 5000))), lot, fx, self.converter_cost,
                             directions=(close_dir,))
@@ -239,7 +244,6 @@ class ETFStrategy(Strategy):
                 return
 
         # 3) Open new arbitrage, sized against every limit for the WHOLE package.
-        entry = self.p.get("entry_edge", 0.10)
         room = {d: self.risk.room_package(self._package(d), positions) for d in ("SELL_ETF", "BUY_ETF")}
         cap = min(self.sized(self.p.get("clip", 5000)), max(room.values()))
         if cap < lot:
@@ -253,6 +257,41 @@ class ETFStrategy(Strategy):
             return
         log.info("ARB %s %d  edge/unit %.4f  premium %.3f", plan.direction, qty, plan.edge_per_unit, premium)
         self._execute(with_slippage(plan, self.weights, entry, self.p.get("slippage_share", 0.5), fx), qty)
+
+    def cost_per_side(self, etf_book: OrderBook, comp_books: dict[str, OrderBook], fx: float) -> float:
+        """Fees + half-spreads of every leg, per ETF unit: what one side of the arb costs."""
+        half = lambda b: (b.spread or 0.0) / 2      # noqa: E731
+        return (self.fees.get(self.etf, 0.0) + half(etf_book) + self.converter_cost
+                + fx * sum(w * (self.fees.get(t, 0.0) + half(comp_books[t])) for t, w in self.weights.items()))
+
+    def thresholds(self, snap: Snapshot, premium: float, etf_book: OrderBook,
+                   comp_books: dict[str, OrderBook], fx: float) -> tuple[float, float]:
+        """
+        (entry_edge, exit_edge) in executable $ per unit. "fixed": from config.
+        "bertram": fit an OU to the mid premium and use Bertram's optimal band a*:
+        trade when |premium| reaches a*, i.e. an executable edge of a* - cost per side,
+        for both entering and for the reverse trade that closes.
+        """
+        entry = self.p.get("entry_edge", 0.10)
+        exit_edge = self.p.get("exit_edge", 0.01)
+        if self.p.get("threshold_mode", "fixed") != "bertram":
+            return entry, exit_edge
+        if snap.tick != self.last_tick:
+            self.last_tick = snap.tick
+            self.prem_hist.append(premium)
+            self.prem_hist = self.prem_hist[-int(self.p.get("bertram_window", 300)):]
+            if len(self.prem_hist) >= 60 and len(self.prem_hist) % 10 == 0:
+                fit = fit_ou(self.prem_hist)
+                if fit is not None and fit.significant():
+                    side = self.cost_per_side(etf_book, comp_books, fx)
+                    a, _ = bertram_band(*ou_continuous(fit), cost=2 * side)
+                    self.band = a - side if a > 0 else None
+                    log.info("BERTRAM half-life %.1f ticks, sd %.3f, cost/side %.3f -> edge %.3f",
+                             fit.half_life, fit.stationary_std, side, self.band or 0.0)
+        if self.band is None:
+            return entry, exit_edge                  # not fitted yet / not mean-reverting: config values
+        floor = self.p.get("bertram_min_edge", 0.0)
+        return max(self.band, floor), max(self.band, floor)
 
     def _package(self, direction: str) -> dict[str, float]:
         """Signed units of every leg per ETF unit traded in `direction`."""

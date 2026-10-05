@@ -38,6 +38,8 @@ participation = 0.35          # max fraction of visible depth per aggressive sli
 display_qty = 5000            # iceberg: largest passive child shown in the book
 urgent_ticks = 6              # cross for everything left in the final ticks of the schedule
 front_load = 0.3              # 0 = linear schedule; >0 = unwind more early (less drift risk)
+schedule = "front_load"       # or "almgren_chriss": optimal path from GARCH vol, book-implied impact, risk aversion
+ac_risk_aversion = 1e-5       # Almgren-Chriss lambda (1/$): higher = unwind faster
 
 [run]
 max_drawdown = 15000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the

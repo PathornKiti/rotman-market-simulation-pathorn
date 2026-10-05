@@ -369,6 +369,62 @@ def fit_ou(prices: Sequence[float]) -> OUFit | None:
     return OUFit(mu, b, math.sqrt(s2), t, n)
 
 
+def ou_passage_time(theta: float, sigma: float, a: float, steps: int = 200) -> float:
+    """
+    Mean first-passage time of an OU process dX = -theta X dt + sigma dW from -a to +a
+    (Bertram 2010, eq. for E[T]):
+
+        E[T] = (2 / sigma^2) Int_{-a}^{a} exp(theta y^2 / sigma^2) Int_{-inf}^{y} exp(-theta z^2 / sigma^2) dz dy
+
+    The inner integral is closed-form (erf); the outer one is Simpson's rule.
+    """
+    if theta <= 0 or sigma <= 0 or a <= 0:
+        return float("inf")
+    k = math.sqrt(theta) / sigma
+    steps += steps % 2
+
+    def f(y: float) -> float:
+        inner = (math.sqrt(math.pi) / (2 * k)) * (1 + math.erf(k * y))
+        return math.exp((k * y) ** 2) * inner
+
+    h = 2 * a / steps
+    tot = f(-a) + f(a) + sum((4 if i % 2 else 2) * f(-a + i * h) for i in range(1, steps))
+    return (2 / sigma ** 2) * tot * h / 3
+
+
+def bertram_band(theta: float, sigma: float, cost: float, grid: int = 60) -> tuple[float, float]:
+    """
+    Bertram (2010), "Analytic solutions for optimal statistical arbitrage trading":
+    trade the OU spread long at -a and short at +a. Each hop between the bands earns
+    2a - cost, and takes E[T](a), so the expected return PER UNIT TIME is
+
+        mu(a) = (2a - cost) / E[T](a)
+
+    A wide band earns more per trade but waits exponentially longer for the next one.
+    Returns (a*, mu(a*)) maximising it; (0, 0) when no band beats the cost.
+    `theta` is per step, `sigma` the per-step diffusion of the continuous OU.
+    """
+    if theta <= 0 or sigma <= 0:
+        return 0.0, 0.0
+    sd = sigma / math.sqrt(2 * theta)              # stationary std
+    lo = max(cost / 2, 1e-9)
+    best = (0.0, 0.0)
+    for i in range(1, grid + 1):
+        a = lo + (4 * sd - lo) * i / grid if 4 * sd > lo else lo * (1 + i / grid)
+        mu = (2 * a - cost) / ou_passage_time(theta, sigma, a)
+        if mu > best[1]:
+            best = (a, mu)
+    return best
+
+
+def ou_continuous(fit: OUFit) -> tuple[float, float]:
+    """(theta, sigma) per step of the continuous OU matching an AR(1) fit."""
+    if not 0 < fit.b < 1:
+        return 0.0, 0.0
+    theta = -math.log(fit.b)
+    return theta, fit.sigma * math.sqrt(2 * theta / (1 - fit.b * fit.b))
+
+
 class FairValueModel:
     """
     Combines the two value-through-time views into one fair value per tick:
