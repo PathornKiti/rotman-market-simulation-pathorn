@@ -1,6 +1,7 @@
 # Research-grade models: what was tried and what earned its place
 
-A technique is adopted only if it beats the current, already-tuned setting on the
+Only techniques that improved results are in the code. Everything else was measured,
+recorded below with its numbers, and removed. A technique is adopted only if it beats the current, already-tuned setting on the
 **lock-step** simulator. That simulator is reproducible: the same seed is the same market
 for every setting compared (8 seeds, `python -m ritc tune <case> --seeds 8`). Mean and
 worst-seed final NLV are reported because a model that raises the mean by fattening the
@@ -85,28 +86,6 @@ Code: `strategies/commodity.py` (`BayesImpact`, `learn_impact`).
 95% of the loss from mis-calibration within the heat. `impact_per_unit` is the
 least-known number in the commodity brief, so this is the robust default.
 
-## Implemented, opt-in
-
-### Whalley–Wilmott hedging band (derivatives)
-
-Whalley & Wilmott (1997). The optimal no-trade band around the delta hedge under
-transaction costs is H = (3/2 · cost · Γ² / γ)^{1/3}, using the portfolio gamma Γ. You
-rebalance to the **edge** of the band, not to zero. The band is capped at 90% of the
-fined delta limit.
-
-Config: `hedge_mode = "whalley_wilmott"`, `ww_risk_aversion`.
-
-| Hedge | Mean NLV | Worst seed | Mean / stdev |
-|---|---|---|---|
-| fixed band 15% of limit, to zero (default) | $17.3k | +$0.3k | 1.18 |
-| WW γ = 1e-2 | $18.2k | −$2.8k | 1.15 |
-| WW γ = 1e-3 | $19.6k | −$2.8k | 1.17 |
-| WW γ = 1e-4 | $22.6k | −$4.7k | 1.16 |
-
-**Finding:** WW raises the mean (by up to $5.3k), but by carrying more delta, so the tail
-grows with it. Mean/stdev is unchanged. It's a leverage dial, not a better trade-off, so
-it stays opt-in. Turn it on (γ ≈ 1e-3) if you want more return for more risk.
-
 ## Evaluated, not adopted
 
 | Technique | Test | Result |
@@ -116,6 +95,10 @@ it stays opt-in. Turn it on (γ ≈ 1e-3) if you want more return for more risk.
 | Fourier low-pass fair value | 1-step forecast vs random walk | **4.5–17.6× worse.** The periodic-extension assumption pulls forecasts back to the window start. Kalman ≈ random walk. |
 | Malliavin–Mancino Fourier volatility | Bid-ask-bounced last-trade prices | 11% error vs 107% for naive realized vol. Useful only on trade-price history; the bots use mid prices (0% error). Candidate for the GARCH warm-up from `history()`. |
 | Fourier (Carr–Madan / COS) option pricing | — | Only needed for Heston or jump models. RIT uses Black–Scholes, which has an exact closed form. |
+| Whalley–Wilmott hedging band (derivatives) | No-trade band H = (3/2 · cost · Γ² / γ)^{1/3}, rebalance to the band edge; 8 seeds at γ = 1e-2 / 1e-3 / 1e-4 | Mean $18.2k / $19.6k / $22.6k vs $17.3k, but worst seed −$2.8k / −$2.8k / −$4.7k vs +$0.3k. Mean/stdev unchanged (1.15–1.17 vs 1.18). It's a wider band, so more risk for more return rather than a better trade-off. Removed. |
+| Vega budget (derivatives) | Cap on \|portfolio vega\| at 100 contracts: $4k / $2.5k / $1.5k per vol point | Mean $17.1k / $9.2k / $4.7k vs $19.3k uncapped. A binding cap cuts exposure exactly when the edge is biggest. Size is controlled by `max_contracts = 60` instead. Removed. |
+| End-of-period inventory skew (equity) | Avellaneda–Stoikov skew ramped up over the last 60 ticks | Mean $7.6k vs $8.1k, worse worst seed. The simulator has no drift, so there is little inventory risk to shed. Removed. |
+| Queue-aware tender pricing (liability) | Price a tender behind inventory still being unwound | Worst seed better, mean lower on 5 of 6 seeds. Removed. |
 | Copula portfolio optimisation | Kendall τ and tail dependence across tickers; estimator noise | Tickers are independent in the simulator, except futures vs spot, which is already hedged exactly. One heat (300 ticks) estimates tail dependence ± 0.10, about the size of the effect, so ~10 heats are needed. Positions are hedged arbs or seconds-long inventory capped by exchange limits. |
 | Guéant–Lehalle–Fernandez-Tapia quoting / order-flow imbalance (equity) | — | Needs a realistic fill-intensity curve and order flow. The simulator has neither (fixed fill probability at the touch, random book rebuilds), so it can't be validated here. Equity gets the jump guard instead (`docs/RISK.md`). |
 
@@ -125,5 +108,4 @@ it stays opt-in. Turn it on (γ ≈ 1e-3) if you want more return for more risk.
 python -m ritc tune liability   --seeds 8 --grid execution.schedule=front_load,almgren_chriss
 python -m ritc tune etf         --seeds 8 --grid strategy.threshold_mode=fixed,bertram
 python -m ritc tune commodity   --seeds 8 --grid strategy.impact_mode=fixed,bayes --grid strategy.impact_per_unit=0.10,0.25
-python -m ritc tune derivatives --seeds 8 --grid strategy.hedge_mode=fixed,whalley_wilmott
 ```

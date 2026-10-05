@@ -35,12 +35,6 @@ requote_tolerance = 0.01
 jump_sigmas = 4.0              # jump guard: a one-tick move > max(jump_sigmas x vol, jump_floor) pulls quotes
 jump_floor = 0.05              #   ($ floor so quiet stocks don't trip it on one tick of noise)
 jump_pause_ticks = 2           #   for this many ticks. 0 sigmas = off.
-end_skew_ticks = 60            # over the last N ticks of a period...
-end_skew_boost = 0.0           # ...ramp the inventory skew up to (1 + boost)x to shed inventory passively.
-                               # Off by default: on the simulator (no drift, so little inventory risk) 0 vs 3
-                               # was within noise. Try 3 in the practice case if wind-down crossing is costly.
-
-# Per-ticker overrides of any of the above:
 [strategy.per_ticker.ATMN]
 min_half_spread = 0.03
 

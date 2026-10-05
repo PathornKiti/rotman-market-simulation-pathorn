@@ -28,9 +28,8 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 **Research-grade models**, each adopted only after beating the tuned baseline on the
 reproducible simulator: Almgren–Chriss optimal execution (liability), Bertram optimal
-mean-reversion thresholds (ETF), Bayesian news-impact learning (commodity), and an opt-in
-Whalley–Wilmott hedging band (derivatives). Fourier and copula methods were evaluated and
-not adopted. See [docs/RESEARCH.md](docs/RESEARCH.md) for the evidence.
+mean-reversion thresholds (ETF), and Bayesian news-impact learning (commodity). Whalley–Wilmott hedging, vega caps, Fourier
+and copula methods were evaluated and removed because they didn't improve results. See [docs/RESEARCH.md](docs/RESEARCH.md) for the evidence.
 
 An **offline simulator** serves the same REST API, so you can rehearse every case
 without the Windows-only RIT client.

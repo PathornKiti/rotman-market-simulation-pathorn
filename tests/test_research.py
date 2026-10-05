@@ -1,4 +1,4 @@
-"""Research-grade components: Almgren-Chriss, Whalley-Wilmott, Bertram, Bayesian impact."""
+"""Research-grade components: Almgren-Chriss, Bertram, Bayesian impact."""
 
 import math
 import random
@@ -7,7 +7,6 @@ from conftest import make_book
 from ritc.core.algo import ac_kappa, book_eta, schedule_position
 from ritc.pricing.timeseries import bertram_band, ou_continuous, ou_passage_time
 from ritc.strategies.commodity import BayesImpact
-from ritc.strategies.derivatives import band_hedge, ww_band
 
 
 # ------------------------------------------------------------ Almgren-Chriss
@@ -33,23 +32,6 @@ def test_book_eta_from_depth():
     # 40,000 shares within $0.10 of the bid -> rho = 400,000 / $ -> eta = 1 / (2 rho)
     assert abs(book_eta(book, "bid") - 1 / 800_000) < 1e-12
     assert book_eta(make_book([], [(25.0, 100)]), "bid") == 0.0
-
-
-# ------------------------------------------------------------ Whalley-Wilmott
-def test_ww_band_grows_with_gamma_and_cost():
-    b = ww_band(0.01, 5000, 1e-3)
-    assert abs(b - (1.5 * 0.01 * 5000 ** 2 / 1e-3) ** (1 / 3)) < 1e-9
-    assert ww_band(0.02, 5000, 1e-3) > b and ww_band(0.01, 10000, 1e-3) > b
-    assert ww_band(0.01, 5000, 1e-2) < b                        # more risk averse -> tighter
-    assert ww_band(0.01, 0, 1e-3) == 0.0
-
-
-def test_band_hedge_trades_to_the_edge_and_respects_limit():
-    assert band_hedge(500, 800, 7000, 10000) is None            # inside the band
-    assert band_hedge(1500, 800, 7000, 10000) == ("SELL", 700)  # back to the edge, not to zero
-    assert band_hedge(-1500, 800, 7000, 10000) == ("BUY", 700)
-    # A band wider than the fined limit is clipped to 90% of it.
-    assert band_hedge(6800, 50_000, 7000, 10000) == ("SELL", 500)
 
 
 # ------------------------------------------------------------ Bertram

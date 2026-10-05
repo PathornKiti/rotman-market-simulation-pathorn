@@ -108,8 +108,8 @@ Simulator P&L is noise-driven: read these numbers as direction, not as a forecas
 | derivatives | **-$20.3k** (worst -$45.8k) | **+$21.5k to +$27.2k** (worst -$0.7k to -$6.2k) | no trimming while the edge holds; news polled with every snapshot; hedge counts fills and every held option |
 | etf | **-$0.5k** (worst -$5.8k) | **+$16.0k to +$17.7k** (worst +$3.5k to +$5.6k) | executable exit instead of mid-premium exit; leg completion; slippage budget; package risk room |
 | commodity | +$291 (worst -$244, stdev $321) | **+$373** (worst **+$309**, stdev $64) | fill-tracked carry book, spot re-hedge, expiry handling, package risk room |
-| liability | +$47.3k | +$46.1k (noise) | rejected competitive accepts no longer booked; `price_queue` opt-in |
-| equity | +$1.3k | -$3.0k to +$1.1k across repeat runs (noise) | `end_skew_boost` opt-in; the simulator cannot tell it apart |
+| liability | +$47.3k | +$46.1k (noise) | rejected competitive accepts no longer booked |
+| equity | +$1.3k | -$3.0k to +$1.1k across repeat runs (noise) | none (the lock-step simulator in §7 resolved this noise) |
 
 Cross-cutting (`core/`):
 
@@ -138,7 +138,7 @@ protections ON.
 | equity | $7.6k / $3.2k | **$8.1k / $5.9k** | jump guard (4σ, 2-tick pause); kill at $4k |
 | commodity | $367 / $317 | **$409 / $349** | `news_max_size` 40 → 60 with the new `news_stop` |
 
-What did **not** help, and stays off or at its old setting:
+What did **not** help. Removed from the code, or kept at the old setting:
 - a drawdown stop near the normal drawdown (derivatives $20k: worst seed −$14.7k)
 - a binding vega cap
 - equity end-of-period skew

@@ -27,8 +27,6 @@ max_slippage = 0.04           # unwind slices keep VWAP within this of the touch
 participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
 decline_explicitly = false
-price_queue = false           # opt-in; lowered variance but cost mean NLV on 5/6 sim seeds.
-                              # price a tender's unwind BEHIND inventory we are still unwinding on that ticker
 
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)

@@ -118,20 +118,6 @@ def option_signal(spec: OptionSpec, S: float, bid: float | None, ask: float | No
     return OptionSignal(spec.ticker, iv, g.price, g.delta, g.vega, target)
 
 
-def vega_room(total_vega: float, vega_per_contract: float, cap: float) -> int:
-    """
-    Contracts we can add without |portfolio vega| exceeding `cap` ($ per vol point).
-    `vega_per_contract` is signed for the trade direction (buying a long-vega option
-    is +, selling it is -). Trades that reduce |vega| may go up to `cap` on the
-    other side. cap <= 0 disables the limit.
-    """
-    if cap <= 0 or vega_per_contract == 0:
-        return 10**9
-    if vega_per_contract * total_vega >= 0:            # adds to the exposure we already have
-        return max(0, int((cap - abs(total_vega)) / abs(vega_per_contract)))
-    return int((abs(total_vega) + cap) / abs(vega_per_contract))
-
-
 def portfolio_delta(positions: dict[str, int], deltas: dict[str, float], underlying: str,
                     multiplier: int) -> float:
     d = float(positions.get(underlying, 0))
@@ -145,37 +131,6 @@ def hedge_order(delta: float, limit: float, band: float, max_order: int) -> tupl
     if abs(delta) <= band * limit:
         return None
     qty = min(int(abs(delta)), max_order)
-    return ("SELL" if delta > 0 else "BUY"), qty
-
-
-def ww_band(half_spread: float, gamma: float, risk_aversion: float) -> float:
-    """
-    Whalley & Wilmott (1997) asymptotically optimal no-trade band for a delta hedge
-    under proportional costs, in shares:
-
-        H = (3/2 * cost_per_share * Gamma^2 / gamma)^(1/3)
-
-    cost_per_share = half-spread paid per share of stock, Gamma = portfolio gamma in
-    shares per $1 move, gamma = risk aversion. A big book (high Gamma) or a wide
-    spread earns a wider band: re-hedging every wiggle pays the spread to remove
-    risk that would mostly have reversed. 0 when there is no gamma (or gamma <= 0).
-    """
-    if risk_aversion <= 0 or gamma == 0 or half_spread <= 0:
-        return 0.0
-    return (1.5 * half_spread * gamma * gamma / risk_aversion) ** (1.0 / 3.0)
-
-
-def band_hedge(delta: float, band: float, limit: float, max_order: int,
-               max_band_frac: float = 0.9) -> tuple[str, int] | None:
-    """
-    Whalley-Wilmott rebalancing: inside the band do nothing; outside it trade back
-    to the NEAREST EDGE of the band (not to zero) - the part of the move inside the
-    band is not worth paying for. The band never reaches the fined delta limit.
-    """
-    band = min(band, max_band_frac * limit)
-    if abs(delta) <= band:
-        return None
-    qty = min(max(1, int(abs(delta) - band)), max_order)
     return ("SELL" if delta > 0 else "BUY"), qty
 
 
@@ -303,10 +258,7 @@ class DerivativesStrategy(Strategy):
                 sigs[t] = (sig, fcst)
                 deltas[t] = sig.delta
 
-        # VEGA BUDGET: the edge-scaled targets can line up 20 options the same way, so
-        # cap the portfolio's $ per vol point and spend the budget on the biggest edges first.
-        max_vega = float(self.p.get("max_vega", 0.0))
-        vega = sum(positions.get(t, 0) * self.mult * sg.vega / 100 for t, (sg, _) in sigs.items())
+        # Biggest edges first, so they get the risk room when limits bind.
         for t, (sig, fcst) in sorted(sigs.items(), key=lambda kv: -abs(kv[1][1] - kv[1][0].iv)):
             pos = positions.get(t, 0)
             diff = sig.target - pos
@@ -314,8 +266,7 @@ class DerivativesStrategy(Strategy):
             if abs(diff) < self.p.get("min_trade_contracts", 5):
                 continue
             action = "BUY" if diff > 0 else "SELL"
-            vpc = (1 if action == "BUY" else -1) * self.mult * sig.vega / 100
-            qty = min(abs(diff), self.risk.room(t, action, positions), vega_room(vega, vpc, max_vega))
+            qty = min(abs(diff), self.risk.room(t, action, positions))
             if qty <= 0:
                 continue
             # Protective limit: never pay more than theo - costs (buy) / less than theo + costs (sell).
@@ -326,7 +277,6 @@ class DerivativesStrategy(Strategy):
             # Hedge what actually FILLED: hedging an unfilled IOC order puts on the very
             # delta we meant to remove, and the next loop flips it back (paying twice).
             positions[t] = pos + (got if action == "BUY" else -got)
-            vega += got * vpc
 
         if self.p.get("parity_arb", True):
             self.parity(snap, abs_tick, positions)
@@ -345,20 +295,6 @@ class DerivativesStrategy(Strategy):
         if not any(positions.get(t, 0) for t in self.specs) and positions.get(self.und, 0):
             delta = float(positions[self.und])     # no options left: the stock is pure risk, flatten it
             h = (("SELL" if delta > 0 else "BUY"), min(abs(int(delta)), self.ex.max_size(self.und)))
-        elif self.p.get("hedge_mode", "fixed") == "whalley_wilmott":
-            gamma = 0.0
-            for t, spec in self.specs.items():
-                n = positions.get(t, 0)
-                if n and spec.expiry_tick > abs_tick:
-                    T = ticks_to_years(max(spec.expiry_tick - abs_tick, 1), self.ticks_per_year)
-                    gamma += n * self.mult * bs_greeks(S, spec.strike, T, self.r,
-                                                       self.vol_forecast(spec.expiry_tick - abs_tick),
-                                                       spec.is_call).gamma
-            bid, ask = snap.quote(self.und)
-            half = (ask - bid) / 2 if bid and ask else 0.01
-            band = ww_band(half + float(self.p.get("stock_fee", 0.0)), abs(gamma),
-                           float(self.p.get("ww_risk_aversion", 1e-3)))
-            h = band_hedge(delta, band, self.delta_limit, self.ex.max_size(self.und))
         else:
             h = hedge_order(delta, self.delta_limit, self.p.get("hedge_band", 0.15), self.ex.max_size(self.und))
         if h:
