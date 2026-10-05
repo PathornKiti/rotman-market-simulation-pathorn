@@ -43,7 +43,10 @@ min_price_edge = 0.02         # $ beyond fees an option price must clear
 delta_limit = 7000            # overwritten by news
 min_ticks_to_expiry = 10      # stop trading an option this close to expiry
 hedge_band = 0.15             # re-hedge to zero when |delta| > 15% of the limit
-hedge_mode = "fixed"          # or "whalley_wilmott": band from gamma + spread, rebalance to the band EDGE
+hedge_mode = "fixed"          # or "whalley_wilmott": band from gamma + spread, rebalance to the band EDGE.
+                              # 8 seeds: WW lambda 1e-4/1e-3/1e-2 -> mean $22.6k/$19.6k/$18.2k (fixed $17.3k) but worst
+                              # -$4.7k/-$2.8k/-$2.8k (fixed +$0.3k): same mean/stdev ratio (~1.16 vs 1.18) - WW is a
+                              # wider band, i.e. more risk for more return, not a better trade-off. Opt-in.
 ww_risk_aversion = 0.001      # Whalley-Wilmott gamma: higher = narrower band, more hedging
 stock_fee = 0.01              # $/share commission on the underlying, added to the half-spread
 parity_arb = true

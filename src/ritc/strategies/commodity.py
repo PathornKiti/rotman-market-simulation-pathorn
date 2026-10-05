@@ -266,7 +266,7 @@ class CommodityStrategy(Strategy):
 
     def run_news(self, snap: Snapshot) -> None:
         now = self.abs_tick(snap)
-        bayes = self.p.get("impact_mode", "fixed") == "bayes"
+        bayes = self.p.get("impact_mode", "bayes") == "bayes"
         if bayes:
             self.learn_impact(snap, now)
         for item in self.new_news():

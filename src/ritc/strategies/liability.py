@@ -209,8 +209,8 @@ class LiabilityStrategy(Strategy):
         ex_cfg = self.cfg.get("execution", {})
         self.mode = ex_cfg.get("unwind_mode", "block")
         self.horizon = int(ex_cfg.get("unwind_horizon_ticks", 30))
-        self.schedule = ex_cfg.get("schedule", "front_load")          # or "almgren_chriss"
-        self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 1e-5))
+        self.schedule = ex_cfg.get("schedule", "almgren_chriss")          # or "almgren_chriss"
+        self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 3e-7))
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
 

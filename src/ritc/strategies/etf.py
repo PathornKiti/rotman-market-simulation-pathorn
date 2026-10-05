@@ -274,7 +274,7 @@ class ETFStrategy(Strategy):
         """
         entry = self.p.get("entry_edge", 0.10)
         exit_edge = self.p.get("exit_edge", 0.01)
-        if self.p.get("threshold_mode", "fixed") != "bertram":
+        if self.p.get("threshold_mode", "bertram") != "bertram":
             return entry, exit_edge
         if snap.tick != self.last_tick:
             self.last_tick = snap.tick

@@ -23,7 +23,10 @@ exit_edge = 0.01               # executable mode: $/unit the closing trade must 
                                # mid mode: close when the mid premium is back inside this
 exit_slippage = 0.03           # mid mode only
 slippage_share = 0.5           # spend this share of the surplus edge on wider protective limits
-threshold_mode = "fixed"       # or "bertram": entry/exit edges from an OU fit of the premium (Bertram 2010)
+threshold_mode = "bertram"     # entry/exit edges from a live OU fit of the premium (Bertram 2010); "fixed" = the
+                               # entry_edge/exit_edge above (also used until the fit is significant).
+                               # 8 seeds: same mean as the hand-tuned edges ($33.0k vs $32.8k) with no tuning,
+                               # worst seed $15.9k vs $10.4k, stdev $11.7k vs $14.4k.
 bertram_window = 300           # ticks of premium history for the fit
 bertram_min_edge = 0.0         # never trade on less executable edge than this
 clip = 5000                    # max ETF units per trade
