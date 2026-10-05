@@ -4,9 +4,7 @@ from conftest import make_book
 from ritc.core.execution import Executor
 from ritc.core.risk import LimitGroup, RiskManager
 from ritc.strategies.derivatives import OptionSpec, option_signal
-from ritc.strategies.equity import QuoteParams, compute_quotes, end_of_period_skew
 from ritc.strategies.etf import ArbPlan, plan_arb, repair_legs, with_slippage
-from ritc.strategies.liability import evaluate_tender
 
 W = {"A": 1.0, "B": 1.0}
 
@@ -86,30 +84,8 @@ def test_repair_completes_missing_etf_leg_when_premium_still_favours_it():
     assert repair_legs({"E": -1000, "A": 1000, "B": 400}, "E", W, premium=0.2) == {"B": 600}
 
 
-# ------------------------------------------------------------------ liability
 DEEP = make_book([(25.00, 20000), (24.98, 20000), (24.95, 20000)],
                  [(25.02, 20000), (25.04, 20000), (25.07, 20000)])
-
-
-def test_tender_behind_existing_inventory_is_priced_at_the_margin():
-    t = {"action": "BUY", "quantity": 20000, "price": 24.90, "is_fixed_bid": True}
-    flat = evaluate_tender(t, DEEP, fee=0.02, refill_factor=1.0, price_queue=True)
-    queued = evaluate_tender(t, DEEP, fee=0.02, position=40000, refill_factor=1.0, price_queue=True)
-    ignored = evaluate_tender(t, DEEP, fee=0.02, position=40000, refill_factor=1.0, price_queue=False)
-    assert queued.unwind_vwap < flat.unwind_vwap       # we sell into the book AFTER 40k already queued
-    assert abs(ignored.unwind_vwap - flat.unwind_vwap) < 1e-9
-
-
-# ------------------------------------------------------------------ equity
-def test_end_of_period_skew_ramps_and_shifts_reservation():
-    assert end_of_period_skew(200, 60, 3.0) == 1.0
-    assert end_of_period_skew(30, 60, 3.0) == 2.5
-    assert end_of_period_skew(0, 60, 3.0) == 4.0
-    book = make_book([(25.00, 5000)], [(25.10, 5000)])
-    p = QuoteParams(skew_per_share=0.00001)
-    base = compute_quotes(book, 5000, 0.0, p)
-    late = compute_quotes(book, 5000, 0.0, p, skew_mult=4.0)
-    assert late.reservation < base.reservation        # long inventory: lean harder to sell
 
 
 # ------------------------------------------------------------------ risk management
@@ -133,14 +109,6 @@ def test_throttle_shrinks_limits_but_never_blocks_reducing():
     assert r.room("X", "BUY", {"X": 0}) == 5_000
     assert r.room("X", "BUY", {"X": 8_000}) == 0
     assert r.room("X", "SELL", {"X": 8_000}) >= 8_000
-
-
-def test_vega_room():
-    from ritc.strategies.derivatives import vega_room
-    assert vega_room(0, 10, 0) == 10**9                # off
-    assert vega_room(800, 10, 1000) == 20              # adding long vega: 200 left
-    assert vega_room(1200, 10, 1000) == 0              # already over: no more on that side
-    assert vega_room(800, -10, 1000) == 180            # reducing may go to -cap
 
 
 def test_equity_jump_detection():

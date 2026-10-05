@@ -27,8 +27,6 @@ max_slippage = 0.04           # unwind slices keep VWAP within this of the touch
 participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
 decline_explicitly = false
-price_queue = false           # opt-in; lowered variance but cost mean NLV on 5/6 sim seeds.
-                              # price a tender's unwind BEHIND inventory we are still unwinding on that ticker
 
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
@@ -38,6 +36,11 @@ participation = 0.35          # max fraction of visible depth per aggressive sli
 display_qty = 5000            # iceberg: largest passive child shown in the book
 urgent_ticks = 6              # cross for everything left in the final ticks of the schedule
 front_load = 0.3              # 0 = linear schedule; >0 = unwind more early (less drift risk)
+schedule = "almgren_chriss"   # optimal path from GARCH vol, book-implied impact, risk aversion ("front_load" = old curve)
+ac_risk_aversion = 3e-7       # Almgren-Chriss lambda (1/$): higher = unwind faster. 8 seeds: 3e-7 $37.6k/worst $22.5k,
+                              # 1e-6 $37.3k, 1e-5 $35.5k, 1e-4 $31.4k; old front_load=0.3 $34.1k/worst $16.9k.
+                              # Impact dominates risk here, so near-linear wins; in a more volatile market
+                              # (higher GARCH sigma) the same lambda front-loads automatically.
 
 [run]
 max_drawdown = 15000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the

@@ -16,6 +16,21 @@ schedule-driven "passive-then-aggressive" algo with an iceberg display:
 
 Progress is measured from the POSITION, not from order acks, so partial fills,
 resting fills and manual trades are all accounted for automatically.
+
+Almgren-Chriss schedule (`kappa > 0`)
+-------------------------------------
+Almgren & Chriss (2000), "Optimal execution of portfolio transactions": with
+temporary impact eta ($ per share, per share/tick traded), price vol sigma
+($ per share per sqrt(tick)) and risk aversion lambda (1/$), the mean-variance
+optimal holding path to the deadline T is
+
+    x(t) / X = sinh(kappa (T - t)) / sinh(kappa T),   kappa = sqrt(lambda sigma^2 / eta)
+
+kappa*T -> 0 is a straight line (minimise impact); a large kappa*T front-loads
+(minimise price risk). It replaces the hand-tuned `front_load` curve with one
+derived from the market: sigma from GARCH, eta from the visible book density
+(`book_eta`), so a volatile, deep market unwinds faster and a calm, thin one
+slower.
 """
 
 from __future__ import annotations
@@ -48,16 +63,41 @@ class Child:
     passive: bool
 
 
-def schedule_position(start: int, target: int, start_tick: int, deadline: int, now: int,
-                      front_load: float = 0.0) -> int:
+def ac_kappa(sigma: float, eta: float, risk_aversion: float) -> float:
+    """Almgren-Chriss urgency (per tick). 0 if any input is missing -> fall back to front_load."""
+    if sigma <= 0 or eta <= 0 or risk_aversion <= 0:
+        return 0.0
+    return math.sqrt(risk_aversion * sigma * sigma / eta)
+
+
+def book_eta(book: OrderBook, side: str, width: float = 0.10) -> float:
     """
-    Where the position should be by `now`. With front_load > 0 the curve is
-    concave (more early), which cuts exposure to adverse drift on risky blocks.
+    Temporary-impact coefficient implied by the visible book. With rho shares of depth
+    per $ of price, trading v shares in one tick costs about v / (2 rho) per share,
+    i.e. eta * v^2 in total with eta = 1 / (2 rho). 0 if the side is empty.
+    """
+    touch = book.best_bid if side == "bid" else book.best_ask
+    if touch is None:
+        return 0.0
+    depth = book.depth(side, touch - width if side == "bid" else touch + width)
+    return 1.0 / (2.0 * depth / width) if depth > 0 else 0.0
+
+
+def schedule_position(start: int, target: int, start_tick: int, deadline: int, now: int,
+                      front_load: float = 0.0, kappa: float = 0.0) -> int:
+    """
+    Where the position should be by `now`. With kappa > 0 this is the Almgren-Chriss
+    path; otherwise with front_load > 0 the curve is concave (more early), which cuts
+    exposure to adverse drift on risky blocks.
     """
     if deadline <= start_tick or now >= deadline:
         return target
     frac = max(0.0, min(1.0, (now - start_tick) / (deadline - start_tick)))
-    if front_load > 0:
+    if kappa > 0:
+        span = deadline - start_tick
+        kt = min(kappa * span, 50.0)                    # sinh overflows far past "do it all now"
+        frac = 1.0 - math.sinh(kt * (1.0 - frac)) / math.sinh(kt)
+    elif front_load > 0:
         k = 1 + 4 * front_load
         frac = (1 - math.exp(-k * frac)) / (1 - math.exp(-k))
     return int(round(start + (target - start) * frac))
@@ -117,10 +157,12 @@ class Block:
     start_tick: int
     deadline: int
     limit_price: float | None = None
+    kappa: float = 0.0               # Almgren-Chriss urgency; 0 = use front_load
 
     def __str__(self) -> str:
         return (f"{self.ticker} {self.start_pos:+d} -> {self.target:+d} by tick {self.deadline}"
-                + (f" limit {self.limit_price:.2f}" if self.limit_price is not None else ""))
+                + (f" limit {self.limit_price:.2f}" if self.limit_price is not None else "")
+                + (f" AC kappa*T {self.kappa * (self.deadline - self.start_tick):.2f}" if self.kappa else ""))
 
 
 class BlockExecutor:
@@ -138,8 +180,8 @@ class BlockExecutor:
         self.blocks: dict[str, Block] = {}
 
     def work(self, ticker: str, position: int, target: int, now: int, deadline: int,
-             limit_price: float | None = None) -> Block:
-        b = Block(ticker, position, target, now, max(deadline, now + 1), limit_price)
+             limit_price: float | None = None, kappa: float = 0.0) -> Block:
+        b = Block(ticker, position, target, now, max(deadline, now + 1), limit_price, kappa)
         self.blocks[ticker] = b
         log.info("BLOCK start %s", b)
         return b
@@ -157,7 +199,8 @@ class BlockExecutor:
                 log.info("BLOCK done %s", b)
                 self.cancel(t)
                 continue
-            sched = schedule_position(b.start_pos, b.target, b.start_tick, b.deadline, now, self.p.front_load)
+            sched = schedule_position(b.start_pos, b.target, b.start_tick, b.deadline, now, self.p.front_load,
+                                      b.kappa)
             kids = plan_children(books[t], pos, sched, b.target, b.deadline - now,
                                  self.ex.max_size(t), self.p, b.limit_price)
             passive = {c.action: c for c in kids if c.passive}

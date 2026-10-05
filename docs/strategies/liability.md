@@ -13,20 +13,13 @@ the gap between the tender price and your unwind VWAP, minus commissions.
 
 ```
 offset          = part of the block that cancels an existing opposite position (no unwind needed)
-queued          = same-side inventory still being unwound (only with price_queue = true)
-unwind VWAP     = marginal VWAP of walk(book x refill_factor, queued + remaining) beyond queued
+unwind VWAP     = walk(book with every level x refill_factor, remaining quantity)
 drift cost      = max(0, adverse recent drift) x expected unwind ticks
 profit / share  = sign x (unwind VWAP - tender price) - fee - drift cost
 ACCEPT  iff  profit/share >= min_profit_per_share
          and quantity <= risk room
          and ticks_left >= min_ticks_to_unwind
 ```
-
-`price_queue` (off by default) prices a new tender behind inventory you are still unwinding
-on that ticker, because both go into the same book. On 6 simulator seeds it raised the
-worst seed ($33.7k vs $30.8k) and cut the stdev by about 45%, but lowered the mean
-($41.7k vs $48.9k). The simulator's passive unwind is optimistic, so declining stacked
-tenders looks costly there. Turn it on if stacked tenders lose money in practice.
 
 If the server rejects a competitive bid (`success: false`), the bot no longer books the
 position, so its risk room stays free for the next tender in the same loop.

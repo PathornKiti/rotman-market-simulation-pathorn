@@ -62,24 +62,12 @@ class Quotes:
     reservation: float
 
 
-def end_of_period_skew(ticks_left: int, window: int, boost: float) -> float:
-    """
-    Inventory-skew multiplier that ramps from 1 to 1 + boost over the last `window`
-    ticks. Avellaneda-Stoikov's skew grows as (T - t) shrinks: with less time left,
-    inventory is riskier and must be shed PASSIVELY now, not crossed out at the bell.
-    """
-    if window <= 0 or ticks_left >= window:
-        return 1.0
-    return 1.0 + boost * (1.0 - max(ticks_left, 0) / window)
-
-
 def compute_quotes(book: OrderBook, inventory: int, vol: float, p: QuoteParams,
-                   fair_shift: float = 0.0, skew_mult: float = 1.0) -> Quotes | None:
+                   fair_shift: float = 0.0) -> Quotes | None:
     """
     Pure quoting function - all of the market maker's brain is here.
     `vol` is the per-tick price std in $; `fair_shift` the expected drift in $
     from a time-series fair-value model (0 when there is no reliable signal).
-    `skew_mult` scales the inventory skew (see `end_of_period_skew`).
     """
     fair = book.microprice()
     if fair is None or book.best_bid is None or book.best_ask is None:
@@ -87,7 +75,7 @@ def compute_quotes(book: OrderBook, inventory: int, vol: float, p: QuoteParams,
     half = max(p.min_half_spread, p.vol_mult * vol)
     fair += p.imbalance_lean * half * book.imbalance()
     fair += max(-half, min(half, fair_shift))          # never lean more than a half-spread
-    reservation = fair - skew_mult * p.skew_per_share * inventory
+    reservation = fair - p.skew_per_share * inventory
     bid = reservation - half
     ask = reservation + half
 
@@ -144,8 +132,6 @@ class EquityStrategy(Strategy):
                    for t in self.tickers}
         self.last_tick = -1
         self.hard = int(s.get("hard_inventory", 40000))
-        self.end_window = int(s.get("end_skew_ticks", 60))
-        self.end_boost = float(s.get("end_skew_boost", 0.0))
         # Jump guard: after an outsized move, pull quotes on that ticker for a few ticks
         # instead of re-quoting straight into informed flow.
         self.jump_k = float(s.get("jump_sigmas", 4.0))          # 0 = off
@@ -166,7 +152,6 @@ class EquityStrategy(Strategy):
         positions = snap.positions
         new_tick = snap.tick != self.last_tick       # sample time series once per tick, not per loop
         self.last_tick = snap.tick
-        skew_mult = end_of_period_skew(snap.ticks_left, self.end_window, self.end_boost)
         for t in self.tickers:
             book = snap.book(t)
             if new_tick:
@@ -190,7 +175,7 @@ class EquityStrategy(Strategy):
                     log.info("INVENTORY %s %+d -> %s %d", t, inv, *red)
                     self.ex.limit(t, red[0], red[1], touch - 0.02 if red[0] == "SELL" else touch + 0.02)
 
-            q = compute_quotes(book, inv, vol, self.params[t], shift, skew_mult)
+            q = compute_quotes(book, inv, vol, self.params[t], shift)
             if q is None or snap.abs_tick <= self.paused_until[t]:
                 self.qm.sync(t, "BUY", None, 0, open_ids)
                 self.qm.sync(t, "SELL", None, 0, open_ids)

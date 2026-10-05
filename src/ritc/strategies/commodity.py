@@ -80,6 +80,33 @@ def news_trade(surprise: float, impact_per_unit: float, threshold: float, max_si
 
 
 @dataclass
+class BayesImpact:
+    """
+    Online Bayesian estimate of the price impact per unit of inventory surprise.
+
+    Model: move = beta * x + noise,  x = -surprise (a build is bearish),
+           noise ~ N(0, noise_sd^2),  prior beta ~ N(prior_mean, prior_sd^2).
+    The normal-normal posterior is closed-form (conjugate), so each report updates
+    it exactly:  precision += x^2 / noise^2,  beta = (prior terms + x * move / noise^2) / precision.
+    A mis-calibrated `impact_per_unit` is corrected by the market's own reactions
+    within a heat, and the posterior sd says how much to trust it.
+    """
+    mean: float
+    sd: float
+    noise_sd: float = 0.10
+    n: int = 0
+
+    def update(self, x: float, move: float) -> None:
+        if x == 0:
+            return
+        prec0, prec_obs = 1 / self.sd ** 2, x * x / self.noise_sd ** 2
+        prec = prec0 + prec_obs
+        self.mean = (self.mean * prec0 + (move / x) * prec_obs) / prec
+        self.sd = prec ** -0.5
+        self.n += 1
+
+
+@dataclass
 class NewsPosition:
     ticker: str
     qty: int
@@ -106,6 +133,10 @@ class CommodityStrategy(Strategy):
         # Futures held by the carry engine only (news trades are tracked separately),
         # so a converged-basis exit never closes a news position by mistake.
         self.carry_pos: dict[str, int] = {}
+        # News impact: fixed from config, or learned online (impact_mode = "bayes").
+        self.impact = BayesImpact(float(s.get("impact_per_unit", 0.25)), float(s.get("impact_prior_sd", 0.15)),
+                                  float(s.get("impact_noise_sd", 0.10)))
+        self.pending_obs: list[tuple[int, float, float]] = []      # (tick, spot mid at news, x)
 
     # ----------------------------------------------------------------- helpers
     def abs_tick(self, snap: Snapshot) -> int:
@@ -218,13 +249,35 @@ class CommodityStrategy(Strategy):
         positions[self.spot] = positions.get(self.spot, 0) + (s_got if s_act == "BUY" else -s_got)
         return f_got
 
+    def learn_impact(self, snap: Snapshot, now: int) -> None:
+        """Score each report's actual spot reaction `impact_learn_ticks` later."""
+        lag = int(self.p.get("impact_learn_ticks", 6))
+        mid = snap.mid(self.spot)
+        keep = []
+        for tick, m0, x in self.pending_obs:
+            if now - tick < lag or mid is None:
+                keep.append((tick, m0, x))
+                continue
+            before = self.impact.mean
+            self.impact.update(x, mid - m0)
+            log.info("IMPACT learned from move %+.3f on x %+.2f: %.3f -> %.3f (sd %.3f, n=%d)",
+                     mid - m0, x, before, self.impact.mean, self.impact.sd, self.impact.n)
+        self.pending_obs = keep
+
     def run_news(self, snap: Snapshot) -> None:
         now = self.abs_tick(snap)
+        bayes = self.p.get("impact_mode", "bayes") == "bayes"
+        if bayes:
+            self.learn_impact(snap, now)
         for item in self.new_news():
             inv = parse_inventory_news(f"{item.get('headline', '')} {item.get('body', '')}")
             if inv is None:
                 continue
-            size, move = news_trade(inv.surprise, self.p.get("impact_per_unit", 0.25),
+            spot_mid = snap.mid(self.spot)
+            if bayes and spot_mid is not None:
+                self.pending_obs.append((now, spot_mid, -inv.surprise))
+            impact = self.impact.mean if bayes else self.p.get("impact_per_unit", 0.25)
+            size, move = news_trade(inv.surprise, impact,
                                     self.p.get("news_threshold", 0.10), self.sized(self.p.get("news_max_size", 30)),
                                     self.p.get("news_full_move", 0.75))
             tgt = self.front(snap)

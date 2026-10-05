@@ -61,9 +61,7 @@ controlled by package room, leg repair and `[risk]` limits instead.
 | Case | Guard | Config | Effect |
 |---|---|---|---|
 | liability | GARCH risk premium on unwind time; min ticks left; risk room per tender | `risk_aversion`, `min_ticks_to_unwind` | Bigger edge needed when the market is volatile or time is short |
-| liability | Queue-aware pricing (opt-in) | `price_queue` | Lower variance, lower mean on the simulator |
 | derivatives | Delta limit with band re-hedge, from fills, all held options | `hedge_band`, news | Never fined, no hedge flip-flop |
-| derivatives | **Vega budget** | `max_vega` | Caps $ per vol point; biggest edges get the budget first |
 | etf | Leg repair / completion; slippage budget from surplus edge | `hedge_tolerance`, `slippage_share` | No unhedged legs left |
 | equity | Hard inventory limit; size taper | `hard_inventory`, `max_inventory` | Inventory never runs away |
 | equity | **Jump guard** | `jump_sigmas`, `jump_pause_ticks` | Pulls quotes after an outsized move |
@@ -75,8 +73,7 @@ controlled by package room, leg repair and `[risk]` limits instead.
 With `max_contracts = 100`, caps of $4k / $2.5k / $1.5k per vol point gave mean NLV of
 $17.1k / $9.2k / $4.7k, against $19.3k uncapped. The cap removes exposure exactly when the
 vol edge is biggest. Sizing through `max_contracts` is better: 60 uncapped gave $17.3k
-with a worst seed of +$0.3k, versus −$2.6k at 100. `max_vega` stays available (off) as
-an emergency limit.
+with a worst seed of +$0.3k, versus −$2.6k at 100. The vega cap was removed.
 
 ## Results
 

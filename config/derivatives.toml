@@ -34,11 +34,6 @@ exit_edge = 0.0               # ...and hold until the edge has converged to this
 full_edge = 0.06              # edge at which we hold max_contracts
 max_contracts = 60            # per option
 min_trade_contracts = 5
-max_vega = 0                  # cap on |portfolio vega| in $ per vol point (0 = off); best edges get it first.
-                              # Emergency limit only: with 100 contracts, caps of 4000/2500/1500 gave mean
-                              # $17.1k/$9.2k/$4.7k - a binding cap cuts exposure exactly when the edge is biggest.
-                              # 60 contracts uncapped ($17.3k, worst +$0.3k) beat 100 uncapped ($19.3k, worst -$2.6k)
-                              # on risk-adjusted terms, so size is controlled by max_contracts instead.
 min_price_edge = 0.02         # $ beyond fees an option price must clear
 delta_limit = 7000            # overwritten by news
 min_ticks_to_expiry = 10      # stop trading an option this close to expiry

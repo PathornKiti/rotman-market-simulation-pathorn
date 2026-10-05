@@ -26,6 +26,12 @@ kill switch with a graduated throttle guards each heat, and every case has its o
 **lock-step** simulator, so the same seed is the same market for every setting.
 See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
+**Research-grade models**, each adopted only after beating the tuned baseline on the
+reproducible simulator: Almgren–Chriss optimal execution (liability), Bertram optimal
+mean-reversion thresholds (ETF), and Bayesian news-impact learning (commodity). Whalley–Wilmott hedging, vega caps, Fourier
+and copula methods were evaluated and removed because they didn't improve results. See [docs/RESEARCH.md](docs/RESEARCH.md) for the evidence. [docs/CHANGES.md](docs/CHANGES.md) summarises everything added
+and removed, with measured results.
+
 An **offline simulator** serves the same REST API, so you can rehearse every case
 without the Windows-only RIT client.
 

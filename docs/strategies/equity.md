@@ -36,13 +36,6 @@ crosses the whole resting quote, while normal flow fills only about 1–2 lots p
 lock-step seeds, mean NLV went from $7.6k to $8.1k and the worst seed from $3.2k to $5.9k.
 Measured P&L split (seed 8): passive fills +$4.1k, fills during jumps −$4.3k.
 
-Optional: `end_skew_boost` ramps the inventory skew to `(1 + boost)×` over the last
-`end_skew_ticks`. This follows Avellaneda-Stoikov, where skew grows as time runs out.
-Inventory is then shed passively before the bell instead of crossed out in `wind_down`.
-It is off by default. On the reproducible lock-step simulator, 3 lowered the mean
-($7.6k vs $8.1k) and the worst seed. The simulator has no drift, so there is little
-inventory risk for it to remove. Try 3 in the practice case if wind-down crossing is costly.
-
 ## Time series
 
 - `vol_model = "ewma" | "garch"`: run `python -m ritc analyze` first. GARCH only helps if volatility clusters.

@@ -45,7 +45,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from ..core.algo import AlgoParams, BlockExecutor
+from ..core.algo import AlgoParams, BlockExecutor, ac_kappa, book_eta
 from ..core.book import Level, OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..pricing.stats import EWMA
@@ -85,7 +85,6 @@ def evaluate_tender(
     min_ticks_to_unwind: int = 10,
     price_vol_per_tick: float = 0.0,
     risk_aversion: float = 0.0,
-    price_queue: bool = True,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -111,11 +110,6 @@ def evaluate_tender(
     # never has to touch the book and is valued at the touch we would have paid.
     offset = min(qty, max(0, -sign * position))
     to_unwind = qty - offset
-    # A same-side position is still being unwound into the SAME book, ahead of this
-    # block. Price only the marginal cost: walk(queued + new) - walk(queued). Pricing
-    # the new block against the full book double-counts the liquidity.
-    queued = max(0, sign * position) if price_queue else 0
-
     deep = scaled_book(book, refill_factor)
 
     def unwind_cost(n: int) -> float:
@@ -130,7 +124,7 @@ def evaluate_tender(
         return fill.vwap * fill.filled + worst * (n - fill.filled)
 
     if to_unwind > 0:
-        vwap_unwind = (unwind_cost(queued + to_unwind) - unwind_cost(queued)) / to_unwind
+        vwap_unwind = unwind_cost(to_unwind) / to_unwind
     else:
         vwap_unwind = (book.best_bid if action == "BUY" else book.best_ask) or (book.mid or 0.0)
 
@@ -144,7 +138,7 @@ def evaluate_tender(
         return TenderDecision(False, None, 0.0, 0.0, "no market to unwind into")
 
     # Adverse drift over the time it takes to unwind (only counts against us).
-    unwind_ticks = (queued + to_unwind) * unwind_ticks_per_lot if to_unwind else 0.0
+    unwind_ticks = to_unwind * unwind_ticks_per_lot
     drift_cost = max(0.0, -sign * drift_per_tick) * unwind_ticks
     drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
@@ -209,6 +203,8 @@ class LiabilityStrategy(Strategy):
         ex_cfg = self.cfg.get("execution", {})
         self.mode = ex_cfg.get("unwind_mode", "block")
         self.horizon = int(ex_cfg.get("unwind_horizon_ticks", 30))
+        self.schedule = ex_cfg.get("schedule", "almgren_chriss")          # or "almgren_chriss"
+        self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 3e-7))
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
 
@@ -261,7 +257,6 @@ class LiabilityStrategy(Strategy):
                 min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
                 price_vol_per_tick=self.price_vol(ticker, snap),
                 risk_aversion=self.p.get("risk_aversion", 0.0),
-                price_queue=self.p.get("price_queue", False),
             )
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
@@ -299,7 +294,12 @@ class LiabilityStrategy(Strategy):
                 continue
             # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
             if b is None or (pos > 0) != (b.start_pos > 0) or abs(pos) > abs(b.start_pos):
-                self.algo.work(t, pos, 0, now, min(now + self.horizon, period_end))
+                kappa = 0.0
+                if self.schedule == "almgren_chriss":
+                    # sigma: GARCH $/share/tick; eta: from the side we unwind INTO.
+                    kappa = ac_kappa(self.price_vol(t, snap), book_eta(snap.book(t), "bid" if pos > 0 else "ask"),
+                                     self.ac_lambda)
+                self.algo.work(t, pos, 0, now, min(now + self.horizon, period_end), kappa=kappa)
         if self.algo.active:
             open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
             self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)
