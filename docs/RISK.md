@@ -43,7 +43,7 @@ Measured on 8 lock-step simulator seeds:
 | Case | Worst normal drawdown | Kill level tested → effect | Default |
 |---|---|---|---|
 | liability | $9.4k | $8k: mean −$2.3k · $15k: no cost | **$15,000** |
-| derivatives | $32k | $20k: worst seed +$0.3k → **−$14.7k** · $40k: −$0.6k mean | **$40,000** |
+| derivatives | $32k (8 seeds); a seed-11 dip that **recovers to +$40k** (16 seeds) | $20k: worst seed → −$14.7k · $40k: seed 11 → **−$14.0k** · off: worst −$1.8k | **$80,000** (catastrophe-only) |
 | equity | $2.6k | $2k: mean −$2.7k, worst seed → −$2.9k · $4k: no cost | **$4,000** |
 | commodity | $100 | $100–200: no effect | **$200** |
 | etf | $19–42k on runs ending **+$8k to +$51k** | — | **off** |
@@ -52,9 +52,19 @@ A stop set near the normal drawdown flattens at the bottom and locks in losses t
 have recovered. Set it at about 1.5–2× the worst drawdown you see in practice, rescaled
 to the real case's P&L.
 
-**Why ETF is off:** a hedged convergence trade's mark-to-market is at its worst exactly
-when the mispricing is widest, which is the best time to hold or add. ETF risk is
+**Why ETF is off and derivatives is catastrophe-only:** a hedged convergence trade's
+mark-to-market is at its worst exactly when the mispricing is widest, which is the best
+time to hold or add. A drawdown stop on a mean-reverting P&L sells the low point, so its
+expected value is negative. The $40k derivatives stop did exactly that on 16 fair-test
+seeds: seed 11 dipped, the stop flattened, and a +$40.3k heat ended at −$14.0k. At $80k
+it never trips in normal play (mean $21.7k, worst −$1.8k, vs $18.1k and −$14.0k at $40k;
+confirmed on held-out seeds 101–116) but still catches a runaway bug. ETF risk is
 controlled by package room, leg repair and `[risk]` limits instead.
+
+**Ex-ante limits don't fix it either.** A scenario-CVaR position limit was tested in
+place of the stop. It revalued the delta-hedged book under a spot × vol-shift grid and
+capped CVaR(25%) of those losses. Every level made both the mean and the tail worse
+(`docs/RESEARCH.md`): exposure is largest exactly when the vol edge is largest.
 
 ## Layer 3: case-specific guards
 

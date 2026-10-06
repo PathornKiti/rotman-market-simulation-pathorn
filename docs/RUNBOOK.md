@@ -10,7 +10,8 @@
 
 ## When the case brief is released (per case)
 
-Copy these from the brief into `config/<case>.toml`:
+Copy these from the brief into `config/<case>.toml` (field-by-field guide per case:
+[REAL_CASE_SETUP.md](REAL_CASE_SETUP.md)):
 
 | Field | Where in the brief |
 |---|---|

@@ -43,9 +43,11 @@ parity_contracts = 10
 parity_edge = 0.05
 
 [run]
-max_drawdown = 40000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
-                             # worst normal drawdown on 8 sim seeds: $32k; $20k flattened at the bottom and turned the worst seed from +$0.3k to -$14.7k.
-                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+max_drawdown = 80000          # kill switch: $ below peak NLV -> flatten + halt. CATASTROPHE-ONLY (a bot bug), on purpose.
+                             # A vol-arb book marks to market worst exactly when the mispricing is largest, so a stop
+                             # sells the bottom: at $40k it turned seed 11 from +$40.3k into -$14.0k. Fair 16-seed test,
+                             # vs $40k: mean +$3.6k, worst -$14.0k -> -$1.8k; held-out seeds 101-116: +$0.3k, never worse.
+                             # $80k never trips in normal play (same results as off). Rescale to the real case's P&L.
 drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
 drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds

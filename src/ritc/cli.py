@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     tu = sub.add_parser("tune", help="grid-search / A-B test parameters on the simulator")
     tu.add_argument("case", choices=sorted(REGISTRY))
     tu.add_argument("--grid", action="append", help="section.key=v1,v2 (repeatable)")
-    tu.add_argument("--seeds", type=int, default=5)
+    tu.add_argument("--seeds", type=int, default=16)
     tu.add_argument("--first-seed", type=int, default=1)
     tu.add_argument("--speed", type=float, default=0.0,
                     help="0 = lock-step, reproducible (default); N = real-time at N ticks/second")

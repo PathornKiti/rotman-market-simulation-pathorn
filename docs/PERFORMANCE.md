@@ -79,24 +79,60 @@ practice. Too tight and normal noise stops you trading.
 ## 5. Tuning harness
 
 **Lock-step simulator (default, `--speed 0`).** The market advances one tick every 4 bot
-loops instead of on a wall clock. The market and fill randomness use separate seeded
-generators, so a run depends only on the seed and the settings. Before this, the same code
-on the same seed varied by up to $10k between runs on equity: thread timing decided which
-quotes were resting when a price jumped, and every resting order shifted the random price
-path. Comparisons there were noise. `--speed N` still runs in real time.
+loops instead of on a wall clock, so a run depends only on the seed and the settings.
+Before this, the same code on the same seed varied by up to $10k between runs on equity:
+thread timing decided which quotes were resting when a price jumped. `--speed N` still
+runs in real time.
+
+**Common random numbers for passive fills.** The passive flow hitting each side of each
+book on each tick is drawn from a generator keyed on `(seed, tick, ticker, side)`. Every
+setting therefore meets the *same* incoming flow, and orders at the touch share it best
+price first, then by time. Before this change, fills came from one sequential stream that
+was drawn once per resting order at the touch. Any setting that rested one more order
+reshuffled every later fill, so two settings had unrelated fill luck. Measured on equity
+over 16 seeds:
+
+| Paired comparison | Paired SE, sequential fills | Paired SE, common random numbers |
+|---|---|---|
+| `imbalance_lean` 0.25 vs 0 | $809 (diff +$1,731, t 2.1) | **$234** (diff −$62, t −0.3) |
+| `jump_sigmas` 4 vs 0 | $821 | **$137** |
+| `requote_tolerance` 0.01 vs 0.02 | $394 | $412 (a real effect: wider tolerance leaves quotes off the touch) |
+
+A 3.5–6× smaller standard error needs 12–36× fewer seeds to detect the same effect. The
+first row shows the danger: under the old fills, the imbalance lean looked like a
+significant +$1.7k, and it was entirely fill luck.
 
 ```bash
-python -m ritc tune liability --grid execution.unwind_horizon_ticks=15,30,60 \
-                              --grid execution.front_load=0,0.3 --seeds 6
+python -m ritc tune equity --grid strategy.min_half_spread=0.02,0.03     # tune: seeds 1-16
+python -m ritc tune equity --grid strategy.min_half_spread=0.03 --first-seed 101   # confirm on fresh seeds
 ```
 
-- Every setting runs the **same seeds** (a paired comparison) in separate processes, in
-  parallel.
-- Results are ranked by mean NLV, with the worst seed, stdev and seeds won.
-- Prefer settings that win on most seeds and have a good worst case over the single best
-  mean.
-- Use it to reject bad ideas and compare variants, then confirm in the RIT practice case.
-  The simulator's other traders are noise, not teams.
+How to read the table:
+
+- The config baseline always runs. Every other row shows its **paired** difference to the
+  baseline on the same seeds (`vs base`), that difference's standard error, `t`, and the
+  number of seeds it beat the baseline on.
+- **Adopt only if t ≥ 2 and the worst seed is no worse.** |t| < 2 means no evidence either
+  way; keep the simpler setting.
+- **Correct for how many settings you tried.** With m settings in the grid, some reach
+  t ≥ 2 by luck alone. `p adj` is the paired two-sided p-value × m (Bonferroni), and the
+  footer prints the |t| needed for family-wise 5% (e.g. 5 settings on 8 seeds: 3.50
+  instead of 2.36). On a grid, shortlist only rows with `p adj` < 0.05.
+- **Confirm on fresh seeds.** The best row of a big grid is partly luck (winner's curse).
+  Re-run just the winner with `--first-seed 101` and adopt only if it still has t ≥ 2.
+  The confirmation run tests one setting, so the plain t ≥ 2 applies there.
+- The default is now 16 seeds (was 5). Below about 12, the standard error on equity is
+  too large to separate the effects worth having.
+- `wins` counts seeds where a setting was strictly best. Ties count for nobody.
+
+What the simulator **cannot** tell you (confirm these in the RIT practice case):
+
+- **Book-shape signals.** Book sizes are random, so microprice, imbalance, VAMP and
+  order-flow signals carry no information here.
+- **Spread width.** A quote at or inside the touch fills at the same rate, so only the
+  price received changes. There is no queue against other traders.
+- **Competitors and shocks.** There are no rival algorithms and no inventory shocks, so
+  anything about crowding, liquidity droughts or forced liquidation is untested.
 
 ## 6. Per-case review: what changed and what it measured
 

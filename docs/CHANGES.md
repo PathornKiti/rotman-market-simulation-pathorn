@@ -8,6 +8,57 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
+## Current baseline (fair backtest, 16 seeds)
+
+Since 2026-10-05, passive fills in the simulator use common random numbers (see
+[PERFORMANCE.md §5](PERFORMANCE.md)): every setting compared meets the same order flow.
+The tables further down were measured on 8 seeds under the old sequential fills, so their
+small differences are within noise. Use these numbers as the reference from now on.
+
+| Case | Mean final NLV | Worst seed | Stdev |
+|---|---|---|---|
+| Liability | $42.1k | $23.5k | $11.3k |
+| Derivatives | $18.1k | **−$14.0k** | $16.8k |
+| ETF | $29.3k | $11.0k | $12.1k |
+| Equity | $6.8k | $3.5k | $1.7k |
+| Commodity | $393 | $260 | $59 |
+
+The derivatives worst seed (+$0.3k on the old 8 seeds) was −$14.0k on 16 seeds. The cause
+was the $40k kill switch itself, which flattened a temporary vol-arb dip at the bottom
+(below).
+
+### Final (after the 2026-10-05 risk review), 16 seeds
+
+| Case | Mean final NLV | Worst seed | CVaR (worst 25%) | Losing seeds |
+|---|---|---|---|---|
+| Liability | $42.1k | $23.5k | $26.5k | 0 |
+| ETF | $29.3k | $11.0k | $13.1k | 0 |
+| Derivatives | **$21.7k** (was $18.1k) | **−$1.8k** (was −$14.0k) | **$5.5k** (was −$1.0k) | 1 (was 2) |
+| Equity | $6.8k | $3.5k | $4.9k | 0 |
+| Commodity | $393 | $260 | $312 | 0 |
+
+### Every kept feature, switched off one at a time (paired vs baseline, 16 seeds)
+
+| Case | Feature switched off | Effect of switching it off | Verdict |
+|---|---|---|---|
+| ETF | Executable exit (→ mid exit) | −$32.6k, t −11.0, 11 losing seeds | Confirmed |
+| Liability | Block unwind (→ always cross) | −$11.9k, t −9.7 | Confirmed |
+| Liability | Almgren–Chriss (→ old front-load curve) | −$3.3k, t −3.7, worst $23.5k → $19.0k | Confirmed |
+| Liability | `min_profit_per_share` 0.01 (→ 0.03) | −$2.4k, t −3.0 | Confirmed |
+| Commodity | News stop-loss | −$5, t −1.8 | Small, kept |
+| ETF | Bertram thresholds (→ fixed) | −$0.5k, t −0.4 | Neutral; kept because it needs no tuning |
+| Equity | Jump guard | −$96, t −0.7, worst seed $3.5k → $2.3k | Neutral mean, better tail; kept |
+| Commodity | Bayesian impact (→ fixed, right prior) | $0 | Neutral; kept for robustness to a wrong prior |
+| Derivatives | Parity arb | $0: never fires in the simulator | Kept for the real case |
+| Derivatives | Hold-don't-trim (→ `exit_edge` 0.01) | +$7.1k, t 1.06, driven by one +$88k seed | Not significant; unchanged |
+| Liability, commodity | Kill switch and throttle | $0: never trip | Insurance only |
+| Equity | Kill switch and throttle | +$15, t 1.5 | ~free insurance |
+| **Derivatives** | **$40k kill switch** | **+$3.6k, worst −$14.0k → −$1.8k; held-out seeds +$0.3k, never worse** | **Raised to $80k (catastrophe-only)** |
+
+**Equity jump guard re-check:** +$96 vs off (SE $137, t 0.7). It is not a significant
+gain in the mean, but it lifts the worst seed from $2.3k to $3.5k, so it stays on. The
+earlier "$7.6k → $8.1k" was within noise.
+
 ## Final results per case
 
 | Case | Starting point | Final |
@@ -38,7 +89,7 @@ the large moves (derivatives and ETF going from losing to winning) are meaningfu
 | Change | Measured effect |
 |---|---|
 | **Graduated drawdown throttle**: new-risk sizes shrink from 50% of `max_drawdown`, kill switch at 100%; exits and hedges always run at full size | Losing streaks get smaller bets instead of an all-or-nothing stop |
-| **Kill-switch levels** at ~1.5–2× the worst normal drawdown: liability $15k, derivatives $40k, equity $4k, commodity $200; ETF off on purpose | Close to free in normal runs. Set tighter, it hurt badly (derivatives $20k turned the worst seed from +$0.3k to −$14.7k). |
+| **Kill-switch levels** at ~1.5–2× the worst normal drawdown: liability $15k, derivatives $40k (now $80k, see above), equity $4k, commodity $200; ETF off on purpose | Close to free in normal runs. Set tighter, it hurt badly (derivatives $20k turned the worst seed from +$0.3k to −$14.7k). |
 
 ### Per case
 
@@ -67,6 +118,9 @@ the large moves (derivatives and ETF going from losing to winning) are meaningfu
 | Vega cap (`max_vega`) | Derivatives | Mean $19.3k → $17.1k / $9.2k / $4.7k as the cap tightened | Cuts exposure exactly when the edge is largest |
 | End-of-period inventory skew | Equity | $8.1k → $7.6k, worse worst seed | No inventory drift risk to remove in this market |
 | Queue-aware tender pricing | Liability | Lower mean on 5 of 6 seeds | Declined profitable stacked tenders |
+| Full Avellaneda–Stoikov quoting (spread and skew ∝ γσ²(T−t)) | Equity | −$1.3k to −$2.6k over 6 (γ, κ) settings, t −1.2 to −8.1; worst seed down to −$5.1k | Its skew fades to zero near the close, so inventory is carried to the end. The current constant skew is better. |
+| Scenario-CVaR position limit (stress the delta-hedged book under spot × vol shifts; cap CVaR 25%) | Derivatives | $5k–$20k limits: mean −$1.6k to −$6.7k, worst seed −$1.8k → −$4.1k to −$7.3k | Exposure is largest exactly when the vol edge is; capping it cuts winners (same lesson as the vega cap) |
+| VAMP / mid-price fair value instead of microprice | Equity | +$0.1k to +$0.6k, all t ≤ 1.0; mid's worst seed $2.8k vs $3.5k | No significant gain; simulator book sizes are random, so book-shape signals can't be validated here |
 
 ## Evaluated, never added
 

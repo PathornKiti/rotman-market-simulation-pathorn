@@ -1,3 +1,4 @@
+import math
 import socket
 import time
 
@@ -122,3 +123,67 @@ def test_parallel_calls_and_feed_against_sim():
         feed.stop()
     finally:
         srv.shutdown()
+
+
+def test_paired_stats_against_baseline():
+    from ritc.tune import paired, report
+    base = Result({}, {1: 100.0, 2: 200.0, 3: 300.0})
+    better = Result({"x": 1}, {1: 110.0, 2: 215.0, 3: 305.0})
+    d, se, t, beat, n = paired(better, base)
+    assert (round(d, 6), beat, n) == (10.0, 3, 3)
+    assert t > 2
+    assert "3/3" in report([better, base])
+
+
+def test_t_pvalue_matches_t_tables():
+    from ritc.tune import t_critical, t_pvalue
+    # two-sided 5% critical values from standard t tables (odd and even df)
+    for df, tc in [(1, 12.706), (2, 4.303), (7, 2.365), (15, 2.131), (30, 2.042)]:
+        assert abs(t_pvalue(tc, df) - 0.05) < 2e-4
+        assert abs(t_critical(0.05, df) - tc) < 2e-3
+    assert t_pvalue(0.0, 10) == 1.0
+    assert t_pvalue(math.inf, 10) == 0.0
+
+
+def test_report_adjusts_for_number_of_settings():
+    from ritc.tune import report
+    base = Result({}, {s: 100.0 * s for s in range(1, 9)})
+    rows = [Result({"x": k}, {s: 100.0 * s + k + (s % 3) for s in range(1, 9)}) for k in range(1, 6)]
+    out = report([base, *rows])
+    assert "5 setting(s) compared with the baseline on 8 seeds" in out
+    # Bonferroni for 5 tests at df=7 needs |t| ~= 3.50 vs 2.36 for a single test
+    assert "3.50" in out and "2.36" in out
+
+
+def test_sim_passive_fills_are_common_random_numbers():
+    """An extra resting order elsewhere must not change another order's fill luck."""
+    from ritc.sim.server import Market
+
+    def fills(extra: bool) -> list[int]:
+        m = Market("equity", 300, 1, seed=3)
+        m.status = "ACTIVE"
+        out = []
+        for _ in range(40):
+            for o in list(m.orders):
+                m.cancel(o)
+            s = m.secs["SMMR"]
+            m.submit("SMMR", "LIMIT", 5000, "BUY", s.bids[0][0])
+            if extra:
+                m.submit("ATMN", "LIMIT", 5000, "SELL", m.secs["ATMN"].asks[0][0])
+            before = s.position
+            m.advance()
+            out.append(s.position - before)
+        return out
+
+    assert fills(False) == fills(True)
+
+
+def test_wins_ignores_ties():
+    rs = [Result({}, {1: 10.0, 2: 5.0}), Result({"a": 2}, {1: 10.0, 2: 9.0})]
+    assert wins(rs) == {0: 0, 1: 1}
+
+
+def test_tail_metrics():
+    r = Result({}, {s: float(v) for s, v in enumerate([-40, -10, 5, 20, 30, 50, 60, 80], 1)})
+    assert r.cvar == -25.0           # worst 2 of 8
+    assert r.negatives == 2

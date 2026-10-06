@@ -72,13 +72,18 @@ class Sec:
 
 class Market:
     def __init__(self, case: str, ticks_per_period: int, periods: int, seed: int | None):
-        # Two independent streams. `rng` drives the MARKET (prices, news, tenders, book
-        # sizes) and `fill_rng` decides passive fills. With a single stream, every resting
+        # `rng` drives the MARKET (prices, news, tenders, book sizes) and nothing else.
+        # Passive fills never draw from it. When they did, every resting
         # order the bot posts consumes draws and shifts the whole future price path, so the
         # "same seed" was a different market on every run - A/B tests of a market maker
         # were pure noise. Now a seed is the same market for every setting being compared.
         self.rng = random.Random(seed)
-        self.fill_rng = random.Random(None if seed is None else seed + 10_007)
+        # Passive fills use COMMON RANDOM NUMBERS: the passive flow hitting each side of each
+        # book on each tick is drawn from a generator keyed on (seed, tick, ticker, side), not
+        # from one sequential stream. With a sequential stream, a setting that rests one more
+        # order at the touch shifted every later draw, so two settings got unrelated fill luck
+        # and the A/B difference was mostly noise (paired SE ~2x larger, docs/PERFORMANCE.md).
+        self.fill_seed = seed if seed is not None else random.getrandbits(32)
         self.case = case
         self.tpp = ticks_per_period
         self.periods = periods
@@ -314,8 +319,17 @@ class Market:
             self.done_orders.append(order)
         return order
 
+    def _flow(self, ticker: str, action: str) -> int:
+        """Shares of passive flow arriving at the touch on our side this tick (same for every setting)."""
+        r = random.Random(f"{self.fill_seed}:{self.abs_tick}:{ticker}:{action}")
+        return self.secs[ticker].lot * r.randint(1, 2) if r.random() < 0.35 else 0
+
     def _fill_resting(self) -> None:
-        for oid, o in list(self.orders.items()):
+        flow: dict[tuple[str, str], int] = {}
+        # Best-priced orders first, then time priority, so they share one tick's flow like a queue.
+        ranked = sorted(self.orders.items(), key=lambda kv: (-kv[1]["price"] if kv[1]["action"] == "BUY"
+                                                             else kv[1]["price"], kv[0]))
+        for oid, o in ranked:
             s = self.secs[o["ticker"]]
             if not s.tradeable:
                 self.orders.pop(oid)
@@ -330,8 +344,12 @@ class Market:
             take = 0
             if crossed:
                 take = left
-            elif at_touch and self.fill_rng.random() < 0.35:
-                take = min(left, s.lot * self.fill_rng.randint(1, 2))
+            elif at_touch:
+                key = (o["ticker"], o["action"])
+                if key not in flow:
+                    flow[key] = self._flow(*key)
+                take = min(left, flow[key])
+                flow[key] -= take
             if take:
                 prev = o["quantity_filled"]
                 o["vwap"] = ((o.get("vwap") or 0.0) * prev + p * take) / (prev + take)
