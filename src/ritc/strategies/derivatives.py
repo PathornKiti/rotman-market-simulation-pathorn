@@ -32,6 +32,10 @@ The forecast for each option blends two views (`blend_forecast`):
 
     forecast = (1 - garch_weight) * news + garch_weight * garch_term_vol(ticks to expiry)
 
+With `vol_term = true` the news forecast is per option: the rest of this week at
+this week's realised vol, everything after at next week's announced range mid,
+variance-weighted by the option's remaining ticks (`term_structure_vol`).
+
 Default garch_weight is 0: when the case TELLS you this week's realised vol, a
 model of the past only dilutes it (measured: blending 30% GARCH lost money on
 5 of 6 simulator seeds). GARCH is the forecast before the first vol headline and
@@ -150,6 +154,23 @@ def parity_trades(call_bid, call_ask, put_bid, put_ask, s_bid, s_ask, K, T, r, c
     return None
 
 
+def term_structure_vol(now: int, ticks_to_expiry: int, week_ticks: int, week_vol: float, week_idx: int,
+                       next_vol: float | None) -> float:
+    """
+    Annualised vol over the next `ticks_to_expiry` ticks, variance-weighted by week:
+    the rest of the current week at its vol, everything after at `next_vol` (the announced
+    range mid; this week's vol if none yet). If the clock is already in a week the realised headline wasn't for (the new
+    week's headline hasn't arrived), that week is priced at `next_vol`. Pure function.
+    """
+    T = max(int(ticks_to_expiry), 1)
+    cur_week = max(now - 1, 0) // week_ticks
+    nxt = next_vol if next_vol is not None else week_vol
+    cur = week_vol if cur_week <= week_idx else nxt
+    left = (cur_week + 1) * week_ticks - now                  # ticks left in the current week
+    a = min(max(left, 0), T)
+    return math.sqrt((a * cur ** 2 + (T - a) * nxt ** 2) / T)
+
+
 def blend_forecast(news_vol: float | None, garch_vol: float | None, garch_weight: float,
                    fallback: float) -> float:
     """Annualised vol forecast from news and/or GARCH. Pure function."""
@@ -184,6 +205,15 @@ class DerivativesStrategy(Strategy):
         self.specs: dict[str, OptionSpec] = {}
         self.garch = OnlineGarch(window=int(s.get("garch_window", 600)), min_obs=int(s.get("garch_min_obs", 60)))
         self.last_tick = -1
+        # Vol term structure (`vol_term = true`): the news gives this week's realised vol and,
+        # mid-week, a range for next week. An option's forecast is the variance-weighted mix
+        # over ITS remaining life: this week's ticks at this week's vol, the rest at next week's.
+        self.vol_term = bool(s.get("vol_term", False))
+        self.week_ticks = int(c.get("week_ticks", 75))
+        self.week_vol: float | None = None
+        self.week_idx = -1                       # week the realised-vol headline was for
+        self.next_vol: float | None = None
+        self.now = 0                             # absolute tick of the current loop
 
     def on_start(self, snap: Snapshot) -> None:
         for t in snap.securities:
@@ -203,7 +233,19 @@ class DerivativesStrategy(Strategy):
         except Exception as exc:
             log.debug("no history for warm-up: %s", exc)
 
+    def term_vol(self, ticks_to_expiry: int) -> float | None:
+        """News vol over an option's remaining life, or None if no realised-vol headline yet."""
+        if self.week_vol is None:
+            return None
+        return term_structure_vol(self.now, ticks_to_expiry, self.week_ticks, self.week_vol, self.week_idx,
+                                  self.next_vol)
+
     def vol_forecast(self, ticks_to_expiry: int) -> float:
+        if self.vol_term and (tv := self.term_vol(ticks_to_expiry)) is not None:
+            g = None
+            if self.garch.ready and self.p.get("garch_weight", 0.0) > 0:
+                g = self.garch.annualised(ticks_to_expiry, self.ticks_per_year)
+            return blend_forecast(tv, g, self.p.get("garch_weight", 0.0), tv)
         g = None
         if self.garch.ready and (self.p.get("garch_weight", 0.0) > 0 or not self.news_seen):
             g = self.garch.annualised(ticks_to_expiry, self.ticks_per_year)
@@ -215,21 +257,25 @@ class DerivativesStrategy(Strategy):
             v = parse_vol_news(f"{item.get('headline', '')} {item.get('body', '')}")
             if v.delta_limit:
                 self.delta_limit = float(v.delta_limit)
-                log.info("NEWS delta limit -> %d", v.delta_limit)
+                log.info("NEWS delta limit -> %d%s", v.delta_limit,
+                         f" (penalty {100 * v.penalty_pct:g}% of the excess per second)" if v.penalty_pct else "")
             # Realised vol for the current week is the best forecast for the next few
             # ticks; a forecast range applies to next week. Blend toward the range mid.
             if v.realized is not None:
                 self.news_seen = True
                 self.forecast = v.realized
+                self.week_vol, self.week_idx, self.next_vol = v.realized, max(self.now - 1, 0) // self.week_ticks, None
                 log.info("NEWS realised vol -> %.1f%%", 100 * v.realized)
             elif v.forecast_mid is not None:
                 self.news_seen = True
+                self.next_vol = v.forecast_mid
                 w = self.p.get("range_weight", 0.5)
                 self.forecast = (1 - w) * self.forecast + w * v.forecast_mid
                 log.info("NEWS vol range %.0f-%.0f%% -> forecast %.1f%%",
                          100 * v.forecast_lo, 100 * v.forecast_hi, 100 * self.forecast)
 
     def step(self, snap: Snapshot) -> None:
+        self.now = snap.abs_tick
         self.read_news()
         S = snap.mid(self.und)
         if not S:

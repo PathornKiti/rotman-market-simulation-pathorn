@@ -1,5 +1,92 @@
 # Development log and plan
 
+## 2026-10-09: losing seeds diagnosed; queue model; in-process tuner
+
+| Area | Change | Files |
+|---|---|---|
+| ETF | `fx_hedge_band` (off): flatten the USD balance with market orders. The losing/weak ETF seeds were FX on that balance (~$7.3k/heat sd) | `strategies/etf.py`, `config/etf.toml` |
+| Simulator | `--queue`: price-time priority behind the displayed book (off by default) | `sim/server.py`, `cli.py`, `tune.py` |
+| Simulator / tuner | `route()` shared by HTTP and `InProcessAdapter`; lock-step tuning skips loopback HTTP (identical results, ~5x faster, immune to antivirus interception) | `sim/server.py`, `core/client.py`, `tune.py` |
+| Docs | OFFICIAL_RULES.md said the ETF arb is FX-neutral; it isn't | `docs/OFFICIAL_RULES.md` |
+| Tests | queue model (4), FX hedge, in-process transport | `tests/test_execution.py`, `tests/test_strategies.py` |
+
+Current baselines (benign, 1–16 / 101–116): derivatives $143.8k / $138.1k (no losing seed), ETF $35.2k / $25.9k,
+equity $4.7k / $2.1k (5 losing holdout seeds, worst −$10.1k). Hostile: derivatives $142.3k / $136.8k, ETF
+$47.7k / $47.9k, equity −$0.5k / −$2.6k. TEST_RESULTS.md (2026-10-07) predates these.
+
+Open: decide the ETF FX hedge (risk vs ~$1.3k/heat). Equity can't be tuned out of its losses in this
+simulator; the remaining levers (trend/jump detection) need the practice case to validate. Make `--queue`
+the default? It's more realistic, and today it only changes equity.
+
+## 2026-10-08 (later): each bot adapts to its own case's events
+
+| Area | Change | Files |
+|---|---|---|
+| Derivatives | `vol_term`: per-option week-weighted vol from the news (kept, +$26–31k, t ≈ 6) | `strategies/derivatives.py`, `config/derivatives.toml` |
+| Equity | `block_cut`: cut an assigned block at once (kept) | `strategies/equity.py`, `config/equity.toml` |
+| Liability | crowd learning gated on evidence, learning only from tenders not taken (kept) | `strategies/liability.py`, `config/liability.toml` |
+| Simulator | **auction bug fixed** (bids had to be below the reserve); random reserve; equity block transfers | `sim/server.py` |
+| Removed | adaptive auction margin (n.s.), ETF USD hedge (−$1.8k / −$2.7k) | — |
+
+Equity kill switch turned off (32 fresh seeds: +$951, t 3.0 benign). Block-side pause and run-over
+pause tried and removed. Equity under the hostile simulator is still about break-even (−$0.5k).
+
+Open: the first tender of a heat is unprotected from a crowd (no prior, by design). Equity block
+transfers are an assumption (DEVLOG item 6): confirm against the brief. Liability book-refill
+learning was not attempted: the simulator rebuilds every book each tick, so refill can't be
+measured here.
+
+## 2026-10-08: hostile market and crowd-aware tenders
+
+| Area | Change | Files |
+|---|---|---|
+| Simulator | `--hostile` (sim/tune): pump-and-dump, spoofing, liquidity vacuums, penny-jumping, crowded tenders, competing ETF arbs; own RNGs, `--hostile 0` = unchanged market; `RITC_HOSTILE_THREATS` for attribution | `src/ritc/sim/server.py`, `cli.py`, `tune.py` |
+| Liability | Crowd-impact learning + prior + adaptive race (`crowd_*`) | `src/ritc/strategies/liability.py`, `config/liability.toml` |
+| Tests | hostile sim, crowd learning | `tests/test_hostile.py` |
+| Docs | Threat model, damage, adopted/removed defences, playbook | `docs/HOSTILE_MARKET.md` |
+
+Liability crowd learning: first version later found to cost money in the benign market once the auction bug
+was fixed; replaced by the gated version (see the next entry).
+Price band, spoof-capped books, and equity queue fighting / toxicity spreads / dislocation hold
+were measured and deleted. Open: equity earns ~$1.5k under competition, and no tested
+defence helps. Recheck in the practice case whether penny-jumpers are really there.
+
+## 2026-10-07: ETF tenders, passive ETF leg; equity re-tune
+
+| Area | Change | Files |
+|---|---|---|
+| Simulator: ETF | Private RITC tender offers on their own RNG (price path unchanged); accepted tenders settle in the quote currency (USD for RITC) | `src/ritc/sim/server.py` |
+| ETF bot | `tender_edge` (basket-hedge value of a tender) + `handle_tenders`; `maker_quotes` + passive RITC bid/ask (`maker`) | `src/ritc/strategies/etf.py`, `config/etf.toml` |
+| Tests | tender/maker pricing, sim tenders, tender RNG isolation | `tests/test_strategies.py`, `tests/test_official_rules.py` |
+
+ETF $30.2k → $35.2k, worst $13.4k → $21.7k; both changes confirmed on seeds 101–116 (CHANGES.md).
+Equity: no setting beat the config (RESEARCH.md).
+
+Still open for ETF: the holdout set has one losing seed (−$1.5k); FX hedging of the USD
+balance (the arb's ETF leg leaves up to ~$1.8M USD short) is untested; converters are manual only.
+
+## 2026-10-06: official case rules
+
+Source: official RITC 2019/2020/2023 case packages, mirrored in
+[LiChiLin/Rotman-Trading-Competition-2024](https://github.com/LiChiLin/Rotman-Trading-Competition-2024)
+(no licence, so nothing vendored). Full rule table: [OFFICIAL_RULES.md](OFFICIAL_RULES.md); results: [CHANGES.md](CHANGES.md).
+
+| Area | Change | Files |
+|---|---|---|
+| News parser | **Bug:** the official *"between 27-30%"* forecast was ignored. Now read, along with *"penalty percentage is 0.5%"* | `src/ritc/pricing/news.py` |
+| Simulator: derivatives | 10 strikes 45–54, 2-cent spreads with deep books, $0.02/share and $2/contract fees, RTM 50k limit group, official news wording, the forecast range is about the vol drawn for next week (fixes old item 4), per-second delta penalty | `src/ritc/sim/server.py` |
+| Simulator: ETF | USD currency; RITC quoted in USD (`P_RITC × USD = BULL + BEAR`), BULL $10 / BEAR $15 / RITC $25, $0.02 fee / $0.01 rebate, ETF counts 2× in limits, ETF closes at NAV | `src/ritc/sim/server.py` |
+| Simulator: all | per-currency cash, per-security tick size, limit groups count only their own tickers | `src/ritc/sim/server.py` |
+| Tuner | scores **NLV − penalties** (what the judges rank) | `src/ritc/tune.py` |
+| Configs | derivatives `option_fee` 2.00 + RTM limit group; ETF fee 0.02, `fx_ticker = "USD"`/`divide`, RITC weight 2.0; liability `decline_explicitly = true` | `config/*.toml` |
+| Tests | official headlines, fees, limits, penalty, USD settlement, NAV close-out | `tests/test_official_rules.py`, `tests/test_pricing.py` |
+
+### Open items from the official rules
+- ~~**ETF case tenders**~~: done 2026-10-07 (`tenders = true`, +$3.7k).
+- **API orders disabled** in the 2019/2023 Liquidity Risk and the BP Commodities packages.
+  If the 2026 brief says the same, `liability` runs as a dry-run decision aid and `commodity` doesn't apply.
+- **CAPM case** (2024): recorded data in the mirror (`Algo_CAPM/data/`, 12 sessions) can back a replay test.
+
 ## 2026-10-05: fair backtesting and risk review
 
 **Status:** all changes are uncommitted on `main`. 92 tests pass, ruff is clean.
@@ -49,9 +136,8 @@
    Settle it on 48 seeds (1–16 + 101–132) before deciding.
 
 ### Simulator realism (makes more ideas testable)
-4. **Vol forecast news bug:** the simulator's "next week" range is centred on *this*
-   week's vol, so range-based forecasting can't be tested. Draw next week's vol in advance
-   and announce that, as the real case does.
+4. ~~**Vol forecast news bug**~~: done 2026-10-06 (next week's vol is drawn in advance and
+   announced in the official wording).
 5. **Queue position:** fills at the touch ignore queue and price improvement, so spread
    width can't be tuned. Model a FIFO queue at each price level.
 6. **Equity inventory shocks:** the real case transfers unhedged blocks to market makers.

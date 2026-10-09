@@ -8,7 +8,169 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
-## Current baseline (fair backtest, 16 seeds)
+## 2026-10-09: why the losing seeds lose; a queue model; a faster tuner
+
+**Losing-seed diagnosis** (per-seed P&L attribution on the current code):
+
+| Case | Seeds | What loses the money |
+|---|---|---|
+| ETF | 113 (−$1.5k), 101, 116 (~$7.5k) | **FX on the USD balance.** RITC closes at the CAD basket value, so in CAD the ETF leg is a CAD asset and the USD paid for it is a naked FX position. FX P&L over 32 seeds: mean −$1.9k (t −1.5, noise), **sd $7.3k/heat**. Seed 113: −$21.0k of FX. Without FX the worst of 32 seeds is +$17.0k, and most of the "holdout is worse" gap goes away (holdout FX ≈ −$4.6k/heat, seeds 1–16 ≈ +$0.5k). |
+| Derivatives | 112 (+$15k, the worst; no losing seed any more) | Not a bug. Weekly vol barely changes (0.20–0.30), so the edge is small, but the bot still flips its whole option book when the forecast flips: spread + fees $48k vs $63k gross. |
+| Equity | 104, 105, 115 | Inventory held through a trend (seed 105: all three names +$1.0–1.3) and assigned blocks. Quotes are run over when the mid jumps through them, so the inventory builds against the move. Spread capture and rebates are positive. |
+
+| Case | Change | Benign 1–16 / 101–116 | Hostile 1–16 / 101–116 | |
+|---|---|---|---|---|
+| ETF | **`fx_hedge_band`** 50k: market-order the USD balance back to flat. Effect per seed = −(FX P&L) − **$1.27k** (sd $0.35k): the half-spread on the arb's USD turnover | −$1.8k (t −1.5) / +$3.2k (t 1.5); 32 seeds mean $30.6k → $31.2k, **sd $12.3k → $9.9k, worst −$1.5k → +$16.4k**, CVaR(8) $15.1k → $20.0k | −$2.6k (t −1.7) / +$0.1k (t 0.1); worst $23.2k → $27.5k / $6.5k → $8.5k | **code kept, off**: a risk trade, not a mean gain (fails t ≥ 2). Owner's call |
+| ETF | hedge with an IOC limit at the USD touch instead of market orders | identical to market orders on all 32 seeds (the hedges fit inside the touch) | — | removed |
+
+**Simulator: `--queue`** (sim and tune; off = the old fill model, unchanged). Price-time priority
+against the displayed book: a resting order joins behind the real shares shown at its price, passive
+flow eats that queue first, 20%/tick of it cancels (`QUEUE_CANCEL`, an assumption), and improving
+the touch puts us first. Effect on the current bots (32 seeds, benign / hostile): equity
+$4.7k → $1.8k / −$0.5k → −$1.3k; ETF unchanged ($35.2k → $35.1k on 1–16; its passive quotes sit off the
+touch). No equity setting beats the config under the queue model, in either market
+(requote tolerance, `min_half_spread`, `size`, `skew_per_share`, `jump_sigmas`; RESEARCH.md).
+
+**Tuner: in-process transport.** Lock-step runs now call the simulator in-process (`InProcessAdapter`,
+the same `route()` the HTTP server uses) instead of over loopback HTTP. Results are identical
+(checked seed by seed), and a run takes ~2.4 s instead of ~12 s. On this machine the antivirus
+was intercepting loopback HTTP and stretched a run to 12 minutes.
+
+## 2026-10-08 (later): each bot adapts to its own case's events
+
+| Case | Event | Change | Seeds 1–16 (benign / hostile) | Holdout 101–116 (benign / hostile) | |
+|---|---|---|---|---|---|
+| Derivatives | weekly vol headlines | **`vol_term`**: each option's forecast is the variance-weighted mix over ITS remaining ticks: the rest of this week at this week's realised vol, the rest at next week's announced range mid. It used to blend the range into one number for every option. | **+$26.4k, t 6.3** / **+$26.0k, t 6.2**, 15/16; worst $32.8k → $43.3k | **+$30.6k, t 6.1** / **+$29.6k, t 6.1**, 16/16; worst −$1.0k → +$15.0k | kept |
+| Equity | assigned blocks (new in the sim, below) | **`block_cut`**: a position jump bigger than our quotes can fill is an assigned block; cut it at once instead of skewing it off | **+$1.8k, t 2.6** / **+$1.6k, t 3.0** | **+$2.4k, t 3.2** / **+$0.9k, t 2.1** | kept |
+| Liability | auction results | adaptive `competitive_margin` (+step on a fill, −step on a reject) | +$0.8k, t 1.6 / −$0.4k, t −1.9 | — | removed |
+| ETF | USD balance from the ETF leg | hedge it back to flat with the USD security past a band | −$1.8k, t −1.5 / −$2.7k, t −1.8 | — | removed |
+
+**Simulator corrections:**
+* **Liability auction bug.** A competitive tender filled when our bid was *below* the client's
+  reserve, so a lower bid always won. Officially a bid must be *past* the reserve (at or above it
+  when the client sells). The reserve is now also random per tender (0–15 cents through the mid,
+  own generator). The liability baseline (crowd learning off) drops from $42.1k to **$25.6k**
+  (benign): the old number included near-free auction wins.
+* **Equity block transfers** (DEVLOG item 6): about 3 times a heat, the case assigns an
+  unannounced 5k–15k share block at the mid. The price then drifts 2–5 σ against the holder
+  over 10 ticks. The equity baseline drops from $6.8k to **$1.9k** (benign). This assumes the real
+  case does this. If the brief says it doesn't, set `blocks = False` in the sim state, and
+  `block_cut` never triggers anyway.
+
+**Liability crowd learning re-validated on the corrected auctions.** The first version (prior
+0.06, weight 1.5, learning from every tender) cost **−$4.9k (t −3.0)** in the benign market:
+its own unwind looked like a crowd, and the old auctions had hidden that. The fix is to learn
+only from tenders not taken and charge only once the crowd is significant (`crowd_untaken_only`,
+`crowd_gate`, prior 0, weight 1). Results: hostile **+$11.4k, t 3.9** / holdout **+$14.2k, t 3.0**;
+benign −$0.3k (t −1.0) / holdout **$0**. Details in HOSTILE_MARKET.md.
+
+| Case (16 seeds, benign / hostile) | Before today | Now |
+|---|---|---|
+| Liability | $25.6k / $8.6k (corrected auctions, crowd off) | **$25.2k / $19.9k** |
+| Derivatives | $117.4k / $116.3k | **$143.8k / $142.3k** |
+| Equity (with block transfers) | $1.9k / −$2.9k | **$3.6k / −$1.3k** |
+| ETF | $35.2k / $47.7k | unchanged |
+| Commodity | $393 / $394 | unchanged |
+
+### Scoreboard with every adopted change (mean / worst seed, losing seeds)
+
+| Case | Benign 1–16 | Benign 101–116 | Hostile 1–16 | Hostile 101–116 |
+|---|---|---|---|---|
+| Derivatives | $143.8k / $43.3k, 0 | $138.1k / $15.0k, 0 | $142.3k / $41.3k, 0 | $136.8k / $18.1k, 0 |
+| ETF | $35.2k / $21.7k, 0 | $25.9k / −$1.5k, 1 | $47.7k / $23.2k, 0 | $47.9k / $6.5k, 0 |
+| Liability | $25.2k / $14.2k, 0 | $24.0k / $7.6k, 0 | $19.9k / −$10.3k, 2 | $18.2k / −$13.1k, 3 |
+| Equity | $3.6k / −$9.1k, 2 | $2.2k / −$6.4k, 4 | −$1.3k / −$8.2k, 11 | −$2.7k / −$9.3k, 13 |
+| Commodity | $393 / $260, 0 | $363 / $252, 0 | $394 / $259, 0 | $378 / $281, 0 |
+
+**Equity kill switch turned off** (`max_drawdown` 0). On seeds 1–16 it was +$1.05k (t 1.2) benign
+and +$0.8k (t 1.1) hostile, so it was re-tested on 32 fresh seeds (17–48) with the rule fixed in
+advance. Off vs $4k there: benign **+$951, t 3.0** (adj. p 0.011, 21/32), worst −$7.8k → −$3.3k,
+CVaR −$4.9k → −$1.7k; hostile +$450 (t 1.2), worst and CVaR better. $6k: t 1.9 / 0.3. The stop
+tripped on drawdowns from blocks and manipulation that revert, then flattened at the bottom.
+Equity now: benign $4.7k (worst +$0.4k), hostile −$0.5k (seeds 1–16).
+
+Also tried for equity and removed: pull the side an assigned block's drift would hit for 5/10
+ticks (+$98 / +$27, t ≤ 1.4); pause a ticker after its inventory lost $500/$1,000 in 10 ticks
+(−$0.1k to −$1.5k).
+
+## 2026-10-08: hostile market (manipulative competitors) and crowd-aware tenders
+
+The simulator's other traders were noise. In the real heat every team is a market maker,
+and any of them can manipulate. `--hostile 1` (sim and tune) adds pump-and-dumps,
+spoofing, liquidity vacuums, penny-jumping competitors, crowded tenders and competing ETF
+arbitrageurs. `--hostile 0` (the default) is exactly the old market, so every earlier
+baseline still stands. Full write-up: [HOSTILE_MARKET.md](HOSTILE_MARKET.md).
+
+| Case | Benign → hostile, before defences (16 seeds) |
+|---|---|
+| Liability | $42.1k → $7.4k (t −6.1), 7 losing seeds |
+| Equity | $6.8k → $1.5k (t −6.4), 6 losing seeds |
+| Derivatives / commodity | no significant change |
+| ETF | +$12.5k (arbitrage gains from dislocations) |
+
+| Change | Hostile, 16 seeds | Holdout 101–116 (hostile) | Benign (1–16 / 101–116) |
+|---|---|---|---|
+| Liability crowd learning, first version (prior 0.06 $/10k, weight 1.5, adaptive 12-tick race). **Superseded**: these numbers used the old, buggy auction rules. The gated version above replaces it. | **+$33.7k, t 5.1, 16/16**; worst −$10.3k → +$12.9k; 0 losing seeds | **+$51.3k, t 7.2, 16/16**; worst −$13.1k → +$34.3k | +$3.3k (t 1.3) / +$1.4k (t 0.6) |
+
+Removed (no improvement, code deleted; numbers in HOSTILE_MARKET.md and RESEARCH.md):
+price band on aggressive orders, spoof-capped book depth, equity queue fighting,
+toxicity-adaptive spreads, hold-on-dislocation, stronger equity skew under hostile, and an
+equity kill switch re-tune (not significant).
+
+## 2026-10-07: ETF tenders and a passive ETF leg (current ETF baseline)
+
+The official Algo (ETF) case sends **private tender offers on RITC**. The simulator now
+sends them too (fixed price near the market, 5k–30k units, every 20 ticks, open 15 ticks;
+sizes and prices are a guess, the packages don't give them). They come from their own
+random generator, so the price path is unchanged and the old baseline stays comparable.
+
+| Change | 16 seeds (1–16) | Holdout (101–116) | Kept because |
+|---|---|---|---|
+| **Tenders** (`tenders = true`): accept a RITC tender when hedging it with the basket (walked on books ×2 for refill) clears `tender_min_edge` 0.02 after the basket's fees, and the package fits the risk room; leg repair trades the hedge, and the hedged block converges for free at the NAV close-out | **+$3.7k, t 3.26**, 12/16; worst $13.4k → $21.0k; p adj 0.016 (min edge 0 / 0.02 / 0.05 all t > 3) | **+$3.3k, t 3.24**, 13/16 | official case feature; better mean and tail |
+| **Passive ETF leg** (`maker = true`, `maker_edge` 0.15): rest a RITC bid/ask at the price where a fill can still be hedged with the basket for 0.15/unit, earning the $0.01 rebate instead of paying $0.02 + spread | on top of tenders **+$1.3k, t 5.59**, 15/16; worst $21.0k → $21.7k (edge 0.10: +$1.4k, t 3.8; 0.20: +$0.6k, t 4.2; 0.02: −$1.4k) | **+$1.1k, t 3.41**, 14/16; worst −$2.4k → −$1.5k | better mean and tail on both seed sets |
+
+| ETF | Mean | Worst | CVaR25 | Losing seeds |
+|---|---|---|---|---|
+| Before (official rules, 2026-10-06) | $30.2k | $13.4k | $17.9k | 0 |
+| **Now** | **$35.2k** | **$21.7k** | **$24.9k** | 0 |
+| Holdout 101–116, before → now | $21.4k → $25.9k | −$2.3k → −$1.5k | $6.6k → $8.0k | 1 → 1 |
+
+**Equity:** the official-rules update didn't touch equity (same $6.8k, identical on every
+seed). The older "$8.1k" was measured on 8 seeds under the old fill model, so it isn't a
+drop. A re-tune of quote width, size and skew found nothing better (RESEARCH.md); the
+config is unchanged. Equity's next gains need the real case brief or the practice case.
+
+## 2026-10-06: official case rules applied
+
+The simulator and configs now follow the official RITC case packages (2019/2020/2023),
+as listed in [OFFICIAL_RULES.md](OFFICIAL_RULES.md). Derivatives and ETF numbers **are not
+comparable** with the tables below: the market itself changed (fees, spreads, strikes,
+news, currencies). Derivatives are now scored like the judges score them, NLV − delta penalty.
+
+| Case | Mean | Worst | CVaR25 | Losing seeds | What changed |
+|---|---|---|---|---|---|
+| Derivatives | $117.4k | $32.8k | $49.8k | 0 | official fees/spread/strikes/news + parser fix |
+| ETF | $30.2k | $13.4k | $17.9k | 0 | USD-quoted RITC, 2× limit weight, rebates, NAV close-out |
+| Liability | $42.1k | $23.5k | $26.5k | 0 | none (compliance only) |
+| Equity / Commodity | unchanged | | | | no official rule to apply |
+
+Paired checks (16 seeds; holdout = seeds 101–116):
+
+| Change | vs old setting | t | Holdout | Kept because |
+|---|---|---|---|---|
+| Vol-forecast parser reads *"between 27-30%"* | old parser ignored it. Without range news (`range_weight = 0`): **−$86.8k** | −7.44 | — | Official wording. Range news drives ~¾ of derivatives P&L |
+| `option_fee` 1.00 → **2.00** (official) | $1 assumption: −$3.4k, worse on 14/16 | −3.84 | −$3.9k, t −3.94 | official rule and better |
+| ETF `fx_ticker = "USD"`, `fx_mode = "divide"` | ignoring FX: −$7.4k, 2 losing seeds | −2.51 | −$4.7k, t −1.51 | official pricing equation (holdout not significant, but no worse anywhere) |
+| Liability `decline_explicitly = true` | identical on all 16 seeds | 0.00 | — | official front-running rule, at zero cost |
+
+Delta penalty, seeds 1–3: $85, $5, $0 per heat. The hedge band keeps delta well inside the limit.
+
+**Read the derivatives level with care.** In the sim the forecast range always contains
+next week's true vol and the market maker's vol lags, so reading the news pays very well.
+The packages say the market maker's forecasts are "uninformed", which supports the direction.
+The size of the edge must be checked in the RIT practice case.
+
+## Previous baseline (fair backtest, 16 seeds, pre-official-rules)
 
 Since 2026-10-05, passive fills in the simulator use common random numbers (see
 [PERFORMANCE.md §5](PERFORMANCE.md)): every setting compared meets the same order flow.

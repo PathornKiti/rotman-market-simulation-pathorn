@@ -44,7 +44,7 @@ Measured on 8 lock-step simulator seeds:
 |---|---|---|---|
 | liability | $9.4k | $8k: mean −$2.3k · $15k: no cost | **$15,000** |
 | derivatives | $32k (8 seeds); a seed-11 dip that **recovers to +$40k** (16 seeds) | $20k: worst seed → −$14.7k · $40k: seed 11 → **−$14.0k** · off: worst −$1.8k | **$80,000** (catastrophe-only) |
-| equity | $2.6k | $2k: mean −$2.7k, worst seed → −$2.9k · $4k: no cost | **$4,000** |
+| equity | $2.6k | $2k: mean −$2.7k, worst seed → −$2.9k · $4k: no cost (before block transfers) | **off** (2026-10-08: the stop sold reverting drawdowns) |
 | commodity | $100 | $100–200: no effect | **$200** |
 | etf | $19–42k on runs ending **+$8k to +$51k** | — | **off** |
 
@@ -66,11 +66,18 @@ place of the stop. It revalued the delta-hedged book under a spot × vol-shift g
 capped CVaR(25%) of those losses. Every level made both the mean and the tail worse
 (`docs/RESEARCH.md`): exposure is largest exactly when the vol edge is largest.
 
+**Stops can be hunted.** In the hostile simulator (`docs/HOSTILE_MARKET.md`) a pump or a raid
+drives NLV down and then reverts, and assigned equity blocks do the same. The equity $4k stop
+tripped at the bottom of these. On 32 fresh seeds, turning it off was +$951 (t 3.0) in the
+benign market and +$450 in the hostile one, with better worst seeds in both. The equity kill
+switch is now off, like ETF's.
+
 ## Layer 3: case-specific guards
 
 | Case | Guard | Config | Effect |
 |---|---|---|---|
 | liability | GARCH risk premium on unwind time; min ticks left; risk room per tender | `risk_aversion`, `min_ticks_to_unwind` | Bigger edge needed when the market is volatile or time is short |
+| liability | **Crowd learning**: charge the learned price run against tenders' unwinds; race it once significant | `crowd_learn`, `crowd_*`, `crowd_horizon_ticks` | Hostile sim +$11.4k (t 3.9), holdout +$14.2k (t 3.0); $0 in the benign market (gated on evidence) |
 | derivatives | Delta limit with band re-hedge, from fills, all held options | `hedge_band`, news | Never fined, no hedge flip-flop |
 | etf | Leg repair / completion; slippage budget from surplus edge | `hedge_tolerance`, `slippage_share` | No unhedged legs left |
 | equity | Hard inventory limit; size taper | `hard_inventory`, `max_inventory` | Inventory never runs away |

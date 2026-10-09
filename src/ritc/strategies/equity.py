@@ -14,7 +14,9 @@ simplified Avellaneda-Stoikov market maker:
     bid / ask   = reservation -/+ half_spread       # never cross the touch
 
 Size shrinks on the side that would grow inventory, and past `hard_inventory`
-we stop quoting that side and actively work the position down.
+we stop quoting that side and actively work the position down. A block the case
+assigns to us (a position jump our quotes couldn't have filled) is cut at once
+(`block_cut`): whoever dumped it usually knew something.
 
 Time-series inputs (pricing/timeseries.py)
 -----------------------------------------
@@ -140,6 +142,15 @@ class EquityStrategy(Strategy):
         self.prev_mid: dict[str, float | None] = {t: None for t in self.tickers}
         self.paused_until: dict[str, int] = {t: -1 for t in self.tickers}
         self.qm = QuoteManager(self.ex, tolerance=s.get("requote_tolerance", 0.01))
+        # ASSIGNED BLOCKS: a position jump bigger than our quotes could have filled in one loop
+        # is a block the case pushed onto us. Whoever dumped it usually knew something, so cut
+        # `block_cut` of it at once (protective limit `block_slippage` through the touch)
+        # instead of waiting for the inventory skew to work it off. 0 = off.
+        self.block_cut = float(s.get("block_cut", 0.0))
+        self.block_detect = int(s.get("block_detect", 5000))
+        self.block_slippage = float(s.get("block_slippage", 0.03))
+        self.prev_pos: dict[str, int] | None = None
+        self.reduced: set[str] = set()           # tickers we crossed on last loop (not a block)
 
     @property
     def book_tickers(self) -> list[str]:
@@ -152,6 +163,8 @@ class EquityStrategy(Strategy):
         positions = snap.positions
         new_tick = snap.tick != self.last_tick       # sample time series once per tick, not per loop
         self.last_tick = snap.tick
+        if self.block_cut:
+            self.cut_blocks(snap, positions)
         for t in self.tickers:
             book = snap.book(t)
             if new_tick:
@@ -172,6 +185,7 @@ class EquityStrategy(Strategy):
             if red:
                 touch = book.best_bid if red[0] == "SELL" else book.best_ask
                 if touch:
+                    self.reduced.add(t)
                     log.info("INVENTORY %s %+d -> %s %d", t, inv, *red)
                     self.ex.limit(t, red[0], red[1], touch - 0.02 if red[0] == "SELL" else touch + 0.02)
 
@@ -190,6 +204,27 @@ class EquityStrategy(Strategy):
             self.qm.sync(t, "BUY", q.bid, bid_sz, open_ids)
             self.qm.sync(t, "SELL", q.ask, ask_sz, open_ids)
             log.debug("%s inv %+d fair %.3f res %.3f  %s x %s", t, inv, q.fair, q.reservation, q.bid, q.ask)
+
+    def cut_blocks(self, snap: Snapshot, positions: dict[str, int]) -> None:
+        prev, reduced = self.prev_pos, self.reduced
+        self.prev_pos, self.reduced = dict(positions), set()
+        if prev is None:
+            return
+        for t in self.tickers:
+            jump = positions.get(t, 0) - prev.get(t, 0)
+            if abs(jump) < self.block_detect or t in reduced:
+                continue
+            book = snap.book(t)
+            inv = positions.get(t, 0)
+            qty = min(int(abs(jump) * self.block_cut), abs(inv))
+            touch = book.best_bid if inv > 0 else book.best_ask
+            if qty <= 0 or touch is None or (jump > 0) != (inv > 0):
+                continue
+            action = "SELL" if inv > 0 else "BUY"
+            log.info("BLOCK %s %+d assigned -> %s %d now", t, jump, action, qty)
+            self.reduced.add(t)
+            px = touch - self.block_slippage if action == "SELL" else touch + self.block_slippage
+            self.ex.limit(t, action, qty, px)
 
     def dollar_vol(self, t: str, mid: float | None) -> float:
         """Per-tick price std in $. GARCH once warmed up, EWMA of price changes before that."""

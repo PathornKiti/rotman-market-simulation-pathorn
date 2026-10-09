@@ -11,6 +11,9 @@ So once the admin has created the case on the server, fill in the config from tw
 - **Server** → `python -m ritc doctor` (tickers, limit names, limit sizes)
 - **Case brief** → the PDF/handout (fees, max trade size, expiries, carry, ETF weights)
 
+The defaults already follow the official rules from past RITC case packages; see
+[OFFICIAL_RULES.md](OFFICIAL_RULES.md) for what each case's brief usually says.
+
 Only the `[case]` and `[risk]` sections (plus `[run] max_drawdown`) need editing. Leave
 `[strategy]` and `[execution]` alone; they were tuned on the simulator (see
 [PERFORMANCE.md](PERFORMANCE.md)).
@@ -63,6 +66,12 @@ Legend: **[S]** = from the server (`doctor`), **[B]** = from the case brief.
 | `weights` | B | `{ CRZY = 1.0, TAME = 1.0 }` | How much each share counts toward the limit |
 | `[run] max_drawdown` | judgement | `15000` | See Step 3 |
 
+If the brief says **"Order submission using the RIT API will be disabled"** (as in the
+2019 and 2023 Liquidity Risk packages), run the bot as a dry run (`python -m ritc run liability -v`)
+and use its `TENDER … -> ACCEPT/decline` and unwind log lines as a decision aid. Trade by hand,
+and only to close tender positions: other trades count as speculation or front-running
+under the Adjusted P&L ([OFFICIAL_RULES.md](OFFICIAL_RULES.md)).
+
 ### Equity trading (market making): `config/equity.toml`
 
 | Field | Source | Example | Notes |
@@ -83,12 +92,12 @@ Optional: in the practice round run `python -m ritc analyze`. If it says
 |---|---|---|---|
 | `[case] etf` | S | `"RITC"` | The ETF ticker |
 | `[case] components` | B | `{ BULL = 1.0, BEAR = 1.0 }` | Shares of each component **per 1 ETF unit** |
-| `[case] fee` | B | `{ RITC = 0.03, BULL = 0.02, BEAR = 0.02 }` | Every ticker, including the ETF |
+| `[case] fee` | B | `{ RITC = 0.02, BULL = 0.02, BEAR = 0.02 }` | Every ticker, including the ETF |
 | `[case] max_order` | S/B | `{ RITC = 10000, ... }` | Every ticker |
-| `[case] fx_ticker` | S/B | `""` | Set (e.g. `"USD"`) only if ETF and basket trade in different currencies |
-| `[case] fx_mode` | B | `"multiply"` | `"multiply"`: NAV × fx; `"divide"` if the FX quote is inverted |
+| `[case] fx_ticker` | S/B | `"USD"` | Official case: RITC in USD, stocks in CAD. `""` if they share a currency |
+| `[case] fx_mode` | B | `"divide"` | USD quoted as CAD per USD → NAV_USD = NAV_CAD / USD. `"multiply"` for the inverse quote |
 | `[case] converter_cost` | B | `0.0` | Amortised $/unit if the case has a creation/redemption converter |
-| `[risk.groups.<name>]` | S | `gross = 300000` | Name, gross, net, weights for every ticker |
+| `[risk.groups.<name>]` | S | `gross = 300000` | Name, gross, net, weights for every ticker. Official: the ETF weighs **2.0** |
 | `[run] max_drawdown` | — | `0` | **Keep at 0** (off on purpose, see [RISK.md](RISK.md)) |
 
 ### Derivatives (options volatility): `config/derivatives.toml`
@@ -102,7 +111,7 @@ Optional: in the practice round run `python -m ritc analyze`. If it says
 | `[case] ticks_per_year` | B | `3600` | e.g. 1 period = 300 ticks = 1 month → 3600 |
 | `[case] rate` | B | `0.0` | Risk-free rate |
 | `[case] multiplier` | B | `100` | Shares per contract |
-| `[case] option_fee` | B | `1.00` | $ per contract |
+| `[case] option_fee` | B | `2.00` | $ per contract (official: $2.00) |
 | `[case] max_order` | S/B | `{ RTM = 10000 }` | Underlying |
 | `[case] default_max_order` | S/B | `100` | Options, contracts per order |
 | `[risk.groups.options]` | S | `gross = 2500`, `net = 1000` | Rename to match `/limits` |
@@ -158,7 +167,7 @@ Details: [RISK.md](RISK.md).
 These two bots read headlines (`src/ritc/pricing/news.py`):
 
 - **Derivatives** looks for phrasing like *"realized volatility … will be 25%"*,
-  *"between 20% and 30%"*, *"delta limit … 7,000"*.
+  *"between 27-30%"* or *"between 20% and 30%"*, *"delta limit … 5,000 and the penalty percentage is 0.5%"*.
 - **Commodity** looks for *inventory / stockpile / storage* with *build / draw* and an
   *expected / forecast / consensus* figure.
 

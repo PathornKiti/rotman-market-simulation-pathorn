@@ -35,16 +35,35 @@ Execution
 * Leg repair: if the basket filled but the ETF did not, we COMPLETE the arb by
   trading the ETF while the premium still favours it. Otherwise we unwind the
   odd component legs (the original behaviour).
+
+Passive ETF leg (`maker = true`)
+--------------------------------
+Rest a bid and an ask on the ETF at the price where, if filled, hedging with the
+basket (walked at `maker_size`) still clears `maker_edge` after the basket's fees,
+counting the ETF's limit-order rebate instead of its taker fee. A fill shows up as
+a leg imbalance and leg repair buys/sells the basket. The quote never crosses.
+
+Tender offers (`tenders = true`)
+--------------------------------
+The official Algo case also sends private tender offers on the ETF. A tender is
+the ETF leg of an arb at a fixed price with no commission: we accept when hedging
+it with the basket (walked on the book, scaled for refill) still clears
+`tender_min_edge` per unit and the whole package fits the risk room. Leg repair
+then trades the hedge. The hedged position needs no exit: the ETF closes at fair
+value (the basket converted), so the edge is locked in at acceptance.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from ..core.book import OrderBook
 from ..core.bot import Snapshot, Strategy
+from ..core.execution import QuoteManager
 from ..pricing.timeseries import bertram_band, fit_ou, ou_continuous
+from .liability import scaled_book
 
 log = logging.getLogger("ritc.etf")
 
@@ -111,6 +130,60 @@ def plan_arb(etf_book: OrderBook, comp_books: dict[str, OrderBook], weights: dic
         if best is None or found.edge_per_unit * found.etf_qty > best.edge_per_unit * best.etf_qty:
             best = found
     return best
+
+
+def tender_edge(tender: dict, comp_books: dict[str, OrderBook], weights: dict[str, float],
+                fees: dict[str, float], fx: float = 1.0, refill_factor: float = 2.0) -> float | None:
+    """
+    Edge per ETF unit (ETF currency) of accepting a fixed-price ETF tender and hedging it
+    with the basket: BUY the ETF at the tender price and SELL the basket, or the reverse.
+    The basket is walked on books scaled by `refill_factor` (the hedge can take a few ticks).
+    The tender pays no commission; the basket legs pay their taker fees. None if unpriceable.
+    """
+    qty, px = int(tender.get("quantity", 0)), tender.get("price")
+    if qty <= 0 or px is None:
+        return None
+    buy = str(tender.get("action", "BUY")).upper() == "BUY"
+    legs = {}
+    for t, w in weights.items():
+        n = max(1, int(round(qty * w)))
+        f = scaled_book(comp_books[t], refill_factor).walk("SELL" if buy else "BUY", n)
+        if not f.filled:
+            return None
+        # Anything the scaled book can't absorb is priced a nickel past its worst level.
+        rest = n - f.filled
+        legs[t] = (f.vwap * f.filled + (f.worst + (-0.05 if buy else 0.05)) * rest) / n
+    basket = nav(legs, weights, fx)
+    fee = fx * sum(w * fees.get(t, 0.0) for t, w in weights.items())
+    return (basket - float(px) if buy else float(px) - basket) - fee
+
+
+def maker_quotes(comp_books: dict[str, OrderBook], weights: dict[str, float], fees: dict[str, float],
+                 qty: int, edge: float, rebate: float, fx: float = 1.0,
+                 tick: float = 0.01) -> tuple[float | None, float | None]:
+    """
+    (bid, ask) for a resting ETF order of `qty` that, once filled, can be hedged with the
+    basket at the current books for at least `edge` per unit: ask = basket ask + basket
+    fees - rebate + edge, bid = basket bid - basket fees + rebate - edge. None for a side
+    whose basket book is too thin.
+    """
+    fee = fx * sum(w * fees.get(t, 0.0) for t, w in weights.items())
+    out = []
+    for side in ("SELL", "BUY"):                 # hedge side: SELL basket backs our ETF bid
+        legs = {}
+        for t, w in weights.items():
+            r = _vwap_or_none(comp_books[t], side, max(1, int(round(qty * w))))
+            if r is None:
+                break
+            legs[t] = r[0]
+        else:
+            basket = nav(legs, weights, fx)
+            out.append(basket - fee + rebate - edge if side == "SELL" else basket + fee - rebate + edge)
+            continue
+        out.append(None)
+    bid, ask = out
+    return (None if bid is None else math.floor(bid / tick + 1e-9) * tick,
+            None if ask is None else math.ceil(ask / tick - 1e-9) * tick)
 
 
 def hedge_residuals(positions: dict[str, int], etf: str, weights: dict[str, float],
@@ -187,6 +260,10 @@ class ETFStrategy(Strategy):
         self.prem_hist: list[float] = []
         self.last_tick = -1
         self.band: float | None = None          # Bertram a* on the mid premium, once fitted
+        self.seen: set[int] = set()             # tender ids already decided
+        self.wants_tenders = bool(s.get("tenders", True))
+        self.maker = bool(s.get("maker", False))
+        self.qm = QuoteManager(self.ex, tolerance=0.01)
 
     @property
     def book_tickers(self) -> list[str]:
@@ -209,6 +286,9 @@ class ETFStrategy(Strategy):
         premium = etf_book.mid - nav(mids, self.weights, fx)
         lot = int(self.p.get("lot", 100))
         entry, exit_edge = self.thresholds(snap, premium, etf_book, comp_books, fx)
+        if self.wants_tenders:
+            self.handle_tenders(snap, comp_books, fx)
+        self.hedge_fx(positions)
 
         # 1) Repair any leg imbalance from a partial fill before doing anything new.
         repairs = repair_legs(positions, self.etf, self.weights, premium, self.p.get("hedge_tolerance", 100))
@@ -220,7 +300,10 @@ class ETFStrategy(Strategy):
             got = self.ex.filled(self.ex.limit(t, action, abs(diff), px), abs(diff))
             positions[t] = positions.get(t, 0) + (got if diff > 0 else -got)
         if repairs:
+            self._quote_etf(None, None, 0, 0)            # don't add to an unhedged book
             return
+        if self.maker:
+            self._maker_step(snap, etf_book, comp_books, fx, positions)
 
         # 2) Take profit.
         etf_pos = positions.get(self.etf, 0)
@@ -257,6 +340,85 @@ class ETFStrategy(Strategy):
             return
         log.info("ARB %s %d  edge/unit %.4f  premium %.3f", plan.direction, qty, plan.edge_per_unit, premium)
         self._execute(with_slippage(plan, self.weights, entry, self.p.get("slippage_share", 0.5), fx), qty)
+
+    def _maker_step(self, snap: Snapshot, etf_book: OrderBook, comp_books: dict[str, OrderBook], fx: float,
+                    positions: dict[str, int]) -> None:
+        size = int(self.p.get("maker_size", 2000))
+        bid, ask = maker_quotes(comp_books, self.weights, self.fees, size, self.p.get("maker_edge", 0.02),
+                                self.p.get("maker_rebate", 0.01), fx)
+        if etf_book.best_bid is None or etf_book.best_ask is None:
+            bid = ask = None
+        else:                                         # stay passive: never cross the ETF touch
+            bid = None if bid is None else min(bid, round(etf_book.best_ask - 0.01, 2))
+            ask = None if ask is None else max(ask, round(etf_book.best_bid + 0.01, 2))
+        room_buy = self.risk.room_package(self._package("BUY_ETF"), positions)
+        room_sell = self.risk.room_package(self._package("SELL_ETF"), positions)
+        self._quote_etf(bid, ask, self.sized(min(size, room_buy)), self.sized(min(size, room_sell)))
+
+    def _quote_etf(self, bid: float | None, ask: float | None, bid_qty: int, ask_qty: int) -> None:
+        if not self.maker:
+            return
+        open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
+        lot = int(self.p.get("lot", 100))
+        self.qm.sync(self.etf, "BUY", bid, bid_qty // lot * lot, open_ids)
+        self.qm.sync(self.etf, "SELL", ask, ask_qty // lot * lot, open_ids)
+
+    def wind_down(self, snap: Snapshot) -> None:
+        self.qm.clear()
+        self.ex.cancel_all()
+
+    def hedge_fx(self, positions: dict[str, int]) -> None:
+        """
+        Trade the foreign-currency balance back to flat once it passes `fx_hedge_band`.
+        The ETF closes at the basket's value, so in CAD a hedged arb's ETF leg is a CAD asset
+        and the USD it was paid with is a naked FX position (sim: ~$7k/heat of noise).
+        Market orders: the executor rounds limits to 2 decimals, too coarse for a 4-decimal FX quote.
+        The cost is the FX half-spread on the arb's USD turnover (sim: ~$1.3k/heat).
+        """
+        band = float(self.p.get("fx_hedge_band", 0.0))
+        bal = positions.get(self.fx_ticker, 0) if self.fx_ticker else 0
+        if band <= 0 or abs(bal) < band:
+            return
+        qty = min(int(abs(bal)), self.ex.max_size(self.fx_ticker))
+        action = "BUY" if bal < 0 else "SELL"
+        log.info("FX HEDGE %s %d %s (balance %+d)", action, qty, self.fx_ticker, bal)
+        if self.ex.dry_run:
+            return
+        try:
+            self.client.market_order(self.fx_ticker, action, qty)
+        except Exception as exc:          # noqa: BLE001 - a failed hedge retries next loop
+            log.warning("FX hedge failed: %s", exc)
+            return
+        positions[self.fx_ticker] = bal + (qty if action == "BUY" else -qty)
+
+    def handle_tenders(self, snap: Snapshot, comp_books: dict[str, OrderBook], fx: float) -> None:
+        positions = snap.positions
+        for t in self.current_tenders():
+            tid = int(t.get("tender_id", -1))
+            if tid in self.seen or t.get("ticker") != self.etf:
+                continue
+            self.seen.add(tid)
+            buy = str(t.get("action", "BUY")).upper() == "BUY"
+            qty = int(t.get("quantity", 0))
+            edge = tender_edge(t, comp_books, self.weights, self.fees, fx, self.p.get("tender_refill", 2.0))
+            room = self.risk.room_package(self._package("BUY_ETF" if buy else "SELL_ETF"), positions)
+            need = self.p.get("tender_min_edge", 0.02) * self.edge_mult()
+            ok = (edge is not None and edge >= need and qty <= room and t.get("is_fixed_bid", True)
+                  and snap.ticks_left > int(self.p.get("tender_min_ticks", 10)))
+            log.info("TENDER %s %s %d %s @ %s: edge/unit %s, room %d -> %s", tid, t.get("action"), qty, self.etf,
+                     t.get("price"), "n/a" if edge is None else f"{edge:+.4f}", room, "ACCEPT" if ok else "decline")
+            if self.ex.dry_run:
+                continue
+            try:
+                if ok:
+                    resp = self.client.accept_tender(tid)
+                    if isinstance(resp, dict) and resp.get("success") is False:
+                        continue
+                    positions[self.etf] = positions.get(self.etf, 0) + (qty if buy else -qty)
+                else:
+                    self.client.decline_tender(tid)
+            except Exception as exc:       # it may have expired between read and accept
+                log.warning("tender %s action failed: %s", tid, exc)
 
     def cost_per_side(self, etf_book: OrderBook, comp_books: dict[str, OrderBook], fx: float) -> float:
         """Fees + half-spreads of every leg, per ETF unit: what one side of the arb costs."""

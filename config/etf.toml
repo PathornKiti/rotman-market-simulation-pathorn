@@ -1,20 +1,24 @@
 # ETF TRADING (ETF vs basket arbitrage)
-# Defaults match `python -m ritc sim etf`: RITC = 1 BULL + 1 BEAR.
+# Defaults follow the official Algo case (RITC 2019/2020/2023 packages) and match
+# `python -m ritc sim etf`: RITC (USD) = BULL + BEAR (CAD), i.e. P_RITC,USD * USD = P_BULL + P_BEAR.
 
 [case]
 etf = "RITC"
 components = { BULL = 1.0, BEAR = 1.0 }     # shares of each component per ETF unit
-fee = { RITC = 0.03, BULL = 0.02, BEAR = 0.02 }
-max_order = { RITC = 10000, BULL = 10000, BEAR = 10000 }
-fx_ticker = ""                 # e.g. "USD" if the ETF and basket trade in different currencies
-fx_mode = "multiply"           # NAV_in_ETF_ccy = NAV * fx  ("divide" for the inverse quote)
-converter_cost = 0.0           # amortised $/unit for create/redeem, if you use a converter
+fee = { RITC = 0.02, BULL = 0.02, BEAR = 0.02 }   # official: $0.02/share on market orders ($0.01 passive rebate)
+max_order = { RITC = 10000, BULL = 10000, BEAR = 10000, USD = 2500000 }   # official: 2.5M for currencies
+fx_ticker = "USD"              # RITC is quoted in USD, the stocks in CAD; "" if both share a currency
+fx_mode = "divide"             # USD is quoted as CAD per USD, so NAV_in_USD = NAV_CAD / USD
+converter_cost = 0.0           # official converters ($1,500 USD per 10,000 = $0.15/unit) are MANUAL only:
+                               # the API cannot use them, so the bot never counts on them
 
+# Official: the ETF counts with a multiplier of TWO towards gross/net limits (stocks one).
+# The packages don't state the limit sizes - read them from /limits on the day.
 [risk]
 [risk.groups.equity]
 gross = 300000
 net = 200000
-weights = { RITC = 1.0, BULL = 1.0, BEAR = 1.0 }
+weights = { RITC = 2.0, BULL = 1.0, BEAR = 1.0 }
 
 [strategy]
 entry_edge = 0.06              # $/ETF unit after fees and slippage (0.06 beat 0.08: mean $32.8k vs $31.1k, worst $10.4k vs $7.8k)
@@ -32,6 +36,22 @@ bertram_min_edge = 0.0         # never trade on less executable edge than this
 clip = 5000                    # max ETF units per trade
 lot = 500
 hedge_tolerance = 100
+maker = true                   # rest a passive ETF bid/ask priced off the basket hedge (earns the rebate).
+                               #   16 seeds on top of tenders: +$1.3k, t 5.6, 15/16; holdout 101-116 +$1.1k, t 3.4
+maker_size = 2000              #   ETF units per resting quote
+maker_edge = 0.15              #   $/unit the basket hedge must still clear after fees, if filled. 0.02 lost
+                               #   (-$1.4k: thin fills use up the risk room the taker arbs need); 0.10-0.20 all won
+maker_rebate = 0.01            #   official limit-order rebate on the ETF
+tenders = true                 # official case: private RITC tender offers. Accept when the basket hedge clears
+                               #   16 seeds: +$3.7k, t 3.3, worst $13.4k -> $21.0k; holdout 101-116 +$3.3k, t 3.2
+tender_min_edge = 0.02         #   this $/unit (ETF currency) after the basket's fees; leg repair trades the hedge
+tender_refill = 2.0            #   visible basket depth x this = what the hedge can absorb over a few ticks
+tender_min_ticks = 10          #   decline this close to the bell
+fx_hedge_band = 0              # OFF (owner's call). >0: market-order the USD balance back to flat once |USD| passes this.
+                               #   RITC closes at the CAD basket value, so the USD paid for it is a naked FX position.
+                               #   50000, 32 seeds benign: costs ~$1.27k/heat (sd $0.35k) and removes ~$7.3k/heat of FX
+                               #   noise: mean $30.6k -> $31.2k, sd $12.3k -> $9.9k, worst -$1.5k -> +$16.4k. Hostile:
+                               #   -$2.6k (t -1.7) / +$0.1k; worst $23.2k -> $27.5k / $6.5k -> $8.5k. Fails t >= 2 on the mean.
 
 [run]
 max_drawdown = 0             # OFF on purpose: a hedged arb's mark-to-market is worst exactly when the mispricing is

@@ -156,6 +156,10 @@ make run-etf     # dry run against whatever is on :9999
 python -m ritc tune liability --grid execution.unwind_mode=block,slice --seeds 8
 ```
 
-> The simulator is for checking **logic and plumbing**, not for predicting results. Its
-> other traders are random noise, not competing teams. Calibrate thresholds in the
-> official RIT practice cases.
+> The simulator is for checking **logic and plumbing**, not for predicting results. By
+> default its other traders are random noise. `--hostile 1` (on `sim` and `tune`) adds
+> manipulative competitors: pump-and-dumps, spoofing, liquidity vacuums, penny-jumpers
+> and crowded tenders ([docs/HOSTILE_MARKET.md](docs/HOSTILE_MARKET.md)). `--queue` makes
+> resting orders queue behind the displayed book (price-time priority) instead of filling
+> first at the touch. Test a change in both markets. Calibrate thresholds in the official
+> RIT practice cases.

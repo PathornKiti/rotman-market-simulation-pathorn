@@ -22,6 +22,7 @@ class VolNews:
     forecast_lo: float | None = None
     forecast_hi: float | None = None
     delta_limit: int | None = None
+    penalty_pct: float | None = None       # delta-limit penalty rate, as a fraction (0.005 = 0.5%)
 
     @property
     def forecast_mid(self) -> float | None:
@@ -32,25 +33,29 @@ class VolNews:
 
 def parse_vol_news(text: str) -> VolNews:
     """
-    Understands the usual RITC volatility-case phrasing, e.g.
+    Understands the RITC volatility-case phrasing (official wording from the case packages):
       "The realized volatility of RTM for this week will be 22%"
+      "The realized volatility of RTM for next week will be between 27-30%"   (official)
       "...volatility ... next week will be between 18% and 24%"
-      "The delta limit for this sub-heat is 7,000 ..."
+      "The delta limit for this heat is 5,000 and the penalty percentage is 0.5%"
     """
     t = " ".join(text.split())
     realized = lo = hi = None
-    delta = None
+    delta = penalty = None
 
-    m = re.search(r"between\s+" + _PCT + r"\s+and\s+" + _PCT, t, re.I)
+    m = re.search(r"between\s+(-?\d+(?:\.\d+)?)\s*%?\s*(?:-|–|to|and)\s*" + _PCT, t, re.I)
     if m:
         lo, hi = float(m.group(1)) / 100, float(m.group(2)) / 100
     m = re.search(r"(?:realized|annuali[sz]ed)\s+volatility[^%]*?(?:will be|is|of)\s+" + _PCT, t, re.I)
-    if m and "between" not in m.group(0).lower():
+    if m and lo is None:
         realized = float(m.group(1)) / 100
     m = re.search(r"delta\s+limit[^\d]*([\d,]+)", t, re.I)
     if m:
         delta = int(m.group(1).replace(",", ""))
-    return VolNews(realized, lo, hi, delta)
+    m = re.search(r"penalty\s+percentage[^\d]*" + _PCT, t, re.I)
+    if m:
+        penalty = float(m.group(1)) / 100
+    return VolNews(realized, lo, hi, delta, penalty)
 
 
 @dataclass(frozen=True)

@@ -38,6 +38,22 @@ a participation rate. Kept for A/B testing (`python -m ritc tune`).
 
 Tenders arrive through the real-time feed (polled every ~100 ms), so a
 profitable block is evaluated and accepted as soon as it appears.
+
+Crowded tenders (`crowd_learn = true`)
+--------------------------------------
+In a competition every desk gets the same block and unwinds it into the same
+book at the same time, so the price runs against the unwind. The bot learns that
+move online from the tenders it does NOT take (`crowd_untaken_only`: our own
+unwind's impact is already priced by walking the book): `crowd_ticks` after a
+tender appears it scores how far the mid moved against the unwind, per 10k
+shares, in a conjugate normal model. Once the crowd is significant (posterior
+mean > 2 sd, `crowd_gate`) it charges
+
+    crowd cost/share = crowd_weight * learned $/10k * tender size / 10k
+
+in `evaluate_tender`, and the unwind races it: the schedule shortens to
+`crowd_horizon_ticks`. With no crowd the gate never opens and nothing changes
+(docs/HOSTILE_MARKET.md).
 """
 
 from __future__ import annotations
@@ -50,6 +66,7 @@ from ..core.book import Level, OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..pricing.stats import EWMA
 from ..pricing.timeseries import OnlineGarch
+from .commodity import BayesImpact
 
 log = logging.getLogger("ritc.liability")
 
@@ -85,6 +102,7 @@ def evaluate_tender(
     min_ticks_to_unwind: int = 10,
     price_vol_per_tick: float = 0.0,
     risk_aversion: float = 0.0,
+    crowd_cost: float = 0.0,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -141,6 +159,7 @@ def evaluate_tender(
     unwind_ticks = to_unwind * unwind_ticks_per_lot
     drift_cost = max(0.0, -sign * drift_per_tick) * unwind_ticks
     drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
+    drift_cost += crowd_cost             # learned: how far the price runs against tenders' unwinds
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
 
     if fixed:
@@ -207,6 +226,15 @@ class LiabilityStrategy(Strategy):
         self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 3e-7))
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
+        # CROWDED TENDERS: other desks get the same block and unwind it into the same book.
+        # Learn, from every tender we see (accepted or not), how far the mid runs against its
+        # unwind direction over the next `crowd_ticks`, per 10k shares of tender: a conjugate
+        # normal update (BayesImpact) from the prior `crowd_prior_mean`.
+        self.crowd_learn = bool(s.get("crowd_learn", False))
+        self.crowd = BayesImpact(float(s.get("crowd_prior_mean", 0.0)), float(s.get("crowd_prior_sd", 0.10)),
+                                 float(s.get("crowd_noise_sd", 0.10)))
+        self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
+        self.taken: set[int] = set()             # tenders we hold: our own unwind moves their price
 
     @property
     def book_tickers(self) -> list[str]:
@@ -216,6 +244,8 @@ class LiabilityStrategy(Strategy):
         if snap.tick == self.last_tick:          # one time-series observation per tick
             return
         self.last_tick = snap.tick
+        if self.crowd_learn:
+            self._learn_crowd(snap)
         for t in self.tickers:
             m = snap.mid(t)
             if m is None:
@@ -224,6 +254,35 @@ class LiabilityStrategy(Strategy):
             if t in self.last_mid:
                 self.drift[t].update(m - self.last_mid[t])
             self.last_mid[t] = m
+
+    def _learn_crowd(self, snap: Snapshot) -> None:
+        lag, keep = int(self.p.get("crowd_ticks", 10)), []
+        for tick, t, sign, x, m0, tid in self.crowd_obs:
+            m = snap.mid(t)
+            if snap.abs_tick - tick < lag or m is None:
+                keep.append((tick, t, sign, x, m0, tid))
+                continue
+            if tid in self.taken and self.p.get("crowd_untaken_only", False):
+                continue          # our own unwind's impact is already priced by walking the book
+            self.crowd.update(x, sign * (m - m0))       # + = the price ran against the unwind
+            log.info("CROWD %s moved %+.3f against a %.0fk-share unwind -> %.4f $/10k (sd %.4f, n=%d)",
+                     t, sign * (m - m0), 10 * x, self.crowd.mean, self.crowd.sd, self.crowd.n)
+        self.crowd_obs = keep
+
+    def crowd_cost(self, qty: int) -> float:
+        """Expected $/share the crowd's unwind costs us on a tender of `qty` shares."""
+        if not self.crowd_learn or (self.p.get("crowd_gate", False) and not self.crowded()):
+            return 0.0
+        return self.p.get("crowd_weight", 1.0) * max(0.0, self.crowd.mean) * qty / 10_000
+
+    def crowded(self) -> bool:
+        """The learned crowd impact is significantly positive (posterior mean > 2 sd)."""
+        return self.crowd_learn and self.crowd.n > 0 and self.crowd.mean > 2 * self.crowd.sd
+
+    def unwind_horizon(self) -> int:
+        """Race the crowd: once it is known to unwind into our book, finish before it does."""
+        fast = int(self.cfg.get("execution", {}).get("crowd_horizon_ticks", 0))
+        return min(self.horizon, fast) if fast and self.crowded() else self.horizon
 
     def step(self, snap: Snapshot) -> None:
         self._update_drift(snap)
@@ -242,6 +301,11 @@ class LiabilityStrategy(Strategy):
             if tid in self.seen or ticker is None:
                 continue
             book = snap.book(ticker)
+            if self.crowd_learn and snap.mid(ticker) is not None:
+                # The price runs AGAINST our unwind: down after a BUY tender (we must sell).
+                sign = -1 if str(t.get("action", "BUY")).upper() == "BUY" else 1
+                self.crowd_obs.append((snap.abs_tick, ticker, sign, int(t.get("quantity", 0)) / 10_000,
+                                       snap.mid(ticker), tid))
             d = evaluate_tender(
                 t, book,
                 fee=float(self.fees.get(ticker, 0.0)),
@@ -257,6 +321,7 @@ class LiabilityStrategy(Strategy):
                 min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
                 price_vol_per_tick=self.price_vol(ticker, snap),
                 risk_aversion=self.p.get("risk_aversion", 0.0),
+                crowd_cost=self.crowd_cost(int(t.get("quantity", 0))),
             )
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
@@ -269,9 +334,10 @@ class LiabilityStrategy(Strategy):
                     if isinstance(resp, dict) and resp.get("success") is False:
                         log.info("TENDER %s not filled (competitive bid %s rejected)", tid, d.price)
                         continue          # we hold nothing: don't spend risk room on it
+                    self.taken.add(tid)
                     sign = 1 if str(t.get("action")).upper() == "BUY" else -1
                     positions[ticker] = positions.get(ticker, 0) + sign * int(t["quantity"])
-                elif self.p.get("decline_explicitly", False):
+                elif self.p.get("decline_explicitly", True):
                     self.client.decline_tender(tid)
             except Exception as exc:       # tender may have expired between read and accept
                 log.warning("tender %s action failed: %s", tid, exc)
@@ -299,7 +365,7 @@ class LiabilityStrategy(Strategy):
                     # sigma: GARCH $/share/tick; eta: from the side we unwind INTO.
                     kappa = ac_kappa(self.price_vol(t, snap), book_eta(snap.book(t), "bid" if pos > 0 else "ask"),
                                      self.ac_lambda)
-                self.algo.work(t, pos, 0, now, min(now + self.horizon, period_end), kappa=kappa)
+                self.algo.work(t, pos, 0, now, min(now + self.unwind_horizon(), period_end), kappa=kappa)
         if self.algo.active:
             open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
             self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)

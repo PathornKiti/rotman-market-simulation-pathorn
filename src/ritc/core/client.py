@@ -51,6 +51,8 @@ class RITClient:
         # and the feed + parallel fetches call the API from several threads at once.
         self._local = threading.local()
         self._pool: ThreadPoolExecutor | None = None
+        # Optional `requests` transport for base_url (the tuner's in-process simulator).
+        self.adapter: requests.adapters.BaseAdapter | None = None
 
     @property
     def session(self) -> requests.Session:
@@ -60,6 +62,9 @@ class RITClient:
             if self.api_key:
                 s.headers["X-API-Key"] = self.api_key
             self._local.session = s
+        if self.adapter is not None and getattr(s, "_ritc_adapter", None) is not self.adapter:
+            s.mount(self.base_url, self.adapter)
+            s._ritc_adapter = self.adapter
         return s
 
     def parallel(self, calls: list[Callable[[], Any]], workers: int = 8) -> list[Any]:

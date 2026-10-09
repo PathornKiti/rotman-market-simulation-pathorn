@@ -48,6 +48,14 @@ capped at `participation` × visible depth and the max order size. In the last
 - Learn `refill_factor` live: compare the visible depth before and after your unwinds.
 - When several tenders are open, rank them by profit per unit of limit used.
 
+## Crowded tenders
+
+Every desk gets the same block and unwinds it into the same book. `crowd_learn` measures,
+from every tender it doesn't take, how far the price runs against the unwind over the next
+`crowd_ticks`. Once that estimate is significant (`crowd_gate`) it charges
+`crowd_weight × learned $/10k × size / 10k` per share and races the crowd (`crowd_horizon_ticks`). Watch
+the `CROWD` log lines. Evidence: [HOSTILE_MARKET.md](../HOSTILE_MARKET.md).
+
 ## Time series
 
 The tender price includes a risk premium of `risk_aversion × GARCH price vol × √(unwind ticks)`. A block is worth less when the market has just turned volatile. See [TIME_SERIES.md](../TIME_SERIES.md).

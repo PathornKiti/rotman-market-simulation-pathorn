@@ -39,6 +39,7 @@ def test_dry_run_sends_nothing(monkeypatch):
     port = free_port()
     monkeypatch.setenv("RIT_URL", f"http://127.0.0.1:{port}/v1")
     srv, market = serve("equity", port, speed=150, delay=0.2, seed=7, block=False)
+    market.state["blocks"] = False           # an assigned block would move the position without any order
     try:
         runner, _ = build("equity", None, live=False)
         runner.s.ex.dry_run = True

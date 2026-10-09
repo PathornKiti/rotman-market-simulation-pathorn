@@ -200,3 +200,89 @@ def test_news_trade():
     assert news_trade(+2.0, 0.25, 0.1, 40, 0.75)[0] < 0      # big build -> short
     assert news_trade(-4.0, 0.25, 0.1, 40, 0.75)[0] == 40    # big draw -> full long
     assert news_trade(0.2, 0.25, 0.1, 40, 0.75)[0] == 0      # noise
+
+
+def _basket_books():
+    return {"BULL": make_book([(9.99, 10000)], [(10.01, 10000)], "BULL"),
+            "BEAR": make_book([(14.99, 10000)], [(15.01, 10000)], "BEAR")}
+
+
+def test_etf_tender_edge_against_the_basket_hedge():
+    from ritc.strategies.etf import tender_edge
+    w, fees = {"BULL": 1.0, "BEAR": 1.0}, {"BULL": 0.02, "BEAR": 0.02, "RITC": 0.02}
+    # BUY the ETF at 24.80, hedge by selling the basket at 9.99 + 14.99 = 24.98, pay 0.04 fees.
+    e = tender_edge({"action": "BUY", "quantity": 5000, "price": 24.80}, _basket_books(), w, fees)
+    assert abs(e - 0.14) < 1e-9
+    # SELL the ETF at 25.00, hedge by buying the basket at 25.02: a loss after fees.
+    e = tender_edge({"action": "SELL", "quantity": 5000, "price": 25.00}, _basket_books(), w, fees)
+    assert abs(e - (-0.06)) < 1e-9
+    # Past what the (refilled) book holds, the rest is priced a nickel worse.
+    big = tender_edge({"action": "BUY", "quantity": 40000, "price": 24.80}, _basket_books(), w, fees)
+    assert big < 0.14
+
+
+def test_etf_maker_quotes_price_the_hedge_and_rebate():
+    from ritc.strategies.etf import maker_quotes
+    w, fees = {"BULL": 1.0, "BEAR": 1.0}, {"BULL": 0.02, "BEAR": 0.02}
+    bid, ask = maker_quotes(_basket_books(), w, fees, 2000, edge=0.02, rebate=0.01)
+    # bid: basket bid 24.98 - fees 0.04 + rebate 0.01 - edge 0.02 = 24.93; ask: 25.02 + 0.04 - 0.01 + 0.02
+    assert abs(bid - 24.93) < 1e-9 and abs(ask - 25.07) < 1e-9
+
+
+def test_term_structure_vol_weights_each_week_by_remaining_ticks():
+    from ritc.strategies.derivatives import term_structure_vol as tsv
+    # Tick 38 of week 1 (20% now, next week announced 30%): a 600-tick option is mostly next-week vol...
+    v = tsv(38, 600, 75, 0.20, 0, 0.30)
+    assert abs(v - ((37 * 0.04 + 563 * 0.09) / 600) ** 0.5) < 1e-12
+    assert tsv(38, 10, 75, 0.20, 0, 0.30) == 0.20          # ...one expiring this week is all this week
+    assert tsv(38, 600, 75, 0.20, 0, None) == 0.20         # no range yet: this week's vol persists
+    assert tsv(76, 100, 75, 0.20, 0, 0.30) == 0.30         # new week, its headline not in yet: use the range
+
+
+def test_equity_cuts_an_assigned_block_but_not_its_own_fills():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.execution import Executor
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.equity import EquityStrategy
+
+    cfg = {"case": {"tickers": ["X"]}, "strategy": {"block_cut": 1.0, "block_detect": 5000}}
+    s = EquityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    sent = []
+    s.ex.limit = lambda t, a, q, p, ioc=True: sent.append((t, a, q, round(p, 2))) or []
+
+    def snap(pos: int) -> Snapshot:
+        sec = {"X": {"bid": 9.99, "ask": 10.01, "position": pos}}
+        sn = Snapshot({"tick": 1, "period": 1, "ticks_per_period": 300}, sec)
+        sn._books["X"] = make_book([(9.99, 5000)], [(10.01, 5000)], "X")
+        return sn
+
+    for pos in (0, 1500, 3000):                 # quote fills: small steps, nothing to cut
+        s.cut_blocks(snap(pos), snap(pos).positions)
+    assert sent == []
+    s.cut_blocks(snap(13_000), snap(13_000).positions)       # +10k in one loop: an assigned block
+    assert sent == [("X", "SELL", 10_000, 9.96)]
+
+
+def test_etf_fx_hedge_flattens_the_usd_balance_past_the_band():
+    from ritc.core.bot import Context
+    from ritc.core.execution import Executor
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.etf import ETFStrategy
+
+    class Client:
+        def __init__(self):
+            self.sent = []
+
+        def market_order(self, t, a, q):
+            self.sent.append((t, a, q))
+
+    cfg = {"case": {"etf": "RITC", "components": {"BULL": 1.0, "BEAR": 1.0}, "fx_ticker": "USD",
+                    "max_order": {"USD": 2_500_000}},
+           "strategy": {"fx_hedge_band": 50_000}}
+    c = Client()
+    s = ETFStrategy(Context(c, Executor(c, dry_run=False, max_order_size={"USD": 2_500_000}), RiskManager(), cfg))
+    s.hedge_fx({"USD": -40_000})                             # inside the band: leave it
+    assert c.sent == []
+    pos = {"USD": -3_000_000}
+    s.hedge_fx(pos)                                          # short USD: buy it back, one max order
+    assert c.sent == [("USD", "BUY", 2_500_000)] and pos["USD"] == -500_000

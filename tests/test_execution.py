@@ -187,3 +187,67 @@ def test_tail_metrics():
     r = Result({}, {s: float(v) for s, v in enumerate([-40, -10, 5, 20, 30, 50, 60, 80], 1)})
     assert r.cvar == -25.0           # worst 2 of 8
     assert r.negatives == 2
+
+
+def _queue_market(queue: bool):
+    from ritc.sim.server import Market
+    m = Market("equity", 300, 1, seed=3, queue=queue)
+    m.status = "ACTIVE"
+    s = m.secs["SMMR"]
+    s.bids, s.asks = [[24.97, 3000], [24.96, 2000]], [[25.03, 3000], [25.04, 2000]]
+    m._flow = lambda ticker, action: 2000 if ticker == "SMMR" and action == "BUY" else 0
+    return m, s
+
+
+def test_queue_joins_behind_displayed_shares():
+    m, s = _queue_market(True)
+    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.97)        # 3,000 shown ahead of us
+    m._fill_resting()
+    assert s.position == 0                                # flow ate 2,000 of the queue
+    m._fill_resting()
+    assert s.position == 1000                             # last 1,000 ahead, then us
+
+
+def test_queue_improving_the_touch_is_first():
+    m, s = _queue_market(True)
+    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.98)        # inside the spread: nobody ahead
+    m._fill_resting()
+    assert s.position == 1000
+
+
+def test_queue_off_is_the_old_model():
+    m, s = _queue_market(False)
+    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.97)
+    m._fill_resting()
+    assert s.position == 1000
+
+
+def test_queue_decay_and_vanished_level():
+    m, s = _queue_market(True)
+    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.97)
+    oid = next(iter(m.orders))
+    m._decay_queues()
+    assert m.ahead[oid] == 3000 * 0.8                     # QUEUE_CANCEL of the queue leaves
+    s.bids = [[24.95, 3000]]                              # the level is gone: nobody left in front
+    m._decay_queues()
+    assert m.ahead[oid] == 0.0
+
+
+def test_in_process_transport_answers_like_http():
+    from ritc.core.client import RITClient
+    from ritc.sim.server import InProcessAdapter, serve
+    from ritc.tune import _free_port
+
+    port = _free_port()
+    srv, m = serve("equity", port, speed=0, seed=5, block=False)
+    try:
+        url = f"http://127.0.0.1:{port}/v1"
+        http, local = RITClient(url, max_retries=1), RITClient(url, max_retries=1)
+        local.adapter = InProcessAdapter(m)
+        for c in (http, local):
+            assert c.case()["status"] == "ACTIVE"
+        assert http.securities() == local.securities() and http.book("SPNG") == local.book("SPNG")
+        local.limit_order("SPNG", "BUY", 100, 1.00)              # rests far below the market
+        assert [o["price"] for o in http.orders()] == [1.0]      # both see one market
+    finally:
+        srv.shutdown()

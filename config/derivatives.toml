@@ -7,22 +7,33 @@ underlying = "RTM"
 option_regex = '^(?P<und>RTM)(?P<exp>\d)(?P<cp>[CP])(?P<strike>\d+(?:\.\d+)?)$'
 expiry_ticks = { "1" = 300, "2" = 600 }   # expiry code -> absolute tick of expiry
 default_expiry_tick = 600
+week_ticks = 75               # official: 8 weeks of 75 ticks; vol news is per week
 ticks_per_year = 3600         # 1 period (300 ticks) = 1 month
 rate = 0.0
 multiplier = 100              # shares per contract
-option_fee = 1.00             # $ per contract
+option_fee = 2.00             # $ per contract (official: $2.00/contract; RTM $0.02/share)
 max_order = { RTM = 10000 }
 default_max_order = 100       # options: max contracts per order
 
+# Official limits (RITC 2020/2023 case packages): RTM 50,000 gross/net shares;
+# options 2,500 gross / 1,000 net contracts.
 [risk]
 [risk.groups.options]
 gross = 2500
 net = 1000
 pattern = '^RTM\d[CP]'     # every option counts 1 contract
+[risk.groups.etf]
+gross = 50000
+net = 50000
+weights = { RTM = 1.0 }
 
 [strategy]
 initial_vol = 0.20            # used until the first news item
-range_weight = 0.5            # how far to move toward a forecast-range midpoint
+vol_term = true               # per-option forecast from the news term structure: the rest of this week at this
+                              #   week's realised vol, everything after at next week's announced range mid,
+                              #   variance-weighted by each option's remaining ticks. 16 seeds: +$26.4k (t 6.3,
+                              #   15/16), hostile +$26.0k (t 6.2); holdout 101-116 +$30.6k / +$29.6k (t 6.1, 16/16).
+range_weight = 0.5            # vol_term = false only: how far to move toward a forecast-range midpoint
 garch_weight = 0.0            # 0 = trust the news when there is any; GARCH fills in until the first
                               # vol headline (or for cases without vol news). Blending 30% GARCH
                               # into exact news LOST money on 5/6 simulator seeds: GARCH learns from

@@ -35,13 +35,18 @@ requote_tolerance = 0.01
 jump_sigmas = 4.0              # jump guard: a one-tick move > max(jump_sigmas x vol, jump_floor) pulls quotes
 jump_floor = 0.05              #   ($ floor so quiet stocks don't trip it on one tick of noise)
 jump_pause_ticks = 2           #   for this many ticks. 0 sigmas = off.
+block_cut = 1.0                # ASSIGNED BLOCKS: a position jump >= block_detect in one loop (more than our quotes
+block_detect = 5000            #   can fill) is a block pushed onto us; cut this fraction at once, limit
+block_slippage = 0.03          #   block_slippage through the touch. Sim with block transfers, 16 seeds: +$1.8k
+                               #   (t 2.6), hostile +$1.6k (t 3.0); holdout 101-116 +$2.4k (t 3.2) / +$0.9k (t 2.1)
 [strategy.per_ticker.ATMN]
 min_half_spread = 0.03
 
 [run]
-max_drawdown = 4000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
-                             # worst normal drawdown on 8 sim seeds: $2.6k; $2k cost $2.7k of mean NLV.
-                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+max_drawdown = 0              # OFF. With assigned blocks (and in the hostile sim) the $4k stop tripped on drawdowns
+                             # that revert and flattened at the bottom. 32 fresh seeds (17-48): off vs $4k benign
+                             # +$951 (t 3.0, 21/32), worst -$7.8k -> -$3.3k; hostile +$450 (t 1.2). $6k: t 1.9 / 0.3.
+                             # Risk is held by [risk] limits, the size taper and hard_inventory instead.
 drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
 drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds

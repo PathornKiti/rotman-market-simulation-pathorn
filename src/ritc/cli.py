@@ -85,14 +85,15 @@ def cmd_run(a: argparse.Namespace) -> int:
 def cmd_tune(a: argparse.Namespace) -> int:
     from .tune import parse_grid, report, tune
     seeds = list(range(a.first_seed, a.first_seed + a.seeds))
-    results = tune(a.case, parse_grid(a.grid or []), seeds, a.speed, a.workers, a.config)
+    results = tune(a.case, parse_grid(a.grid or []), seeds, a.speed, a.workers, a.config, hostile=a.hostile,
+                   queue=a.queue)
     print("\n" + report(results))
     return 0
 
 
 def cmd_sim(a: argparse.Namespace) -> int:
     from .sim.server import serve
-    serve(a.case, a.port, a.speed, a.delay, a.seed)
+    serve(a.case, a.port, a.speed, a.delay, a.seed, hostile=a.hostile, queue=a.queue)
     return 0
 
 
@@ -205,6 +206,11 @@ def main(argv: list[str] | None = None) -> int:
     tu.add_argument("--speed", type=float, default=0.0,
                     help="0 = lock-step, reproducible (default); N = real-time at N ticks/second")
     tu.add_argument("--workers", type=int)
+    tu.add_argument("--hostile", type=float, default=0.0,
+                    help="simulate manipulative competitors: spoofing, pump-and-dump, liquidity vacuums, "
+                         "penny-jumping, crowded tenders (0 = off, 1 = full)")
+    tu.add_argument("--queue", action="store_true",
+                    help="price-time priority: resting orders queue behind the displayed book")
     tu.add_argument("--config")
     tu.set_defaults(fn=cmd_tune)
 
@@ -214,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--speed", type=float, default=4.0, help="ticks per second")
     s.add_argument("--delay", type=float, default=3.0)
     s.add_argument("--seed", type=int)
+    s.add_argument("--hostile", type=float, default=0.0, help="manipulative competitors (0 = off, 1 = full)")
+    s.add_argument("--queue", action="store_true", help="price-time priority behind the displayed book")
     s.set_defaults(fn=cmd_sim)
 
     a = ap.parse_args(argv)

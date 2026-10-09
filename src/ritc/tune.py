@@ -74,32 +74,36 @@ def _free_port() -> int:
 LOOPS_PER_TICK = 4          # ~ a 0.25 s loop against RIT's 1 tick per second
 
 
-def run_one(case: str, overrides: dict, seed: int, speed: float, config_path: str | None = None) -> float:
-    """Run one full simulated case in THIS process; return final NLV. speed <= 0 = lock-step."""
+def run_one(case: str, overrides: dict, seed: int, speed: float, config_path: str | None = None,
+            hostile: float = 0.0, queue: bool = False) -> float:
+    """Run one full simulated case in THIS process; return the final score (NLV less official
+    penalties, e.g. the delta-limit fine). speed <= 0 = lock-step."""
     from .cli import build
-    from .sim.server import serve
+    from .sim.server import InProcessAdapter, serve
 
     logging.disable(logging.CRITICAL)
     port = _free_port()
     os.environ["RIT_URL"] = f"http://127.0.0.1:{port}/v1"
-    srv, market = serve(case, port, speed=speed, delay=0.2, seed=seed, block=False)
+    srv, market = serve(case, port, speed=speed, delay=0.2, seed=seed, block=False, hostile=hostile,
+                       queue=queue)
     try:
         runner, _ = build(case, config_path, live=True, overrides=overrides)
         if speed <= 0:
+            runner.client.adapter = InProcessAdapter(market)   # no loopback HTTP: same answers, much faster
             runner.interval = 0.0
             runner.on_loop = lambda: market.advance() if runner.loops % LOOPS_PER_TICK == 0 else None
         else:
             runner.interval = min(runner.interval, 0.25 / max(speed / 4, 1))
         runner.run()
-        return market.nlv()
+        return market.score()
     finally:
         srv.shutdown()
 
 
 def _job(args: tuple) -> tuple[int, int, float]:
-    combo_idx, seed, case, overrides, speed, cfg = args
+    combo_idx, seed, case, overrides, speed, cfg, hostile, queue = args
     try:
-        return combo_idx, seed, run_one(case, overrides, seed, speed, cfg)
+        return combo_idx, seed, run_one(case, overrides, seed, speed, cfg, hostile, queue)
     except Exception:                 # noqa: BLE001 - a crashed run scores NaN, not the whole tune
         return combo_idx, seed, float("nan")
 
@@ -138,15 +142,17 @@ class Result:
 
 
 def tune(case: str, grid: dict[str, list], seeds: list[int], speed: float = 0.0, workers: int | None = None,
-         config_path: str | None = None, progress=print) -> list[Result]:
+         config_path: str | None = None, progress=print, hostile: float = 0.0,
+         queue: bool = False) -> list[Result]:
     combos = combinations(grid)
     if {} not in combos:
         combos.insert(0, {})           # always run the config baseline: every setting is judged against it
-    jobs = [(i, s, case, c, speed, config_path) for i, c in enumerate(combos) for s in seeds]
+    jobs = [(i, s, case, c, speed, config_path, hostile, queue) for i, c in enumerate(combos) for s in seeds]
     results = [Result(c, {}) for c in combos]
     workers = workers or max(1, min(len(jobs), (os.cpu_count() or 2)))
     progress(f"tuning {case}: {len(combos)} setting(s) x {len(seeds)} seed(s) = {len(jobs)} runs "
-             f"on {workers} worker(s)")
+             f"on {workers} worker(s){f', hostile market {hostile:g}' if hostile else ''}"
+             f"{', queue model' if queue else ''}")
     with ProcessPoolExecutor(max_workers=workers) as pool:
         for n, (i, seed, nlv) in enumerate(pool.map(_job, jobs), 1):
             results[i].nlvs[seed] = nlv

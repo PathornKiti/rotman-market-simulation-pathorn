@@ -86,6 +86,27 @@ Code: `strategies/commodity.py` (`BayesImpact`, `learn_impact`).
 95% of the loss from mis-calibration within the heat. `impact_per_unit` is the
 least-known number in the commodity brief, so this is the robust default.
 
+### Per-option vol term structure (derivatives)
+
+The case announces this week's realised vol and, mid-week, a range for next week. An option
+expiring in 10 ticks lives entirely in this week; a 2-month option lives mostly in later weeks.
+Each option's forecast is now `sqrt((a·σ_this² + (T−a)·σ_next²) / T)`, with `a` its ticks left in
+this week. The old forecast moved one number halfway toward the range for every option.
+16 seeds: +$26.4k (t 6.3) benign / +$26.0k (t 6.2) hostile; holdout +$30.6k / +$29.6k
+(t 6.1, 16/16). Pricing the weeks after next at a 25% long-run vol instead lost $59k (t −8.6).
+
+### Online crowd-impact learning for tenders (liability)
+
+A crowded trade: every desk gets the same tender and unwinds it into the same book. The
+bot learns the post-tender price move against the unwind, per 10k shares, with the same
+conjugate normal update as the commodity news impact (`BayesImpact`), from a prior of
+0.06 $/10k. It charges `crowd_weight` (1.5) × that × size in `evaluate_tender`, and shortens
+the unwind to 12 ticks once the estimate is > 2 sd from 0. Final version: it learns only from tenders
+it didn't take (its own unwind's impact is already priced) and charges nothing until the crowd
+is significant. Hostile simulator: +$11.4k (t 3.9), holdout +$14.2k (t 3.0); benign −$0.3k (t −1.0)
+and holdout $0. An ungated version with a 0.06 prior cost −$4.9k (t −3.0) in the benign market.
+Details: [HOSTILE_MARKET.md](HOSTILE_MARKET.md).
+
 ## Evaluated, not adopted
 
 | Technique | Test | Result |
@@ -103,7 +124,20 @@ least-known number in the commodity brief, so this is the robust default.
 | Scenario stress test + CVaR position limit (derivatives): delta-hedged revaluation under a 5×5 spot × vol-shift grid (spot ±3σ√h, vol ±5 or ±10 pts, h = 75 ticks); each trade sized so CVaR₂₅ of scenario losses ≤ budget (Rockafellar–Uryasev) | Kill switch off in all rows. Limit $20k / $10k / $5k: mean −$1.6k / −$3.2k / −$5.1k (t −0.6 / −1.4 / −2.3); worst seed −$4.1k / −$3.0k / −$6.8k vs −$1.8k unlimited | Tighter limit = worse mean AND worse tail. Removed. The remaining losing seed isn't a vol-shock loss, and capping exposure blocks the trades with the largest edge. |
 | Full Avellaneda–Stoikov (2008) quoting (equity) | γ ∈ {3e-6, 1e-5, 3e-5}, κ ∈ {20, 33}: −$1.3k to −$2.6k vs baseline (16 seeds, paired t −1.2 to −8.1) | The closed form's inventory term γσ²(T−t) shrinks to zero at the close, the opposite of what the end-of-heat penalty needs. The constant `skew_per_share` beat it on every setting. Removed. |
 | VAMP (depth-weighted, 5,000 shares) and plain mid as fair value (equity) | +$0.1k to +$0.6k vs microprice, t ≤ 1.0 | Not significant. Book sizes in the simulator are random, so depth signals can only be judged in the RIT practice case. Not added. |
+| Equity quote width, size and skew re-tuned under the official-rules simulator (2026-10-07) | 16 seeds: `vol_mult` 1.0/1.25/2.0, `size` 1000–3000, `skew_per_share` 0–1e-5 against 1.5 / 2000 / 3e-6 | Nothing beat the config. Bigger size: −$0.7k to −$2.3k (t −2.7 to −4.6); smaller size: −$1.0k to −$2.2k (t −4.4 to −7.0); stronger skew: −$0.8k to −$1.6k; no skew: −$1.7k with 3 losing seeds. The best row (skew 1.5e-6) was +$124, t 0.3, worse worst seed. Config unchanged. |
+| ETF passive leg with a thin edge (`maker_edge` 0.02) | 16 seeds vs no passive leg | −$1.4k, t −2.1. The fills are thin and use up the risk room the taker arbs need. Wider edges win (kept at 0.15, see CHANGES.md). |
 | Guéant–Lehalle–Fernandez-Tapia quoting / order-flow imbalance (equity) | — | Needs a realistic fill-intensity curve and order flow. The simulator has neither (fixed fill probability at the touch, random book rebuilds), so it can't be validated here. Equity gets the jump guard instead (`docs/RISK.md`). |
+
+| Price band on aggressive orders (all cases, hostile sim) | Clamp every IOC limit to the 7-tick median mid ± (2 × median spread + 3 × EWMA tick move) | Commodity −$32 (t −3.5) in both markets; derivatives worst seed $33.7k → $24.4k; liability −$0.6k; ETF +$0.3k (t 1.3). It blocks real moves as often as fake ones. Removed. |
+| Spoof-resistant books (all cases) | Cap each level at 3 × the median level size before every book calculation | ±$50 everywhere (equity hostile +$0.3k, t 1.2). Fake depth behind the touch barely enters walked-VWAP sizing. Removed. |
+| Queue fighting vs penny-jumpers (equity) | Step back in front of a competitor, keeping 1–2 cents to the reservation price | −$2.6k / −$3.0k, t −2.8 / −3.0 (hostile). The fills won at a 1-cent edge are toxic. Removed. |
+| Toxicity-adaptive spread (equity) | 5-tick markout of our passive fills (EWMA per side); widen the losing side by 1–2 × the loss, cap 5 cents | −$0.9k, t −0.9 (hostile). Removed. |
+| Hold inventory on dislocation (equity) | Don't cross to cut inventory while the price is pushed > 1.5 bands against it | Never triggered: the size taper keeps inventory below `hard_inventory`. Removed. |
+| Equity re-tune under the hostile simulator | `skew_per_share` 6e-6, `imbalance_lean` 0, `min_half_spread` 0.03, `vol_mult` 2.5, `size` 1000, `max_inventory` 10k, `jump_sigmas` 2.5, `jump_pause_ticks` 5, `ou_weight` 0 | Hostile: −$1.0k to +$0.4k, all \|t\| < 1.7. Skew 6e-6 cut the hostile worst seed −$5.2k → −$1.4k but cost −$0.8k (t −2.7) in the benign market. Config unchanged. |
+| Equity kill switch under the hostile simulator | `max_drawdown` 2.5k / 6k / off vs 4k | 6k ≈ off: hostile +$0.4k (t 1.35), worst −$5.2k → −$2.0k; benign +$15 (t 1.5). The stop trips on manipulation drawdowns that revert ("stop hunting"). Not significant: unchanged, recheck in the practice case. |
+| Equity re-tune under the queue model (2026-10-09, `--queue`, 32 seeds, benign / hostile) | `requote_tolerance` 0.009 / 0.0101 / 0.0201 / 0.0301; `min_half_spread` 0.01 / 0.015 / 0.03; `size` 1000 / 3000; `skew_per_share` 6e-6 / 1e-5; `jump_sigmas` 2.5 / 0 | Nothing beats the config. Tolerance and width: all \|t\| ≤ 1.7. Size 1000 / 3000: −$0.9k (t −4.9 / −4.1) benign, 3000 −$1.3k (t −6.8) hostile. Skew and jump guard: \|t\| < 1. Queue priority isn't what loses equity money; jumps through the quotes, trends and assigned blocks are. Config unchanged. |
+| Requote tolerance float edge (equity, ETF maker) | `abs(old - new) < 0.01` is True for some 1-cent moves (15.03 − 15.02) and False for others (30.25 − 30.24), so 1-cent re-quotes happen by float noise. 0.009 (always) / 0.0101 (never) vs 0.01 | Equity queue model: −$52 / +$99 benign, +$107 / +$80 hostile, all \|t\| < 0.7. Harmless in practice; left as is. |
+| ETF FX hedge at the USD touch (IOC limit) vs market orders | 32 seeds, `fx_hedge_band` 50k | Identical on every seed: the hedges fit inside the touch. Removed (the cost is the half-spread on USD turnover either way). |
 
 ## Reproduce
 
@@ -111,4 +145,5 @@ least-known number in the commodity brief, so this is the robust default.
 python -m ritc tune liability   --seeds 8 --grid execution.schedule=front_load,almgren_chriss
 python -m ritc tune etf         --seeds 8 --grid strategy.threshold_mode=fixed,bertram
 python -m ritc tune commodity   --seeds 8 --grid strategy.impact_mode=fixed,bayes --grid strategy.impact_per_unit=0.10,0.25
+python -m ritc tune liability   --hostile 1 --grid strategy.crowd_learn=false,true
 ```

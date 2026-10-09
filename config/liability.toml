@@ -26,11 +26,29 @@ risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind t
 max_slippage = 0.04           # unwind slices keep VWAP within this of the touch
 participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
-decline_explicitly = false
+decline_explicitly = true     # official rule: trading a ticker while one of its tenders is still PENDING is
+                              # "front-running"; its profit is dropped from the Adjusted P&L but losses count.
+                              # Declining at once closes the window, so unwinds of earlier tenders stay clean.
+# CROWDED TENDERS (docs/HOSTILE_MARKET.md): every desk gets the same block and unwinds it into the same book.
+# Learn from every tender we did NOT take how far the mid runs against its unwind over `crowd_ticks`, per 10k
+# shares; once that is significant (> 2 sd) charge it (crowd_weight x $/10k x size/10k per share) and race it.
+# Corrected sim, 16 seeds: hostile +$11.4k (t 3.9), benign -$0.3k (t -1.0); holdout 101-116: hostile +$14.2k
+# (t 3.0), benign +$0 (the gate never fires without a crowd). Ungated / learning from our own tenders cost
+# $2.8k-$4.9k in the benign market (our own unwind impact looked like a crowd).
+crowd_learn = true
+crowd_untaken_only = true     # skip tenders we hold: walking the book already prices our own impact
+crowd_gate = true             # charge nothing until the crowd is statistically there
+crowd_prior_mean = 0.0        # $/10k shares before anything is learned
+crowd_prior_sd = 0.10
+crowd_noise_sd = 0.10         # price noise over the scoring window
+crowd_ticks = 10              # score each tender's crowd reaction this many ticks after it appears
+crowd_weight = 1.0
 
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
 unwind_horizon_ticks = 30     # target: flat within this many ticks of accepting a tender
+crowd_horizon_ticks = 12      # ...but race the crowd once it is detected (learned impact > 2 sd). A FIXED 12 cost
+                              #   -$7.6k (t -6.1) in the benign sim; switching only on evidence costs nothing there.
 max_slippage = 0.04           # aggressive catch-up slices: VWAP within this of the touch
 participation = 0.35          # max fraction of visible depth per aggressive slice
 display_qty = 5000            # iceberg: largest passive child shown in the book

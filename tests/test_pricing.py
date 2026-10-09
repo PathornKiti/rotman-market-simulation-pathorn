@@ -44,6 +44,18 @@ def test_parse_vol_news():
     assert v.delta_limit == 7000
 
 
+def test_parse_vol_news_official_wording():
+    # Verbatim from the RITC 2020/2023 case packages.
+    v = parse_vol_news("The realized volatility of RTM for next week will be between 27-30%")
+    assert v.realized is None
+    assert math.isclose(v.forecast_lo, 0.27) and math.isclose(v.forecast_hi, 0.30)
+    v = parse_vol_news("The delta limit for this sub-heat is 10,000")
+    assert v.delta_limit == 10000 and v.penalty_pct is None
+    v = parse_vol_news("The delta limit for this heat is 5,000 and the penalty percentage is 0.5%")
+    assert v.delta_limit == 5000 and math.isclose(v.penalty_pct, 0.005)
+    assert v.realized is None and v.forecast_lo is None
+
+
 def test_parse_inventory_news():
     n = parse_inventory_news("Crude inventories show a build of 2.5 million barrels vs expected build of 1.0 million")
     assert n.actual == 2.5 and n.expected == 1.0 and n.surprise == 1.5
