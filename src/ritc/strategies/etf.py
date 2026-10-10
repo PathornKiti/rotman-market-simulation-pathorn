@@ -21,7 +21,7 @@ Exit (`exit_mode`)
 * "mid": the original rule - close when the MID premium is back inside
   `exit_edge`. That pays a second full set of spreads and fees just as the gap
   hits zero, and on the simulator it cost more than the arb earned (mean NLV
-  went from about -$0.5k to positive when we switched; see docs/PERFORMANCE.md).
+  went from about -$0.5k to positive when we switched; see docs/ARCHITECTURE.md).
   A position that never reaches its exit edge stays hedged to the end.
 
 Execution

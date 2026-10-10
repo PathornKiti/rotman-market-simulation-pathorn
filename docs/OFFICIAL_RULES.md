@@ -53,7 +53,7 @@ There is no ETF or BP commodity case in 2026; those live on in the RITCx events.
 | Fees | **$0.02/share RTM, $2.00/contract** | config `option_fee` 1.00 → **2.00**. Sim was charging $0.01 on both |
 | Max order | 10,000 RTM, 100 contracts | ✓ |
 | Limits | RTM 50,000 gross / 50,000 net. Options 2,500 gross / 1,000 net contracts | added `[risk.groups.etf]` for RTM. The sim now counts each group separately (it used to count every position against "options") |
-| Vol regimes | 8 weeks of 75 ticks. Week start: *"The realized volatility of RTM for this week will be 20%"*. Mid-week (t = 38): *"The realized volatility of RTM for next week will be between 27-30%"* | **Parser bug fixed.** We only read "between X% and Y%", so the official range was silently ignored. The sim now uses this wording, and its range is about the vol actually drawn for next week (DEVLOG #4) |
+| Vol regimes | 8 weeks of 75 ticks. Week start: *"The realized volatility of RTM for this week will be 20%"*. Mid-week (t = 38): *"The realized volatility of RTM for next week will be between 27-30%"* | **Parser bug fixed.** We only read "between X% and Y%", so the official range was silently ignored. The sim now uses this wording, and its range is about the vol actually drawn for next week (CHANGES.md) |
 | Delta limit | Announced by news, e.g. *"The delta limit for this heat is 5,000 and the penalty percentage is 0.5%"* (any integer > 1,000) | The parser now reads the penalty % too |
 | Penalty | **Every second** with \|Δ\| > limit costs (\|Δ\| − limit) × p. It is deducted by the judges, not shown in RIT P&L | The sim accrues it and `ritc tune` now scores **NLV − penalty** |
 | Close-out | RTM at the last price, options cash-settled at intrinsic | ✓ |

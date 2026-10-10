@@ -63,7 +63,7 @@ with no fine. Worth +$11k-15k a heat in the simulator. Confirm on the real serve
 ### Late-answer check (heat 1, dry run): the biggest setting depends on it
 
 The bot answers each tender 3 ticks before it expires (`decide_late_ticks`), re-priced then
-(+$25k a heat in the simulator, losing heats 13 → 1 over 21 stress scenarios; docs/GAP_ANALYSIS.md).
+(+$25k a heat in the simulator, losing heats 13 → 1 over 21 stress scenarios; docs/POSTMORTEM.md).
 
 - [ ] Every tender shows `TENDER <id> ... seen at tick X, expires E: answering 3 ticks before it` and later
       `TENDER <id> ... -> ACCEPT/decline`. **No tender may expire unanswered**, except one arriving in the
@@ -86,7 +86,7 @@ The bot answers each tender 3 ticks before it expires (`decide_late_ticks`), re-
 Grep the bot log for `CROWD` lines, e.g. `CROWD CRZY moved +0.350 against a 15k-share unwind -> 0.1538 $/10k (sd 0.0084, n=10)`.
 They measure how far the price runs against a tender's unwind when other teams got the same block.
 In the simulator, crowded markets lose almost entirely on tenders taken BEFORE the bot has seen a
-crowd (the gate needs evidence first), and no code change fixed that on fresh seeds (docs/RISK_REVIEW.md).
+crowd (the gate needs evidence first), and no code change fixed that on fresh seeds (docs/POSTMORTEM.md).
 
 - [ ] Learned value clearly positive across heats → next heat
       `--set strategy.crowd_prior_mean=<value> --set strategy.crowd_prior_sd=<about half of it>`.

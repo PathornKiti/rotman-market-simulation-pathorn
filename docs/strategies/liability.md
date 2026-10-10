@@ -54,15 +54,15 @@ Every desk gets the same block and unwinds it into the same book. `crowd_learn` 
 from every tender it doesn't take, how far the price runs against the unwind over the next
 `crowd_ticks`. Once that estimate is significant (`crowd_gate`) it charges
 `crowd_weight × learned $/10k × size / 10k` per share and races the crowd (`crowd_horizon_ticks`). Watch
-the `CROWD` log lines. Evidence: [HOSTILE_MARKET.md](../HOSTILE_MARKET.md).
+the `CROWD` log lines. Evidence: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Time series
 
-The tender price includes a risk premium of `risk_aversion × GARCH price vol × √(unwind ticks)`. A block is worth less when the market has just turned volatile. See [TIME_SERIES.md](../TIME_SERIES.md).
+The tender price includes a risk premium of `risk_aversion × GARCH price vol × √(unwind ticks)`. A block is worth less when the market has just turned volatile. See [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Block execution
 
 Unwinds use the passive-then-aggressive block algorithm (`[execution]` section). It
 rests an iceberg at the touch while on schedule and crosses only to catch up. In the
 simulator it beat the always-aggressive slice unwind on 8 of 8 seeds (mean $49.7k vs
-$24.1k). Tenders arrive through the real-time feed. See [PERFORMANCE.md](../PERFORMANCE.md).
+$24.1k). Tenders arrive through the real-time feed. See [ARCHITECTURE.md](../ARCHITECTURE.md).

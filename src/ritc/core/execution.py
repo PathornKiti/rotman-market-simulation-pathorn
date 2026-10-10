@@ -28,6 +28,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .client import RITClient, RITError, slice_qty
+from .journal import NULL as NULL_JOURNAL
+from .journal import Journal
 from .tca import TCA
 
 log = logging.getLogger("ritc.exec")
@@ -46,6 +48,7 @@ class Executor:
     _ioc: list[int] = field(default_factory=list)
     _tracked: dict[int, dict] = field(default_factory=dict)  # order_id -> fill-tracking state
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    journal: Journal = field(default=NULL_JOURNAL)        # run journal (post-trade report); no-op by default
 
     def max_size(self, ticker: str) -> int:
         return int(self.max_order_size.get(ticker, self.default_max_order))
@@ -81,6 +84,8 @@ class Executor:
                 resp = self.client.limit_order(ticker, action, chunk, price, self.decimals)
             except RITError as exc:
                 log.warning("order rejected: %s", exc)
+                self.journal.write("error", where="order", ticker=ticker, action=action.upper(), qty=chunk,
+                                   msg=str(exc)[:300])
                 break
             out.append(resp)
             with self._lock:
@@ -91,6 +96,8 @@ class Executor:
             oid = int(resp["order_id"])
             filled = int(resp.get("quantity_filled", 0) or 0)
             vwap = resp.get("vwap")
+            self.journal.write("order", id=oid, ticker=ticker, action=action.upper(), qty=chunk, px=px, style=style,
+                               filled=filled, vwap=vwap, arrival=arrival)
             self.tca.record_fill(ticker, action, filled, vwap, arrival, style)
             if filled < chunk:
                 with self._lock:
@@ -142,6 +149,8 @@ class Executor:
             if inc > 0 and vwap is not None:
                 inc_px = (float(vwap) * total - st["cost"]) / inc
                 self.tca.record_fill(st["ticker"], st["action"], inc, inc_px, st["arrival"], st["style"])
+                self.journal.write("fill", id=oid, ticker=st["ticker"], action=st["action"], qty=inc, px=inc_px,
+                                   style=st["style"], arrival=st["arrival"])
                 n += 1
         return n
 

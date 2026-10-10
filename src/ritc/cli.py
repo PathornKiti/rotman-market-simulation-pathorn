@@ -12,6 +12,7 @@ Command-line entry point.
     python -m ritc stress [--only gap]          # liability bot across every adverse scenario
     python -m ritc record                       # READ-ONLY: record a practice heat to logs/record-*.jsonl
     python -m ritc calibrate logs/record-*.jsonl  # measured vol / depth / tenders / booking delay
+    python -m ritc report [logs/liability-*.log]  # liability: gap report per run -> reports/*_local|_live.html/.xlsx
 """
 
 from __future__ import annotations
@@ -76,6 +77,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     from .tune import parse_value
     sets = {k.strip(): parse_value(v.strip()) for k, _, v in (x.partition("=") for x in a.set or [])}
     runner, _ = build(a.case, a.config, a.live, overrides=sets)
+    from .core.journal import Journal
+    runner.journal = runner.s.ex.journal = Journal(str(path).rsplit(".", 1)[0] + ".jsonl")
     print(f"log file: {path}" + (f"  overrides: {sets}" if sets else ""))
     if not runner.s.ex.dry_run:
         print(">>> LIVE TRADING - Ctrl-C cancels all orders and stops <<<")
@@ -225,13 +228,26 @@ def cmd_calibrate(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(a: argparse.Namespace) -> int:
+    from .postmortem import main as report_main
+    args = list(a.logs) + ["--out", a.out, "--mode", a.mode]
+    if a.no_counterfactuals:
+        args.append("--no-counterfactuals")
+    if a.workers:
+        args += ["--workers", str(a.workers)]
+    if a.stress:
+        args += ["--stress", "--seeds", str(a.seeds), "--first-seed", str(a.first_seed)] + (["--only", a.only]
+                                                                                           if a.only else [])
+    return report_main(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ritc", description="RITC trading bots")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="list strategies").set_defaults(fn=cmd_list)
     sub.add_parser("doctor", help="check the API connection").set_defaults(fn=cmd_doctor)
-    st_ = sub.add_parser("stress", help="liability: the bot across every adverse scenario (docs/GAP_ANALYSIS.md)")
+    st_ = sub.add_parser("stress", help="liability: the bot across every adverse scenario (docs/POSTMORTEM.md)")
     st_.add_argument("--seeds", type=int, default=16)
     st_.add_argument("--first-seed", type=int, default=1)
     st_.add_argument("--only", help="comma-separated groups (core / hostile / gap) and/or scenario names")
@@ -252,6 +268,20 @@ def main(argv: list[str] | None = None) -> int:
     ca.add_argument("files", nargs="+")
     ca.add_argument("--json", help="also write the full report (incl. every tender) to this file")
     ca.set_defaults(fn=cmd_calibrate)
+
+    rp = sub.add_parser("report", help="liability: post-trade gap report per bot log (.html + .xlsx in reports/)")
+    rp.add_argument("logs", nargs="*", help="bot logs (default: logs/liability-*.log)")
+    rp.add_argument("--out", default="reports")
+    rp.add_argument("--mode", choices=["auto", "local", "live"], default="auto",
+                    help="local = the offline simulator, live = the RIT server (auto: detected from the log)")
+    rp.add_argument("--no-counterfactuals", action="store_true", help="skip the per-tender what-if replays (faster)")
+    rp.add_argument("--workers", type=int)
+    rp.add_argument("--stress", action="store_true",
+                    help="every `ritc stress` scenario, all seeds aggregated per scenario")
+    rp.add_argument("--seeds", type=int, default=16)
+    rp.add_argument("--first-seed", type=int, default=1)
+    rp.add_argument("--only", help="--stress: groups (core / hostile / gap) and/or scenario names")
+    rp.set_defaults(fn=cmd_report)
 
     m = sub.add_parser("monitor", help="read-only dashboard")
     m.add_argument("--interval", type=float, default=1.0)

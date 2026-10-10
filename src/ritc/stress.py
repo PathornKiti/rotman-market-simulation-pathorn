@@ -6,7 +6,7 @@ Liquidity Risk Case stress test: the bot across every adverse scenario we can na
     python -m ritc stress --set execution.hold_risk_budget=20000 --template
 
 Each scenario is the brief's market with one (or several) of its unknowns pushed the wrong way
-(`RITC_STRESS` knobs in sim/server.py, docs/GAP_ANALYSIS.md). Every scenario runs the SAME seeds,
+(`RITC_STRESS` knobs in sim/server.py, docs/POSTMORTEM.md). Every scenario runs the SAME seeds,
 so rows are comparable and a config change can be judged scenario by scenario. Per scenario:
 mean, worst seed, CVaR25 (mean of the worst quarter), losing seeds, fines, peak |position|, max
 intraday drawdown, tenders taken / seen, shares still held at the bell. `--template` adds the
@@ -36,7 +36,7 @@ SCENARIOS: dict[str, tuple[str, float, bool, int, str]] = {
     "everything at once":        ("vol=1.5,depth=0.6,edge=-0.05,size=1.5,book=2,strict_fr=1", 1, False, 4, "hostile"),
     "everything anchored":       ("vol=1.5,depth=0.6,edge=-0.05,size=1.5,book=2,strict_fr=1,anchor=1", 1, False, 4,
                                   "hostile"),
-    # ---- gaps between the simulator and the real server (docs/GAP_ANALYSIS.md)
+    # ---- gaps between the simulator and the real server (docs/POSTMORTEM.md)
     "resting fills pay $0.02":   ("maker_fee=1", 0, False, 4, "gap"),
     "spread 2c + queue":         ("spread=0.02", 0, True, 4, "gap"),
     "spread 1c + queue":         ("spread=0.01", 0, True, 4, "gap"),

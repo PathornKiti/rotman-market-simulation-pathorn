@@ -57,7 +57,7 @@ hold_valuation = true         # inside close_hold_ticks, value a tender's exit a
 decline_explicitly = true     # official rule: trading a ticker while one of its tenders is still PENDING is
                               # "front-running" (2026: fined $1/share, $2 past 5,000 shares, in real time).
                               # Declining at once closes the window, so unwinds of earlier tenders stay clean.
-# CROWDED TENDERS (docs/HOSTILE_MARKET.md): every desk gets the same block and unwinds it into the same book.
+# CROWDED TENDERS (docs/ARCHITECTURE.md): every desk gets the same block and unwinds it into the same book.
 # Learn from every tender we did NOT take how far the mid runs against its unwind over `crowd_ticks`, per 10k
 # shares; once that is significant (> 2 sd) charge it (crowd_weight x $/10k x size/10k per share) and race it.
 # Corrected sim, 16 seeds: hostile +$11.4k (t 3.9), benign -$0.3k (t -1.0); holdout 101-116: hostile +$14.2k
@@ -71,7 +71,7 @@ crowd_prior_sd = 0.10
 crowd_noise_sd = 0.10         # price noise over the scoring window
 crowd_ticks = 10              # score each tender's crowd reaction this many ticks after it appears
 crowd_weight = 1.0
-# Not added (fresh seeds 201-232, RISK_REVIEW.md "Validation on 201-232"): crowd race on adverse arrival, per-ticker
+# Not added (fresh seeds 201-232, POSTMORTEM.md, risk review): crowd race on adverse arrival, per-ticker
 # crowd impact, crowd position cap. Each worsened the worst seed with tenders priced off the visible price (anchor=1).
 # If the practice rounds show a crowd, set crowd_prior_mean to the learned $/10k (prior sd ~ half of it) instead.
 

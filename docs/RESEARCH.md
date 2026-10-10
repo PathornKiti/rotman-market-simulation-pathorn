@@ -105,7 +105,7 @@ the unwind to 12 ticks once the estimate is > 2 sd from 0. Final version: it lea
 it didn't take (its own unwind's impact is already priced) and charges nothing until the crowd
 is significant. Hostile simulator: +$11.4k (t 3.9), holdout +$14.2k (t 3.0); benign −$0.3k (t −1.0)
 and holdout $0. An ungated version with a 0.06 prior cost −$4.9k (t −3.0) in the benign market.
-Details: [HOSTILE_MARKET.md](HOSTILE_MARKET.md).
+Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Evaluated, not adopted
 
@@ -126,7 +126,7 @@ Details: [HOSTILE_MARKET.md](HOSTILE_MARKET.md).
 | VAMP (depth-weighted, 5,000 shares) and plain mid as fair value (equity) | +$0.1k to +$0.6k vs microprice, t ≤ 1.0 | Not significant. Book sizes in the simulator are random, so depth signals can only be judged in the RIT practice case. Not added. |
 | Equity quote width, size and skew re-tuned under the official-rules simulator (2026-10-07) | 16 seeds: `vol_mult` 1.0/1.25/2.0, `size` 1000–3000, `skew_per_share` 0–1e-5 against 1.5 / 2000 / 3e-6 | Nothing beat the config. Bigger size: −$0.7k to −$2.3k (t −2.7 to −4.6); smaller size: −$1.0k to −$2.2k (t −4.4 to −7.0); stronger skew: −$0.8k to −$1.6k; no skew: −$1.7k with 3 losing seeds. The best row (skew 1.5e-6) was +$124, t 0.3, worse worst seed. Config unchanged. |
 | ETF passive leg with a thin edge (`maker_edge` 0.02) | 16 seeds vs no passive leg | −$1.4k, t −2.1. The fills are thin and use up the risk room the taker arbs need. Wider edges win (kept at 0.15, see CHANGES.md). |
-| Guéant–Lehalle–Fernandez-Tapia quoting / order-flow imbalance (equity) | — | Needs a realistic fill-intensity curve and order flow. The simulator has neither (fixed fill probability at the touch, random book rebuilds), so it can't be validated here. Equity gets the jump guard instead (`docs/RISK.md`). |
+| Guéant–Lehalle–Fernandez-Tapia quoting / order-flow imbalance (equity) | — | Needs a realistic fill-intensity curve and order flow. The simulator has neither (fixed fill probability at the touch, random book rebuilds), so it can't be validated here. Equity gets the jump guard instead (`docs/ARCHITECTURE.md`). |
 
 | Price band on aggressive orders (all cases, hostile sim) | Clamp every IOC limit to the 7-tick median mid ± (2 × median spread + 3 × EWMA tick move) | Commodity −$32 (t −3.5) in both markets; derivatives worst seed $33.7k → $24.4k; liability −$0.6k; ETF +$0.3k (t 1.3). It blocks real moves as often as fake ones. Removed. |
 | Spoof-resistant books (all cases) | Cap each level at 3 × the median level size before every book calculation | ±$50 everywhere (equity hostile +$0.3k, t 1.2). Fake depth behind the touch barely enters walked-VWAP sizing. Removed. |
@@ -178,11 +178,11 @@ volatility; the $ budget crosses more automatically when GARCH sigma is high.
 Note: `--queue` gives the same numbers as the normal market here. The sim's 4-cent spread makes the
 executor step inside the spread, so it is always first in the queue.
 
-### Crowd mitigations from docs/RISK_REVIEW.md, validated on fresh seeds 201-232 (2026-10-10)
+### Crowd mitigations from docs/POSTMORTEM.md, validated on fresh seeds 201-232 (2026-10-10)
 
 Implemented as flags, paired over 32 fresh seeds in 12 scenarios. Benign means base plus the 8 benign stresses;
 "@a" means tenders priced off the visible mid (`RITC_STRESS=anchor=1`, new simulator option). Full table:
-RISK_REVIEW.md, "Validation on 201-232". All four failed and their code was removed; the `anchor` option stays.
+POSTMORTEM.md, "Validation on 201-232". All four failed and their code was removed; the `anchor` option stays.
 
 | Idea | Target scenarios (diff vs config, worst seed) | Benign | Verdict |
 |---|---|---|---|
@@ -195,7 +195,7 @@ The anchored losers lose to crowds that arrive before the crowd gate has evidenc
 the ramp and sells near the permanent level. The fix is operational: set `crowd_prior_mean` from the practice
 rounds if they show a crowd.
 
-### 2026-10-11: gap analysis (docs/GAP_ANALYSIS.md)
+### 2026-10-11: gap analysis (docs/POSTMORTEM.md)
 
 Kept:
 
@@ -214,7 +214,7 @@ Tried, not kept:
 | `hold_risk_budget` 20k / 80k with late answers | \|t\| < 2 everywhere (20k: -$0.5k to -$1.2k) | Unchanged at 40k |
 | Crowd prior 0.05 / 0.10 (sd 0.03) with late answers | +$0.1k to +$1.6k, worst unchanged; base -$0.6k / -$1.4k | Unchanged at 0 |
 | Fixed crowd charge 0.075 (prior sd 0.01, noise 1.0) | late crowd -$6.2k / +$9.6k; base -$41.5k (t -10.4) | Rejected |
-| Head-start playbook (answer at once, 12-tick unwind, no hold) | late crowd: worst -$26.9k → -$9.8k / -$23.5k → +$2.3k, losing 2 → 1 / 5 → 0; base -$34.2k (t -7.5); arrival crowd -$14.2k (t -3.9) | Conditional only: practice evidence of a crowd at EXPIRY (GAP_ANALYSIS.md) |
+| Head-start playbook (answer at once, 12-tick unwind, no hold) | late crowd: worst -$26.9k → -$9.8k / -$23.5k → +$2.3k, losing 2 → 1 / 5 → 0; base -$34.2k (t -7.5); arrival crowd -$14.2k (t -3.9) | Conditional only: practice evidence of a crowd at EXPIRY (POSTMORTEM.md) |
 
 ### 2026-10-11: volatility forecasting / hidden Markov regimes: value-of-information test
 
@@ -267,6 +267,54 @@ from -$39.8k to -$64.7k). 90 sits at the knee and no alternative passes the t >=
 so the config is unchanged; the frontier became risk profiles in PRACTICE_PLAN.md. The paper's other
 transferable idea, WHERE to rest the unwind (fill probability decaying with distance from the mid), needs real
 fill data: `ritc record` now stores time and sales and `calibrate` estimates P(reach d) and kappa per stock.
+
+### 2026-10-10: post-trade review of the eight liability logs ([POSTMORTEM.md](POSTMORTEM.md))
+
+Every log was matched to its simulator seed and the current bot replayed on it; each tender decision was then
+flipped and replayed (skill = every P&L part except inventory moves). Pooled over the five base-market seeds,
+declined private tenders 10c+ inside the mid were worth +$6.3k a heat of skill (5/5), small-edge declines +$4.9k,
+auction bids short of the reserve up to +$2.9k. Candidates, paired on the same seeds (scratch patches, no bot
+code changed):
+
+| Change | Seeds 1-32 (or 1-16) | Fresh / holdout | Hostile (anchored) | Crowd at expiry | Verdict |
+|---|---|---|---|---|---|
+| `refill_factor` 3 + `min_profit_per_share` 0 | +$4.5k (t 3.40) | 101-132: +$3.6k (t 2.99), worst unchanged | +$0.3k / +$1.3k (t 1.97) | -$3.5k (t -1.93), worst -$27k -> -$53k | candidate: gated on the practice crowd check |
+| `refill_factor` 3 | +$3.7k (t 2.83) | +$2.1k (t 2.12) | -$0.3k / +$0.1k | -$1.5k, worst -$27k -> -$44k | weaker than the pair |
+| `min_profit_per_share` 0 | +$1.4k (t 1.81) | +$2.6k (t 2.80) | +$0.6k / +$1.0k | -$1.4k / +$0.1k | fails design t >= 2 |
+| Value the held part of private tenders at the mid (budget split) | +$3.5k (t 1.56) | | +$2.3k (t 1.82) | -$9.3k (t -2.69) | rejected unless no expiry crowd |
+| Value every tender (incl. auctions) at the mid | +$2.1k (t 0.98) | | +$1.7k | -$13.2k (t -3.29) | rejected |
+| Bid auctions off the mid | -$1.2k (t -1.36) | | -$0.5k (t -2.86) | -$3.7k | rejected |
+| Valuation window 420 (valuation only) | +$2.0k (t 1.41) | | $0 | -$1.8k | not significant |
+| Answer tenders in the last 5 s (`wind_down` -> `handle_tenders`, `min_ticks_to_unwind` 1) | +$0.4k (t 1.53) | 33-96: +$0.9k (t 3.14), worst unchanged | $0 / +$0.1k | +$0.4k | passes; not yet in the bot |
+| Answer-deadline safety net (answer if the next loop would miss) | identical at normal speed (33-96, both markets) | | | | 4 ticks/loop +$9.8k (76% -> 99% answered), 5: +$17.8k; passes; not yet in the bot |
+| Rest one tick behind the touch | +$0.2k (t 0.12), worst $20.0k -> -$4.9k | | +$1.2k | +$2.7k | rejected (tail) |
+| Never step inside the spread | +$0.5k (t 0.52), worst $20.0k -> $5.6k | | +$0.3k | +$0.1k | rejected |
+
+The earlier rejection of `refill_factor` 3 was measured in the unanchored hostile market (tenders priced off the
+true mid, the artifact POSTMORTEM.md, risk review describes); in the anchored one it no longer loses. Slow loops
+alone cost -$1.6k (2 ticks per loop), -$9.5k (3), -$22.2k (4), -$37.9k (5) even with every tender answered.
+
+## Baselines and method results
+
+**Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out
+101-116).** Mean / worst over all 32 seeds: liability $45.8k / $23.5k (0 losing), ETF $30.6k / -$1.5k (1),
+derivatives $112.5k / -$1.0k (1), equity $6.0k / -$1.2k (2), commodity $378 / $252 (0). Liability's held-out
+seeds beat its tuning seeds (no sign of overfitting); equity's were worse (the clearest overfit). The
+liability bot has moved on since (CHANGES.md); `ritc report --stress` gives its current numbers.
+
+**Block execution vs always crossing** (liability, 8 seeds): block $49.7k (worst $22.6k, 8/8 wins) vs slice
+$24.1k ($8.2k). Resting children earned 1.5-1.9c/share vs the arrival mid, crossing slices cost 1.8-3.0c.
+
+**Common random numbers for passive fills** (equity, 16 seeds, paired SE): `imbalance_lean` $809 -> $234 (a
+"significant" +$1.7k turned out to be fill luck), `jump_sigmas` $821 -> $137.
+
+**What the hostile market costs** (16 seeds, before defences): liability $25.6k -> $8.6k (-$17.0k, t -3.9, the
+crowd is -$33.5k of it without crowd learning), equity $6.8k -> $1.5k (penny-jumpers -$4.7k), derivatives and
+commodity unchanged, ETF +$12.5k (other arbitrageurs leave 30% of each gap). Liquidity vacuums help resting bots.
+
+**Kill switch calibration** (8 seeds): liability $8k stop -$2.3k, $15k no cost, now off; derivatives $40k stop
+turned seed 11 from +$40.3k into -$14.0k, $80k never trips; equity $4k stop hunted (off: +$951, t 3.0); ETF off
+(a hedged convergence trade is worst exactly when the edge is widest).
 
 ## Reproduce
 

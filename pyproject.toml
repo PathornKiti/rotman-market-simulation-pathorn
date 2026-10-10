@@ -12,6 +12,7 @@ dependencies = ["requests>=2.28"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.4"]
+report = ["openpyxl>=3.1"]    # .xlsx for `ritc report` (the .html needs nothing)
 
 [project.scripts]
 ritc = "ritc.cli:main"
@@ -31,3 +32,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["B905", "B027"]   # B027: optional no-op hooks on Strategy are intentional
+
+[tool.ruff.lint.per-file-ignores]
+"src/ritc/postmortem/html.py" = ["E501"]   # HTML / CSS / SVG template strings
+"src/ritc/postmortem/stress_report.py" = ["E501"]
+"src/ritc/postmortem/bundle.py" = ["E501"]
+"tests/test_postmortem.py" = ["E501"]      # verbatim bot log lines as fixtures

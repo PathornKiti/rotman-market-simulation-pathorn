@@ -15,16 +15,16 @@ case family:
 All five share one tested core: API client, order-book maths, execution, risk limits
 and the run loop. **Time-series models** (GARCH(1,1) volatility, a Kalman fair-value
 level and Ornstein-Uhlenbeck mean reversion) feed the bots where they measurably help.
-See [docs/TIME_SERIES.md](docs/TIME_SERIES.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Speed and execution:** a real-time news/tender feed (~100 ms), parallel market-data
 fetches, and concurrent multi-leg orders. Block trades are worked with a
 passive-then-aggressive iceberg algorithm, which beat an always-aggressive unwind on
 8 of 8 simulator seeds. Every fill is measured against arrival price (TCA), a drawdown
 kill switch with a graduated throttle guards each heat, and every case has its own risk guards
-([docs/RISK.md](docs/RISK.md)). `python -m ritc tune` A/B-tests settings across seeds on a
+([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). `python -m ritc tune` A/B-tests settings across seeds on a
 **lock-step** simulator, so the same seed is the same market for every setting.
-See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Research-grade models**, each adopted only after beating the tuned baseline on the
 reproducible simulator: Almgren–Chriss optimal execution (liability), Bertram optimal
@@ -61,6 +61,32 @@ python -m ritc monitor                     # optional read-only dashboard
 
 Swap `liability` for `derivatives`, `etf`, `equity` or `commodity`.
 
+### After a heat: reports (liability)
+
+```bash
+pip install -e ".[report]"     # openpyxl, for the .xlsx (the .html needs nothing)
+python -m ritc report          # every logs/liability-*.log -> reports/
+python -m ritc report --stress # the current bot through every stress scenario, every seed (simulator)
+```
+
+`ritc run` writes a run journal (`logs/*.jsonl`: every tick's NLV, positions and quotes; every order, tender,
+answer, error and slow loop) next to each log. Each run gets `reports/liability-<date>-<time>_live.html` (RIT
+server) or `_local.html` (simulator) and a matching `.xlsx` laid out like the case's `Liquidity help file.xlsx`:
+P&L path, where it came from, the distribution of what the bot struggled with, gap checks against the brief, and
+for local runs the current bot replayed on the same market. `reports/live-learnings.json` keeps every run's
+numbers for the next review. Details: [docs/POSTMORTEM.md](docs/POSTMORTEM.md).
+
+### Docs
+
+| | |
+|---|---|
+| [RUNBOOK](docs/RUNBOOK.md) | install, set up a real case, competition day, after the heat |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | code, execution, risk controls, models, simulator, fair testing, journal and reports |
+| [OFFICIAL_RULES](docs/OFFICIAL_RULES.md) | what the official case packages say |
+| [ASSUMPTIONS](docs/ASSUMPTIONS.md) · [PRACTICE_PLAN](docs/PRACTICE_PLAN.md) · [POSTMORTEM](docs/POSTMORTEM.md) | liability: assumptions, practice-day plan, reviews and reports |
+| [RESEARCH](docs/RESEARCH.md) · [CHANGES](docs/CHANGES.md) | every experiment with numbers; what changed when, open items |
+| [strategies/](docs/strategies/) | one page per bot |
+
 ## Repository layout
 
 ```
@@ -95,9 +121,11 @@ Swap `liability` for `derivatives`, `etf`, `equity` or `commodity`.
 │   │   ├── equity.py
 │   │   └── commodity.py
 │   ├── tune.py                 # parallel multi-seed parameter search / A-B testing
+│   ├── stress.py               # liability across 23 adverse scenarios
+│   ├── postmortem/             # `ritc report`: log / journal -> reports/*.html + .xlsx
 │   └── sim/server.py           # offline RIT simulator for all five case types
 ├── tests/                      # unit tests for every decision function + end-to-end sim runs
-├── docs/                       # getting started, architecture, competition-day runbook, strategies
+├── docs/                       # runbook, architecture, rules, research, liability reviews, strategies
 └── .github/workflows/ci.yml    # lint + tests on Linux and Windows
 ```
 
@@ -131,7 +159,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | **Pre-trade risk check** | `RiskManager.room()` caps every order at the gross/net room you have left (using 98% of each limit). |
 | **Limit prices rounded the safe way** | Buy limits round down, sell limits round up. |
 | **Clean shutdown** | Ctrl-C or any crash cancels every open order. |
-| **Drawdown kill switch** | `[run] max_drawdown`: once NLV falls this far below its peak, cancel, flatten and stop adding risk. Before that, from `drawdown_soft_start`, new-risk sizes shrink gradually. See [docs/RISK.md](docs/RISK.md). |
+| **Drawdown kill switch** | `[run] max_drawdown`: once NLV falls this far below its peak, cancel, flatten and stop adding risk. Before that, from `drawdown_soft_start`, new-risk sizes shrink gradually. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). |
 | **Cost tracking** | A TCA report at shutdown shows execution cost vs arrival price for each ticker and order style. |
 
 ## Competition day
@@ -159,7 +187,7 @@ python -m ritc tune liability --grid execution.unwind_mode=block,slice --seeds 8
 > The simulator is for checking **logic and plumbing**, not for predicting results. By
 > default its other traders are random noise. `--hostile 1` (on `sim` and `tune`) adds
 > manipulative competitors: pump-and-dumps, spoofing, liquidity vacuums, penny-jumpers
-> and crowded tenders ([docs/HOSTILE_MARKET.md](docs/HOSTILE_MARKET.md)). `--queue` makes
+> and crowded tenders ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). `--queue` makes
 > resting orders queue behind the displayed book (price-time priority) instead of filling
 > first at the touch. Test a change in both markets. Calibrate thresholds in the official
 > RIT practice cases.

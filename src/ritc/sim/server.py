@@ -10,7 +10,7 @@ can prove a bot works end-to-end, tune thresholds and read the logs first:
 
 It is a SIMULATOR, not an emulator. Fills are approximate and the "other
 traders" are noise, unless `--hostile` adds manipulative competitors (pump-and-dump,
-spoofing, liquidity vacuums, penny-jumping, crowded tenders; docs/HOSTILE_MARKET.md).
+spoofing, liquidity vacuums, penny-jumping, crowded tenders; docs/ARCHITECTURE.md).
 Use it to debug logic and plumbing, not to predict a score.
 The tickers it creates match the default files in config/, so both work out of
 the box.
@@ -133,7 +133,7 @@ class Market:
         # book on each tick is drawn from a generator keyed on (seed, tick, ticker, side), not
         # from one sequential stream. With a sequential stream, a setting that rests one more
         # order at the touch shifted every later draw, so two settings got unrelated fill luck
-        # and the A/B difference was mostly noise (paired SE ~2x larger, docs/PERFORMANCE.md).
+        # and the A/B difference was mostly noise (paired SE ~2x larger, docs/ARCHITECTURE.md).
         self.fill_seed = seed if seed is not None else random.getrandbits(32)
         self.case = case
         self.tpp = ticks_per_period
@@ -172,8 +172,8 @@ class Market:
         # flow scales how often passive flow reaches resting orders (default 0.35 per tick and side);
         # anchor=1 prices new tenders (price, reserve, rival) off the VISIBLE mid instead of the true one. Only
         # matters with --hostile: crowd residuals displace the visible mid, and pricing off the true mid hands
-        # the bot a "displacement edge" no real server would (docs/RISK_REVIEW.md section 6).
-        # GAP knobs (docs/GAP_ANALYSIS.md), all off by default: maker_fee=1 charges the $0.02 commission on
+        # the bot a "displacement edge" no real server would (docs/POSTMORTEM.md, risk review).
+        # GAP knobs (docs/POSTMORTEM.md), all off by default: maker_fee=1 charges the $0.02 commission on
         # resting fills too (the brief only says "Commissions $0.02"); spread = the market makers' quoted
         # spread in $ (default 0.04; at 0.01-0.02 our resting orders queue behind theirs with --queue);
         # close_slip = $ the last traded price lands AGAINST whoever still holds at the bell; bell = $ the
@@ -571,7 +571,7 @@ class Market:
         if self.rng.random() < 0.02:                   # occasional informed jump
             s = self.rng.choice(list(self.secs.values()))
             s.mid += self.rng.choice([-1, 1]) * self.rng.uniform(0.10, 0.30)
-        # BLOCK TRANSFERS (DEVLOG item 6): the case assigns market makers an unhedged block at the
+        # BLOCK TRANSFERS (CHANGES.md): the case assigns market makers an unhedged block at the
         # mid, unannounced - the bot only sees its position jump. Whoever dumped it knew something:
         # the price then drifts 2-5 sigma against the holder over 10 ticks. Own generator, so the
         # price path's draws are unchanged; `blocks = False` turns it off.

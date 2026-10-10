@@ -33,6 +33,7 @@ from .book import OrderBook
 from .client import RITClient, RITError
 from .execution import Executor
 from .feed import EventFeed
+from .journal import NULL as NULL_JOURNAL
 from .risk import DrawdownGuard, RiskManager
 
 log = logging.getLogger("ritc.bot")
@@ -217,6 +218,8 @@ class Runner:
         self.on_loop: Callable[[], None] | None = None   # test/tuner hook, e.g. advance a lock-step simulator
         self.latency = LatencyStats()
         self.loops = 0
+        self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
+        self._tick_ms = 0.0
 
     def snapshot(self) -> Snapshot:
         """Case + securities + trader + all prefetch books, in parallel."""
@@ -243,7 +246,16 @@ class Runner:
     def run(self, once: bool = False) -> None:
         log.info("strategy=%s dry_run=%s", self.s.name, self.s.ex.dry_run)
         try:
-            self.trader_id = str(self.client.trader().get("trader_id", ""))
+            trader = self.client.trader()
+            self.trader_id = str(trader.get("trader_id", ""))
+            try:
+                case = self.client.case()
+            except RITError:
+                case = {}
+            self.journal.write("start", strategy=self.s.name, dry_run=self.s.ex.dry_run, trader=self.trader_id,
+                               case=case.get("name"), ticks_per_period=case.get("ticks_per_period"),
+                               periods=case.get("total_periods"),
+                               cfg={k: self.s.cfg.get(k) for k in ("case", "strategy", "execution", "risk")})
         except RITError as exc:
             log.warning("could not read trader id (%s); own orders will not be filtered", exc)
 
@@ -265,6 +277,15 @@ class Runner:
                     snap = self.snapshot()
                     self.s.ex.arrival = snap.mid
                     status = snap.case.get("status")
+                    if snap.tick != self.journal.tick and status == "ACTIVE":
+                        self.journal.tick = snap.tick
+                        self.journal.write(
+                            "tick", period=snap.period, nlv=snap.nlv, pos=snap.positions,
+                            bid={t: v.get("bid") for t, v in snap.securities.items()},
+                            ask={t: v.get("ask") for t, v in snap.securities.items()},
+                            last={t: v.get("last") for t, v in snap.securities.items()},
+                            loop_ms=round(self._tick_ms, 1))           # slowest loop since the last tick
+                        self._tick_ms = 0.0
                     if status != "ACTIVE":
                         if status == "STOPPED" and started:
                             log.info("case stopped - exiting")
@@ -300,14 +321,17 @@ class Runner:
                 except RITError as exc:
                     errors += 1
                     log.warning("API error (%d/%d): %s", errors, self.max_errors, exc)
+                    self.journal.write("error", where="loop", n=errors, msg=str(exc)[:300])
                     if errors >= self.max_errors:
                         raise
 
                 ms = 1000 * (time.monotonic() - t0)
                 self.latency.add(ms)
+                self._tick_ms = max(self._tick_ms, ms)
                 self.loops += 1
                 if ms > self.slow_loop_ms:
                     log.warning("slow loop: %.0f ms (market may have moved under you)", ms)
+                    self.journal.write("slow_loop", ms=round(ms))
                 if self.loops % 200 == 0:
                     log.info("%s%s", self.latency, f", feed {feed.latency_ms:.0f} ms" if feed else "")
                 if self.loops % 20 == 0:
@@ -336,3 +360,12 @@ class Runner:
                 log.info("%s over %d loops", self.latency, self.loops)
             if not self.s.ex.dry_run:
                 log.info("\n%s", self.s.ex.tca.report())
+            try:
+                nlv = self.client.trader().get("nlv")
+            except RITError:
+                nlv = None
+            self.journal.write("end", nlv=nlv, loops=self.loops, p50=self.latency.pct(0.5),
+                               p95=self.latency.pct(0.95), max=self.latency.pct(1.0),
+                               tca=[{"ticker": t, "style": st_, "qty": a.qty, "cost": a.cost}
+                                    for (t, st_), a in self.s.ex.tca.summary().items()])
+            self.journal.close()

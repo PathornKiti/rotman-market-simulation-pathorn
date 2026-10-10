@@ -70,4 +70,4 @@ from the brief, and confirm `parse_vol_news` reads the first headline (`doctor` 
 
 ## Time series
 
-`OnlineGarch` tracks the underlying and forecasts volatility over each option's remaining life. It is used before the first volatility headline. Blending it with the news (`garch_weight`) lost money in the simulator because the news is exact. See [TIME_SERIES.md](../TIME_SERIES.md).
+`OnlineGarch` tracks the underlying and forecasts volatility over each option's remaining life. It is used before the first volatility headline. Blending it with the news (`garch_weight`) lost money in the simulator because the news is exact. See [ARCHITECTURE.md](../ARCHITECTURE.md).

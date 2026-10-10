@@ -80,7 +80,7 @@ mean > 2 sd, `crowd_gate`) it charges
 
 in `evaluate_tender`, and the unwind races it: the schedule shortens to
 `crowd_horizon_ticks`. With no crowd the gate never opens and nothing changes
-(docs/HOSTILE_MARKET.md).
+(docs/ARCHITECTURE.md).
 """
 
 from __future__ import annotations
@@ -292,6 +292,7 @@ class LiabilityStrategy(Strategy):
         self.pending: dict[int, tuple[str, int, int]] = {}
         self.bidding: dict[int, tuple[str, int]] = {}    # our open auction bids: id -> (ticker, abs expiry tick)
         self.frozen: set[str] = set()                   # tickers with an undecided tender (respect_windows)
+        self.journaled: set[int] = set()                # tenders already written to the run journal
 
     @property
     def book_tickers(self) -> list[str]:
@@ -455,6 +456,15 @@ class LiabilityStrategy(Strategy):
             if tid in self.seen or ticker is None:
                 continue
             book = snap.book(ticker)
+            if tid not in self.journaled:
+                self.journaled.add(tid)
+                self.ex.journal.write(
+                    "tender_seen", tid=tid, action=t.get("action"), ticker=ticker, qty=t.get("quantity"),
+                    price=t.get("price"), fixed=t.get("is_fixed_bid", True), expires=t.get("expires"),
+                    caption=t.get("caption"), bid=book.best_bid, ask=book.best_ask, mid=book.mid,
+                    bid_depth10=book.depth("bid", (book.best_bid or 0) - 0.10) if book.best_bid else 0,
+                    ask_depth10=book.depth("ask", (book.best_ask or 0) + 0.10) if book.best_ask else 0,
+                    pos=positions.get(ticker, 0))
             if self.crowd_learn and snap.mid(ticker) is not None and tid not in self.observed:
                 self.observed.add(tid)
                 # The price runs AGAINST our unwind: down after a BUY tender (we must sell).
@@ -484,11 +494,16 @@ class LiabilityStrategy(Strategy):
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
                      t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline", d.reason)
+            self.ex.journal.write("tender_decision", tid=tid, accept=d.accept, price=d.price, pps=d.profit_per_share,
+                                  exit_vwap=d.unwind_vwap, reason=d.reason, mid=book.mid, bid=book.best_bid,
+                                  ask=book.best_ask, ticks_left=snap.ticks_left, expires=t.get("expires"),
+                                  pos=positions.get(ticker, 0), dry_run=self.ex.dry_run)
             if self.ex.dry_run:
                 continue
             try:
                 if d.accept:
                     resp = self.client.accept_tender(tid, None if t.get("is_fixed_bid", True) else d.price)
+                    self.ex.journal.write("tender_answer", tid=tid, answer="accept", resp=resp)
                     if not t.get("is_fixed_bid", True) and self.p.get("freeze_rejected_bids", True):
                         # A bid is in the auction until the window closes, whatever the immediate reply says:
                         # the award is only final at expiry, so trading the stock before then is front-running.
@@ -508,8 +523,10 @@ class LiabilityStrategy(Strategy):
                         self.pending[tid] = (ticker, sign * int(t["quantity"]), now + wait)
                 elif self.p.get("decline_explicitly", True):
                     self.client.decline_tender(tid)
+                    self.ex.journal.write("tender_answer", tid=tid, answer="decline")
             except Exception as exc:       # tender may have expired between read and accept
                 log.warning("tender %s action failed: %s", tid, exc)
+                self.ex.journal.write("tender_answer", tid=tid, answer="failed", msg=str(exc)[:300])
 
     def unwind(self, snap: Snapshot) -> None:
         if self.mode == "block":

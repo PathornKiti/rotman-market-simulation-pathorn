@@ -8,13 +8,30 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
+## 2026-10-10: post-trade gap reports (`python -m ritc report`)
+
+`src/ritc/postmortem/` turns each `logs/liability-*.log` into `reports/liability-<date>-<time>_<local|live>.html`
+and a matching `.xlsx` (laid out like the case's `Liquidity help file.xlsx`, with a fixed and extended live RTD
+sheet), plus `reports/index.html`. Local runs are matched to their simulator seed, so each report shows the true
+mid, hidden auction reserves, a replay of the current bot on the same market with an exact P&L decomposition, and
+what each tender decision was worth. Findings and tested fixes: [POSTMORTEM.md](POSTMORTEM.md); numbers:
+[RESEARCH.md](RESEARCH.md). No trading code changed: two small changes passed (answer tenders in the last 5 s;
+an answer-deadline safety net) and one config pair (`refill_factor` 3, `min_profit_per_share` 0) waits for the
+practice-day crowd check. Optional dependency: `pip install -e ".[report]"` (openpyxl).
+
+Later the same day: a **run journal** (`core/journal.py`; `ritc run` writes `logs/*.jsonl` next to the log) so live
+RIT runs get a P&L path, a P&L split and a struggle distribution in their `_live` report, plus
+`reports/live-learnings.json` across runs; `ritc report --stress` (every stress scenario, every seed, with the
+official template and each heat's bot log, in one .html / .xlsx / .json); docs merged from 23 files to 13 (RUNBOOK, ARCHITECTURE, POSTMORTEM,
+RESEARCH, CHANGES absorbed the rest).
+
 ## 2026-10-09 → 2026-10-11: Liquidity Risk Case, "for selection 2027" brief (`liability` bot)
 
 The official brief for this week's trading (`document/Liquidity Risk Case - for selection 2027.pdf`) replaced
 the 2026 rules: 420 s, CRZY $10 / TAME $25 / CROC $20, $0.02 fees, max orders 25k / 10k / 20k, limits
 250k gross / **100k net**, speculation and front-running fined **$0.20/share (first 5k), $0.40 after**, and open
-positions closed at the last traded price with **no fine**. Details: [GAP_ANALYSIS.md](GAP_ANALYSIS.md),
-[RISK_REVIEW.md](RISK_REVIEW.md), [RESEARCH.md](RESEARCH.md); Sunday checklist: [PRACTICE_PLAN.md](PRACTICE_PLAN.md).
+positions closed at the last traded price with **no fine**. Details: [POSTMORTEM.md](POSTMORTEM.md),
+[POSTMORTEM.md](POSTMORTEM.md), [RESEARCH.md](RESEARCH.md); Sunday checklist: [PRACTICE_PLAN.md](PRACTICE_PLAN.md).
 
 **Kept** (paired t ≥ 2 on design seeds, confirmed on fresh seeds):
 
@@ -106,7 +123,7 @@ was intercepting loopback HTTP and stretched a run to 12 minutes.
   when the client sells). The reserve is now also random per tender (0–15 cents through the mid,
   own generator). The liability baseline (crowd learning off) drops from $42.1k to **$25.6k**
   (benign): the old number included near-free auction wins.
-* **Equity block transfers** (DEVLOG item 6): about 3 times a heat, the case assigns an
+* **Equity block transfers** (CHANGES.md): about 3 times a heat, the case assigns an
   unannounced 5k–15k share block at the mid. The price then drifts 2–5 σ against the holder
   over 10 ticks. The equity baseline drops from $6.8k to **$1.9k** (benign). This assumes the real
   case does this. If the brief says it doesn't, set `blocks = False` in the sim state, and
@@ -117,7 +134,7 @@ was intercepting loopback HTTP and stretched a run to 12 minutes.
 its own unwind looked like a crowd, and the old auctions had hidden that. The fix is to learn
 only from tenders not taken and charge only once the crowd is significant (`crowd_untaken_only`,
 `crowd_gate`, prior 0, weight 1). Results: hostile **+$11.4k, t 3.9** / holdout **+$14.2k, t 3.0**;
-benign −$0.3k (t −1.0) / holdout **$0**. Details in HOSTILE_MARKET.md.
+benign −$0.3k (t −1.0) / holdout **$0**. Details in ARCHITECTURE.md.
 
 | Case (16 seeds, benign / hostile) | Before today | Now |
 |---|---|---|
@@ -154,7 +171,7 @@ The simulator's other traders were noise. In the real heat every team is a marke
 and any of them can manipulate. `--hostile 1` (sim and tune) adds pump-and-dumps,
 spoofing, liquidity vacuums, penny-jumping competitors, crowded tenders and competing ETF
 arbitrageurs. `--hostile 0` (the default) is exactly the old market, so every earlier
-baseline still stands. Full write-up: [HOSTILE_MARKET.md](HOSTILE_MARKET.md).
+baseline still stands. Full write-up: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Case | Benign → hostile, before defences (16 seeds) |
 |---|---|
@@ -167,7 +184,7 @@ baseline still stands. Full write-up: [HOSTILE_MARKET.md](HOSTILE_MARKET.md).
 |---|---|---|---|
 | Liability crowd learning, first version (prior 0.06 $/10k, weight 1.5, adaptive 12-tick race). **Superseded**: these numbers used the old, buggy auction rules. The gated version above replaces it. | **+$33.7k, t 5.1, 16/16**; worst −$10.3k → +$12.9k; 0 losing seeds | **+$51.3k, t 7.2, 16/16**; worst −$13.1k → +$34.3k | +$3.3k (t 1.3) / +$1.4k (t 0.6) |
 
-Removed (no improvement, code deleted; numbers in HOSTILE_MARKET.md and RESEARCH.md):
+Removed (no improvement, code deleted; numbers in ARCHITECTURE.md and RESEARCH.md):
 price band on aggressive orders, spoof-capped book depth, equity queue fighting,
 toxicity-adaptive spreads, hold-on-dislocation, stronger equity skew under hostile, and an
 equity kill switch re-tune (not significant).
@@ -228,7 +245,7 @@ The size of the edge must be checked in the RIT practice case.
 ## Previous baseline (fair backtest, 16 seeds, pre-official-rules)
 
 Since 2026-10-05, passive fills in the simulator use common random numbers (see
-[PERFORMANCE.md §5](PERFORMANCE.md)): every setting compared meets the same order flow.
+[ARCHITECTURE.md §5](ARCHITECTURE.md)): every setting compared meets the same order flow.
 The tables further down were measured on 8 seeds under the old sequential fills, so their
 small differences are within noise. Use these numbers as the reference from now on.
 
@@ -359,3 +376,16 @@ the large moves (derivatives and ETF going from losing to winning) are meaningfu
    `python -m ritc tune liability --grid execution.ac_risk_aversion=...`
 3. Bertram (ETF) and Bayesian impact (commodity) re-fit themselves live. Check their log
    lines (`BERTRAM`, `IMPACT`) in practice.
+
+## Open items
+
+Practice server (liability, measured with `ritc record` + `ritc calibrate`, see PRACTICE_PLAN.md): is the close at
+the last price free; do resting orders fill and how far trades reach; is there a crowd and does it hit at arrival
+or expiry (private tenders vs auctions); real windows, `expires` semantics and booking delay; real vol / depth /
+tender edges to recalibrate the simulator; the `/limits` name (brief: LIMIT-STOCK). Waiting for a decision:
+answer tenders in the last 5 s and the answer-deadline safety net (both passed, POSTMORTEM.md);
+`refill_factor` 3 + `min_profit_per_share` 0 (gated on the crowd check).
+
+Other cases: derivatives seed 3 (-$1.8k) and `exit_edge` 0.01 vs 0 (settle on 48 seeds); rescale every
+`max_drawdown` and `ac_risk_aversion` to the real case's P&L; A/B equity `imbalance_lean` and `vol_model = "garch"`
+on the real book; a CAPM / news case would need a new strategy.
