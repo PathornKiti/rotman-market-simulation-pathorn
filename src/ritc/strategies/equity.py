@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from ..core.book import OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..core.execution import QuoteManager
+from ..pricing.news import parse_position_limit
 from ..pricing.stats import ReturnVol
 from ..pricing.timeseries import FairValueModel, OnlineGarch
 
@@ -109,6 +110,28 @@ def is_jump(prev_mid: float | None, mid: float | None, vol: float, k: float, flo
     return abs(mid - prev_mid) > max(k * vol, floor)
 
 
+def ticks_to_close(tick: int, every: int) -> int:
+    """Ticks until the next market close (0 = this tick is a close: 60, 120, ...)."""
+    return -tick % every
+
+
+def close_cuts(positions: dict[str, int], limit: float) -> list[tuple[str, str, int]]:
+    """
+    Orders that bring the aggregate position (sum of |position|) down to `limit`, largest
+    positions first: every share over the limit at a close costs the same fine, and cutting the
+    biggest inventory also cuts the most overnight-news risk.
+    """
+    excess = sum(abs(q) for q in positions.values()) - limit
+    out = []
+    for t, q in sorted(positions.items(), key=lambda kv: -abs(kv[1])):
+        if excess <= 0 or not q:
+            break
+        n = int(min(abs(q), excess))
+        out.append((t, "SELL" if q > 0 else "BUY", n))
+        excess -= n
+    return out
+
+
 def inventory_reduction(inventory: int, hard: int, clip: int) -> tuple[str, int] | None:
     """Past the hard limit, cross the spread to get back under it."""
     if abs(inventory) <= hard:
@@ -151,6 +174,18 @@ class EquityStrategy(Strategy):
         self.block_slippage = float(s.get("block_slippage", 0.03))
         self.prev_pos: dict[str, int] | None = None
         self.reduced: set[str] = set()           # tickers we crossed on last loop (not a block)
+        # MARKET CLOSES (RITC 2026): every `close_every` ticks the aggregate position, sum of |position|
+        # over every stock, is checked against a limit announced by news: $10 per share over it. From
+        # `close_lead` ticks before a close we only quote the side that shrinks inventory; from
+        # `close_cross` ticks before, we cross the spread for whatever is still over
+        # `close_buffer` x limit. `aggregate_limit` is used until the news announces one. 0 = off.
+        self.close_every = int(s.get("close_every", 0))
+        self.close_lead = int(s.get("close_lead", 5))
+        self.close_cross = int(s.get("close_cross", 2))
+        self.close_buffer = float(s.get("close_buffer", 0.9))
+        self.close_slippage = float(s.get("close_slippage", 0.05))
+        self.agg_limit = int(s.get("aggregate_limit", 15000))
+        self.wants_news = self.close_every > 0
 
     @property
     def book_tickers(self) -> list[str]:
@@ -165,6 +200,17 @@ class EquityStrategy(Strategy):
         self.last_tick = snap.tick
         if self.block_cut:
             self.cut_blocks(snap, positions)
+        closing = False
+        if self.close_every:
+            for n in self.new_news():
+                lim = parse_position_limit(f"{n.get('headline', '')} {n.get('body', '')}")
+                if lim:
+                    log.info("AGGREGATE LIMIT %d shares at each close", lim)
+                    self.agg_limit = lim
+            left = ticks_to_close(snap.tick, self.close_every)
+            closing = left <= self.close_lead
+            if left <= self.close_cross:
+                self.meet_close(snap, positions)
         for t in self.tickers:
             book = snap.book(t)
             if new_tick:
@@ -201,9 +247,25 @@ class EquityStrategy(Strategy):
                 bid_sz = self.sized(bid_sz) // 100 * 100
             if inv <= 0:
                 ask_sz = self.sized(ask_sz) // 100 * 100
+            if closing:              # into a close: only the side that shrinks inventory, no further
+                bid_sz = min(bid_sz, max(0, -inv)) // 100 * 100
+                ask_sz = min(ask_sz, max(0, inv)) // 100 * 100
             self.qm.sync(t, "BUY", q.bid, bid_sz, open_ids)
             self.qm.sync(t, "SELL", q.ask, ask_sz, open_ids)
             log.debug("%s inv %+d fair %.3f res %.3f  %s x %s", t, inv, q.fair, q.reservation, q.bid, q.ask)
+
+    def meet_close(self, snap: Snapshot, positions: dict[str, int]) -> None:
+        """Cross the spread for every share still over the aggregate limit (with a buffer)."""
+        stocks = {t: q for t, q in positions.items()
+                  if snap.securities.get(t, {}).get("type", "STOCK") == "STOCK"}
+        for t, action, qty in close_cuts(stocks, self.close_buffer * self.agg_limit):
+            book = snap.book(t)
+            touch = book.best_bid if action == "SELL" else book.best_ask
+            if touch:
+                log.info("CLOSE %s %+d -> %s %d (aggregate limit %d)", t, positions[t], action, qty, self.agg_limit)
+                self.reduced.add(t)
+                self.ex.limit(t, action, qty, touch - self.close_slippage if action == "SELL"
+                              else touch + self.close_slippage)
 
     def cut_blocks(self, snap: Snapshot, positions: dict[str, int]) -> None:
         prev, reduced = self.prev_pos, self.reduced

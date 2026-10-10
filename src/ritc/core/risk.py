@@ -89,6 +89,17 @@ class RiskManager:
                 if row.get("net_limit"):
                     g.net = min(g.net, float(row["net_limit"]))
 
+    def add_ticker(self, ticker: str, weight: float = 1.0) -> None:
+        """
+        Count a ticker found at run time (a sub-heat with new stocks). A ticker no group weighs
+        has unlimited room, so it joins every per-ticker group (one with `weights`) at `weight`.
+        """
+        if any(g.weight(ticker) for g in self.groups):
+            return
+        for g in self.groups:
+            if g.weights:
+                g.weights[ticker] = weight
+
     def room(self, ticker: str, action: str, positions: dict[str, int]) -> int:
         """Max additional units of `ticker` we can trade in `action` direction."""
         if self.halted:

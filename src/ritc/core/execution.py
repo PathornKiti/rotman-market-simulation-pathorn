@@ -191,9 +191,12 @@ class QuoteManager:
     Every cancel/replace costs queue priority and API budget, so don't churn.
     """
 
-    def __init__(self, executor: Executor, tolerance: float = 0.01):
+    def __init__(self, executor: Executor, tolerance: float = 0.01, never_larger: bool = False):
         self.ex = executor
         self.tolerance = tolerance
+        # Never leave a resting order BIGGER than asked for (block unwinds: the excess would take the
+        # position through zero, and the liability case fines every share that opens a position).
+        self.never_larger = never_larger
         self.live: dict[tuple[str, str], Quote] = {}
 
     def sync(self, ticker: str, side: str, price: float | None, quantity: int,
@@ -210,7 +213,8 @@ class QuoteManager:
                     self.ex.cancel(cur.order_id)
                 self.live.pop(key, None)
             return
-        if cur and abs(cur.price - price) < self.tolerance and abs(cur.quantity - quantity) < max(1, quantity // 4):
+        if (cur and abs(cur.price - price) < self.tolerance and abs(cur.quantity - quantity) < max(1, quantity // 4)
+                and not (self.never_larger and cur.quantity > quantity)):
             return
         if cur and cur.order_id is not None:
             self.ex.cancel(cur.order_id)

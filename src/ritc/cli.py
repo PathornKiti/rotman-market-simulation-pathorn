@@ -9,6 +9,9 @@ Command-line entry point.
     python -m ritc run <case>                   # DRY RUN (logs decisions, sends nothing)
     python -m ritc run <case> --live            # trade
     python -m ritc tune <case> --grid section.key=a,b --seeds 8   # A/B test on the simulator
+    python -m ritc stress [--only gap]          # liability bot across every adverse scenario
+    python -m ritc record                       # READ-ONLY: record a practice heat to logs/record-*.jsonl
+    python -m ritc calibrate logs/record-*.jsonl  # measured vol / depth / tenders / booking delay
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 from .core import config
 from .core.bot import Context, Runner
@@ -69,8 +73,10 @@ def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = 
 
 def cmd_run(a: argparse.Namespace) -> int:
     path = setup_logging(a.case, a.verbose)
-    runner, _ = build(a.case, a.config, a.live)
-    print(f"log file: {path}")
+    from .tune import parse_value
+    sets = {k.strip(): parse_value(v.strip()) for k, _, v in (x.partition("=") for x in a.set or [])}
+    runner, _ = build(a.case, a.config, a.live, overrides=sets)
+    print(f"log file: {path}" + (f"  overrides: {sets}" if sets else ""))
     if not runner.s.ex.dry_run:
         print(">>> LIVE TRADING - Ctrl-C cancels all orders and stops <<<")
     try:
@@ -173,12 +179,79 @@ def cmd_monitor(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stress(a: argparse.Namespace) -> int:
+    from .stress import print_table, stress
+    from .tune import parse_value
+    sets = {k.strip(): parse_value(v.strip()) for k, _, v in (x.partition("=") for x in a.set or [])}
+    seeds = range(a.first_seed, a.first_seed + a.seeds)
+    print(f"stress: seeds {seeds.start}-{seeds.stop - 1}" + (f", overrides {sets}" if sets else "")
+          + (f", only {a.only}" if a.only else ""), flush=True)
+    if a.sweep:
+        from .stress import print_frontier, sweep
+        key, _, vals = a.sweep.partition("=")
+        values = [parse_value(v.strip()) for v in vals.split(",") if v.strip()]
+        print_frontier(key.strip(), sweep(seeds, key.strip(), values, a.only, sets, a.config, a.workers))
+        return 0
+    print_table(stress(seeds, a.only, sets, a.template, a.config, a.workers, a.out))
+    return 0
+
+
+def cmd_record(a: argparse.Namespace) -> int:
+    from .recorder import record
+    print(f"saved {record(a.out, a.interval)}")
+    return 0
+
+
+def cmd_calibrate(a: argparse.Namespace) -> int:
+    import glob
+
+    from .recorder import calibrate, print_report
+    paths = [p for f in a.files for p in (sorted(glob.glob(f)) or [f])]     # Windows cmd doesn't expand *
+    reps = []
+    for path in paths:
+        rep = calibrate(path)
+        print_report(rep)
+        reps.append(rep)
+        if a.json:
+            Path(a.json).write_text(json.dumps(rep, indent=2))
+    if len(reps) > 1:
+        from .recorder import print_crowd, summarise_crowd
+        pooled: dict[str, list[float]] = {}
+        for rep in reps:
+            for key, y in rep.get("crowd_raw", {}).items():
+                pooled.setdefault(key, []).extend(y)
+        print(f"\nPOOLED crowd event study over {len(reps)} recordings (decide on these, not on one heat):")
+        print_crowd(summarise_crowd(pooled))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ritc", description="RITC trading bots")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="list strategies").set_defaults(fn=cmd_list)
     sub.add_parser("doctor", help="check the API connection").set_defaults(fn=cmd_doctor)
+    st_ = sub.add_parser("stress", help="liability: the bot across every adverse scenario (docs/GAP_ANALYSIS.md)")
+    st_.add_argument("--seeds", type=int, default=16)
+    st_.add_argument("--first-seed", type=int, default=1)
+    st_.add_argument("--only", help="comma-separated groups (core / hostile / gap) and/or scenario names")
+    st_.add_argument("--sweep", metavar="SECTION.KEY=V1,V2,...",
+                     help="fine tuning: run the scenarios once per value and print P&L vs inventory risk")
+    st_.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE", help="config override for the bot")
+    st_.add_argument("--template", action="store_true", help="also run the official tender template")
+    st_.add_argument("--config")
+    st_.add_argument("--workers", type=int)
+    st_.add_argument("--out", help="write the table and every run to this JSON file")
+    st_.set_defaults(fn=cmd_stress)
+    rc = sub.add_parser("record", help="READ-ONLY: record a practice heat (books, tenders, positions)")
+    rc.add_argument("--out", help="output .jsonl (default logs/record-<time>.jsonl)")
+    rc.add_argument("--interval", type=float, default=0.5,
+                    help="seconds between snapshots (raise to 1 if the bot log shows `rate limited`)")
+    rc.set_defaults(fn=cmd_record)
+    ca = sub.add_parser("calibrate", help="measure vol / depth / tenders / booking delay from a recording")
+    ca.add_argument("files", nargs="+")
+    ca.add_argument("--json", help="also write the full report (incl. every tender) to this file")
+    ca.set_defaults(fn=cmd_calibrate)
 
     m = sub.add_parser("monitor", help="read-only dashboard")
     m.add_argument("--interval", type=float, default=1.0)
@@ -194,6 +267,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("case", choices=sorted(REGISTRY))
     r.add_argument("--live", action="store_true", help="send real orders")
     r.add_argument("--config", help="path to a TOML config (default config/<case>.toml)")
+    r.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE",
+                   help="override one config value for this run, e.g. --set strategy.min_profit_per_share=0.05")
     r.add_argument("--once", action="store_true", help="run a single loop then exit")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(fn=cmd_run)

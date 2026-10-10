@@ -102,3 +102,19 @@ def parse_inventory_news(text: str) -> InventoryNews | None:
 def first_number(text: str) -> float | None:
     m = re.search(r"-?\d+(?:,\d{3})*(?:\.\d+)?", text)
     return float(m.group(0).replace(",", "")) if m else None
+
+
+def parse_position_limit(text: str) -> int | None:
+    """
+    The market-making case's aggregate position limit, announced by news at the start of a heat
+    (RITC 2026: |SPNG| + |SMMR| + |ATMN| + |WNTR| at every market close). The exact wording is not
+    published, so: any item that mentions a position limit (not a delta limit) gives its largest
+    share count of at least 1,000, e.g. "The aggregate position limit for this week is 15,000 shares".
+    """
+    t = " ".join(text.split())
+    if not re.search(r"position\s+limit|limit\s+on\s+(?:your\s+)?(?:aggregate\s+)?position", t, re.I) \
+            or re.search(r"delta\s+limit", t, re.I):
+        return None
+    sizes = [int(x.replace(",", "")) for x in re.findall(r"\d[\d,]*", t)]
+    sizes = [n for n in sizes if n >= 1000]
+    return max(sizes) if sizes else None

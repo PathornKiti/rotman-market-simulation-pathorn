@@ -46,6 +46,10 @@ TICK = 0.01
 QUEUE_CANCEL = 0.2
 
 
+EQUITY_CLOSE_TICKS = 60         # market-making case: each minute is one trading day
+EQUITY_OVER_LIMIT_FINE = 10.0   # $ per share over the aggregate limit at each close
+
+
 def delta_penalty(delta: float, limit: float, pct: float) -> float:
     """Official volatility-case fine for one second: (|delta| - limit) x pct when over the limit."""
     return max(0.0, abs(delta) - limit) * pct
@@ -74,10 +78,11 @@ class Sec:
     asks: list[list[float]] = field(default_factory=list)
     tradeable: bool = True
     hist: list[dict] = field(default_factory=list)
+    tas: list[dict] = field(default_factory=list)   # time and sales: market flow at the touch + our fills
 
     def rebuild(self, rng: random.Random, levels: int = 10) -> None:
         tk, nd = self.tick, max(2, round(-math.log10(self.tick)))
-        half = max(self.spread / 2, tk)
+        half = max(self.spread / 2, tk / 2)        # a 1-tick spread is possible (stress spread=0.01)
         bb = math.floor((self.mid - half) / tk + 1e-9) * tk
         ba = math.ceil((self.mid + half) / tk - 1e-9) * tk
         if ba <= bb:
@@ -142,6 +147,7 @@ class Market:
         self.done_orders: list[dict] = []
         self.news: list[dict] = []
         self.tenders: dict[int, dict] = {}
+        self.bookings: list[tuple[int, dict, float]] = []   # (abs tick due, tender, price): accepted, not booked
         self.limits: list[dict] = []
         self.ids = itertools.count(1)
         self.lock = threading.RLock()
@@ -159,6 +165,30 @@ class Market:
         self.crowded: set[int] = set()               # tender ids the crowd has already reacted to
         # Which threats are on (for attributing damage): RITC_HOSTILE_THREATS="pump,spoof,vacuum,jump,crowd"
         self.threats = set((os.environ.get("RITC_HOSTILE_THREATS") or "pump,spoof,vacuum,jump,crowd").split(","))
+        # LIQUIDITY-CASE STRESS (the brief's unknowns), e.g. RITC_STRESS="vol=2,depth=0.5,edge=-0.1".
+        # vol/depth/size multiply sigma, book depth, tender size; edge shifts the tenders' edge ($/share);
+        # gap = mean ticks between tenders; book = booking delay in ticks; strict_fr=1 fines EVERY trade in
+        # a ticker while one of its tenders is undecided (auction bids stay undecided until expiry);
+        # flow scales how often passive flow reaches resting orders (default 0.35 per tick and side);
+        # anchor=1 prices new tenders (price, reserve, rival) off the VISIBLE mid instead of the true one. Only
+        # matters with --hostile: crowd residuals displace the visible mid, and pricing off the true mid hands
+        # the bot a "displacement edge" no real server would (docs/RISK_REVIEW.md section 6).
+        # GAP knobs (docs/GAP_ANALYSIS.md), all off by default: maker_fee=1 charges the $0.02 commission on
+        # resting fills too (the brief only says "Commissions $0.02"); spread = the market makers' quoted
+        # spread in $ (default 0.04; at 0.01-0.02 our resting orders queue behind theirs with --queue);
+        # close_slip = $ the last traded price lands AGAINST whoever still holds at the bell; bell = $ the
+        # price moves in the last 20 s per 50k shares of net tender flow of the previous 90 s, against
+        # its holders (other desks dumping the same blocks at the end). crowd_at_expiry=1 (with --hostile):
+        # the crowd unwinds when each tender's window CLOSES (other desks answer late too), not on arrival.
+        # vol_regime=K: each stock's volatility follows a hidden 2-state Markov chain, calm (x0.5) or turbulent
+        # (xK), switching with probability 1/50 per tick (the world a vol-regime / HMM model is built for).
+        self.stress = {"vol": 1.0, "depth": 1.0, "edge": 0.0, "size": 1.0, "gap": 12.0, "book": 1.0,
+                       "strict_fr": 0.0, "flow": 1.0, "anchor": 0.0, "maker_fee": 0.0, "spread": 0.04,
+                       "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0}
+        for kv in filter(None, (os.environ.get("RITC_STRESS") or "").split(",")):
+            k, _, v = kv.partition("=")
+            self.stress[k.strip()] = float(v)
+        self.bid_windows: dict[int, tuple[str, int]] = {}   # auction bids: tid -> (ticker, expires)
         # QUEUE MODE (off = the old fill model, unchanged): price-time priority against the displayed
         # book. A resting order joins BEHIND the shares already shown at its price; passive flow eats
         # that queue first. Improving the touch puts us first. `ahead` = shares in front of each order.
@@ -171,9 +201,23 @@ class Market:
 
     # ===================================================== case universes
     def _setup_liability(self) -> None:
-        for t, px in (("CRZY", 25.0), ("TAME", 40.0)):
-            self.secs[t] = Sec(t, px, spread=0.04, lot=2000, sigma=0.025, fee=0.02, impact=2e-6, max_trade=10_000)
-        self.limits = [{"name": "equity", "gross": 0, "net": 0, "gross_limit": 250_000, "net_limit": 150_000}]
+        # Liquidity Risk Case, 2027 selection brief: CRZY $10 high vol / medium-low liquidity, TAME $25
+        # medium vol / medium-high liquidity, CROC $20 high vol / "varied" liquidity; $0.02 fees; max
+        # orders 25k/10k/20k; 250k gross / 100k net. Vol and depth numbers are our guesses at "high" etc.
+        for t, px, sigma, lot, impact, mx in (("CRZY", 10.0, 0.02, 1200, 4e-6, 25_000),
+                                              ("TAME", 25.0, 0.025, 3000, 1.5e-6, 10_000),
+                                              ("CROC", 20.0, 0.04, 2000, 2.5e-6, 20_000)):
+            self.secs[t] = Sec(t, px, spread=self.stress["spread"], lot=int(lot * self.stress["depth"]),
+                               sigma=sigma * self.stress["vol"], fee=0.02, impact=impact / self.stress["depth"],
+                               max_trade=mx)
+        self.state["base_lot"] = {t: s.lot for t, s in self.secs.items()}
+        self.state["tender_log"] = []          # (abs tick, ticker, signed shares the holder must unwind)
+        self.state["base_sigma"] = {t: s.sigma for t, s in self.secs.items()}
+        self.state["vol_hi"] = {t: False for t in self.secs}
+        self.state["crowd_due"] = []           # (expires, id, tender): crowd_at_expiry stress
+        self.state["spec_shares"] = 0
+        self.state["limit_rejects"] = 0
+        self.limits = [{"name": "equity", "gross": 0, "net": 0, "gross_limit": 250_000, "net_limit": 100_000}]
 
     def _setup_etf(self) -> None:
         # Official Algo case (RITC 2019/2020/2023): BULL $10 + BEAR $15 in CAD, RITC $25 quoted in USD,
@@ -195,9 +239,16 @@ class Market:
         return (self.secs["BULL"].mid + self.secs["BEAR"].mid) / self.secs["USD"].mid
 
     def _setup_equity(self) -> None:
-        for t, px, sg in (("SPNG", 15.0, 0.02), ("SMMR", 25.0, 0.03), ("ATMN", 30.0, 0.04)):
-            self.secs[t] = Sec(t, px, spread=0.06, sigma=sg, fee=0.02, rebate=0.01, lot=1000)
+        # Official Algo Market Making case (RITC 2026): four stocks starting at $25, $0.02/share taker fee,
+        # a different passive rebate on each. Volatilities are not published (a guess).
+        for t, sg, rebate in (("SPNG", 0.02, 0.01), ("SMMR", 0.03, 0.02), ("ATMN", 0.04, 0.015),
+                              ("WNTR", 0.03, 0.025)):
+            self.secs[t] = Sec(t, 25.0, spread=0.06, sigma=sg, fee=0.02, rebate=rebate, lot=1000)
         self.limits = [{"name": "equity", "gross": 0, "net": 0, "gross_limit": 200_000, "net_limit": 100_000}]
+        # The CRO's AGGREGATE position limit, |SPNG| + |SMMR| + |ATMN| + |WNTR|, announced at the start of
+        # the heat and assessed at every market close (each minute): $10 per share over it. The package's
+        # example is 15,000; the range is a guess. Own generator: the price path's draws are unchanged.
+        self.state["agg_limit"] = random.Random(f"{self.fill_seed}:agg_limit").choice([10_000, 15_000, 20_000])
 
     def _setup_derivatives(self) -> None:
         # Official Volatility case (RITC 2019/2020/2023): RTM $50, 1- and 2-month calls/puts at strikes
@@ -251,6 +302,7 @@ class Market:
             for s in self.secs.values():
                 if s.sigma:
                     s.mid = max(0.5, s.mid + self.rng.gauss(0, s.sigma))
+            self._book_tenders()
             getattr(self, f"_tick_{self.case}")()
             if self.hostile:
                 self._adversary()
@@ -264,6 +316,7 @@ class Market:
             if self.queue:
                 self._decay_queues()
             self._fill_resting()
+            self._print_flow()
 
     # ===================================================== hostile participants
     def _adv_targets(self) -> list[str]:
@@ -315,7 +368,11 @@ class Market:
                 self.episodes.setdefault(t, []).append(Episode(now, lean, n, 0, 2))
             if r.random() < 0.004 * h and t not in self.vacuums and "vacuum" in self.threats:
                 self.vacuums[t] = now + r.randint(2, 4)
-        for tid, tender in list(self.tenders.items()):
+        crowd_due = list(self.tenders.items())
+        if self.case == "liability" and self.stress["crowd_at_expiry"]:
+            # The other desks also answer LATE: their unwind starts when the window closes, not on arrival.
+            crowd_due = [(tid, t) for exp, tid, t in self.state["crowd_due"] if exp <= now]
+        for tid, tender in crowd_due:
             if tid in self.crowded or "crowd" not in self.threats:
                 continue
             self.crowded.add(tid)
@@ -386,27 +443,93 @@ class Market:
             elif action == "SELL" and p <= s.asks[0][0] and jump > s.bids[0][0] + 1e-9 and jump >= s.mid + s.tick:
                 s.asks.insert(0, [jump, s.lot])
 
+    def _undecided(self, ticker: str) -> bool:
+        """A tender on `ticker` is still in its decision window for us (offered, or an auction bid not yet resolved)."""
+        self.bid_windows = {k: v for k, v in self.bid_windows.items() if v[1] > self.abs_tick}
+        return (any(t["ticker"] == ticker for t in self.tenders.values())
+                or any(v[0] == ticker for v in self.bid_windows.values()))
+
+    def _over_limit(self, ticker: str, delta: int) -> bool:
+        """Brief: 250,000 gross / 100,000 net shares across all stocks, enforced (orders refused)."""
+        if self.case != "liability":
+            return False
+        pos = {t: s.position for t, s in self.secs.items()}
+        pos[ticker] = pos.get(ticker, 0) + delta
+        lim = self.limits[0]
+        return sum(abs(q) for q in pos.values()) > lim["gross_limit"] or abs(sum(pos.values())) > lim["net_limit"]
+
+    def _book_tenders(self) -> None:
+        due = [b for b in self.bookings if b[0] <= self.abs_tick]
+        self.bookings = [b for b in self.bookings if b[0] > self.abs_tick]
+        for _, t, price in due:
+            s = self.secs[t["ticker"]]
+            sign = 1 if t["action"] == "BUY" else -1
+            s.position += sign * t["quantity"]
+            s.cost += sign * t["quantity"] * price
+            self._settle(s.ccy, -sign * t["quantity"] * price)
+
     def _tick_liability(self) -> None:
         for tid in [k for k, v in self.tenders.items() if v["expires"] <= self.abs_tick]:
             self.tenders.pop(tid)
-        if self.abs_tick % 12 == 5:
+        # Depth: CROC's liquidity is "varied" (a regime redrawn every 40 ticks), and market makers
+        # add liquidity over the last 30 ticks. Own generator: the price path is unchanged.
+        left = self.tpp - self.tick
+        for t, s in self.secs.items():
+            lot = self.state["base_lot"].setdefault(t, s.lot)
+            if t == "CROC":
+                lot *= random.Random(f"{self.fill_seed}:{self.abs_tick // 40}:croc-depth").choice([0.4, 1.0, 1.6])
+            s.lot = max(100, int(lot * (1 + 2 * max(0, 30 - left) / 30)))
+        if self.stress["vol_regime"]:
+            # Hidden vol regimes (own generator: the price path's draws are unchanged, only their size).
+            for t, s in self.secs.items():
+                r = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:vol-regime")
+                if r.random() < 1 / 50:
+                    self.state["vol_hi"][t] = not self.state["vol_hi"][t]
+                base = self.state["base_sigma"].setdefault(t, s.sigma)
+                s.sigma = base * (self.stress["vol_regime"] if self.state["vol_hi"][t] else 0.5)
+        if self.stress["bell"] and left < 20:
+            # Other desks dump the blocks they hold in the last 20 s: the price moves against the net
+            # direction of the tender flow of the 90 s before (independent of what our bot did).
+            t0 = self.tpp - 20 - 90
+            for t, s in self.secs.items():
+                flow = sum(q for k, tk, q in self.state["tender_log"] if tk == t and t0 <= k < self.tpp - 20)
+                s.mid = max(0.5, s.mid + self.stress["bell"] * flow / 50_000 / 20)
+        # Tenders arrive at random intervals (brief), ~every `gap` ticks, none in the first 5 seconds.
+        when = random.Random(f"{self.fill_seed}:{self.abs_tick}:tender-time")
+        if self.abs_tick > 5 and when.random() < 1 / self.stress["gap"]:
             t = self.rng.choice(list(self.secs))
             s = self.secs[t]
             action = self.rng.choice(["BUY", "SELL"])
-            qty = self.rng.choice([10_000, 20_000, 30_000, 50_000])
-            edge = self.rng.uniform(-0.10, 0.25)
-            price = round(s.mid - edge if action == "BUY" else s.mid + edge, 2)
+            qty = int(self.rng.choice([10_000, 20_000, 30_000, 50_000]) * self.stress["size"])
+            edge = self.rng.uniform(-0.10, 0.25) + self.stress["edge"]
+            # The tender is priced off the TRUE mid by default. anchor=1: off the VISIBLE mid (true + the current
+            # manipulation / crowd offset), as a real server quoting off the current market would. Same draws.
+            ref = s.mid + (self.adv_off.get(t, 0.0) if self.stress["anchor"] else 0.0)
+            price = round(ref - edge if action == "BUY" else ref + edge, 2)
             fixed = self.rng.random() > 0.25
             # Competitive auctions: the client's hidden reserve is 0-15 cents through the mid, drawn
             # per tender from its own generator (the market path and tender stream are unchanged).
             off = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:reserve").uniform(0.0, 0.15)
+            # Non-fixed tenders are competitive auctions or winner-take-all (half each). In a WTA a rival
+            # desk bids past the reserve 60% of the time; we must also beat its price to win.
+            wr = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:wta")
+            wta = not fixed and wr.random() < 0.5
+            reserve = round(ref - off if action == "BUY" else ref + off, 2)
+            rival = None
+            if wta and wr.random() < 0.6:
+                beat = wr.uniform(0.0, 0.10)
+                rival = round(reserve + beat if action == "BUY" else reserve - beat, 2)
             tid = next(self.ids)
             self.tenders[tid] = {
-                "tender_id": tid, "period": self.period, "tick": self.tick, "expires": self.abs_tick + 10,
-                "caption": f"Client wants you to {action} {qty} {t}", "quantity": qty, "action": action,
+                "tender_id": tid, "period": self.period, "tick": self.tick,
+                "expires": self.abs_tick + wr.randint(15, 30),
+                "caption": f"{'Winner-take-all: c' if wta else 'C'}lient wants you to {action} {qty} {t}",
+                "quantity": qty, "action": action,
                 "is_fixed_bid": fixed, "price": price if fixed else None, "ticker": t,
-                "_reserve": round(s.mid - off if action == "BUY" else s.mid + off, 2),
+                "_reserve": reserve, "_rival": rival,
             }
+            self.state["tender_log"].append((self.abs_tick, t, -qty if action == "BUY" else qty))
+            self.state["crowd_due"].append((self.tenders[tid]["expires"], tid, dict(self.tenders[tid])))
 
     def _tick_etf(self) -> None:
         p = 0.92 * self.state["premium"] + self.rng.gauss(0, 0.06)
@@ -431,6 +554,20 @@ class Market:
             }
 
     def _tick_equity(self) -> None:
+        if self.abs_tick == 1:
+            self._news("Position limit", f"The aggregate position limit for this week is "
+                                         f"{self.state['agg_limit']:,} shares")
+        if self.abs_tick % EQUITY_CLOSE_TICKS == 0:
+            # MARKET CLOSE: the aggregate limit is assessed on what we hold coming into it, then the
+            # overnight news (never shown to us) moves every stock: a common shock each stock reacts
+            # to with its own, changing sensitivity, plus its own news. 80% of closes bring news.
+            over = sum(abs(s.position) for s in self.secs.values()) - self.state["agg_limit"]
+            self.penalty += EQUITY_OVER_LIMIT_FINE * max(0, over)
+            r = random.Random(f"{self.fill_seed}:{self.abs_tick}:close")
+            if r.random() < 0.8:
+                common = r.gauss(0, 0.25)
+                for t in sorted(self.secs):
+                    self.secs[t].mid = max(0.5, self.secs[t].mid + r.uniform(-0.5, 1.5) * common + r.gauss(0, 0.15))
         if self.rng.random() < 0.02:                   # occasional informed jump
             s = self.rng.choice(list(self.secs.values()))
             s.mid += self.rng.choice([-1, 1]) * self.rng.uniform(0.10, 0.30)
@@ -545,10 +682,25 @@ class Market:
     # ===================================================== matching
     def _apply_fill(self, s: Sec, action: str, qty: int, px: float, maker: bool) -> None:
         sign = 1 if action == "BUY" else -1
+        if self.case == "liability":
+            # Speculation fine (2027 brief): any shares that OPEN a position (grow it, or flip it through
+            # zero) instead of reducing an accepted tender's. $0.20/share for the first 5,000, then $0.40.
+            old, new = s.position, s.position + sign * qty
+            spec = abs(new) if old * new <= 0 else max(0, abs(new) - abs(old))
+            if self.stress["strict_fr"] and self._undecided(s.ticker):
+                spec = qty                     # strict reading: ANY trade during an open decision window
+            if spec:
+                n0 = self.state["spec_shares"]
+                n1 = n0 + spec
+                self.state["spec_shares"] = n1
+                self.penalty += 0.20 * (min(n1, 5000) - min(n0, 5000)) + 0.40 * (max(0, n1 - 5000) - max(0, n0 - 5000))
         s.position += sign * qty
         s.cost += sign * qty * px
         s.volume += qty
-        self._settle(s.ccy, -sign * qty * px * s.mult + (s.rebate if maker else -s.fee) * qty)
+        if not maker:
+            self._tas(s, px, qty)
+        maker_pays = maker and self.case == "liability" and self.stress["maker_fee"]
+        self._settle(s.ccy, -sign * qty * px * s.mult + (-s.fee if maker_pays or not maker else s.rebate) * qty)
         if not maker and s.impact:
             s.mid += sign * s.impact * qty
         if s.position == 0:
@@ -560,6 +712,10 @@ class Market:
             raise ValueError(f"unknown or untradeable ticker {ticker}")
         if qty <= 0 or qty > s.max_trade:
             raise ValueError(f"quantity must be 1..{s.max_trade}")
+        d = qty if action == "BUY" else -qty
+        if abs(s.position + d) > abs(s.position) and self._over_limit(ticker, d):   # reducing is always allowed
+            self.state["limit_rejects"] = self.state.get("limit_rejects", 0) + 1
+            raise ValueError("order would exceed the trading limits")
         oid = next(self.ids)
         book = s.asks if action == "BUY" else s.bids
         left, filled_cost = qty, 0.0
@@ -613,7 +769,25 @@ class Market:
     def _flow(self, ticker: str, action: str) -> int:
         """Shares of passive flow arriving at the touch on our side this tick (same for every setting)."""
         r = random.Random(f"{self.fill_seed}:{self.abs_tick}:{ticker}:{action}")
-        return self.secs[ticker].lot * r.randint(1, 2) if r.random() < 0.35 else 0
+        # stress `flow` scales how often passive flow arrives (liability only: how good resting orders are).
+        p = 0.35 * (self.stress.get("flow", 1.0) if self.case == "liability" else 1.0)
+        return self.secs[ticker].lot * r.randint(1, 2) if r.random() < p else 0
+
+    def _print_flow(self) -> None:
+        """Time and sales: the passive flow that reached each touch this tick (the same draws as _flow)."""
+        for t, s in self.secs.items():
+            if not s.tradeable or not s.bids or not s.asks:
+                continue
+            for action, px in (("BUY", s.bids[0][0]), ("SELL", s.asks[0][0])):   # flow hitting our side
+                q = self._flow(t, action)
+                if q:
+                    self._tas(s, px, q)
+
+    def _tas(self, s: Sec, px: float, q: float) -> None:
+        self.state["tas_id"] = self.state.get("tas_id", 0) + 1
+        s.tas.append({"id": self.state["tas_id"], "period": self.period, "tick": self.tick,
+                      "price": px, "quantity": int(q)})
+        del s.tas[:-3000]
 
     def _fill_resting(self) -> None:
         flow: dict[tuple[str, str], int] = {}
@@ -678,6 +852,9 @@ class Market:
             if s.position and s.tradeable and s.kind != "CURRENCY":
                 # The official ETF case closes the ETF at fair value: the basket converted.
                 px = self._etf_nav_usd() if self.case == "etf" and s.ticker == "RITC" else s.mid
+                if self.case == "liability":      # brief: closed at the LAST TRADED price, at the bid or the ask
+                    side = random.Random(f"{self.fill_seed}:{s.ticker}:last").choice([-1, 1])
+                    px = s.mid + side * s.spread / 2 - (1 if s.position > 0 else -1) * self.stress["close_slip"]
                 self._settle(s.ccy, s.position * px * s.mult)
                 s.position = 0
 
@@ -747,7 +924,9 @@ def route(m: Market, method: str, path: str, q: dict[str, str]) -> tuple[int, ob
                 rows = s.hist[::-1] if s else []
                 return 200, rows[: int(q["limit"])] if q.get("limit") else rows
             if path == "/securities/tas":
-                return 200, []
+                s = m.secs.get(q.get("ticker", ""))
+                after = int(q.get("after", 0) or 0)
+                return 200, [x for x in (s.tas if s else []) if x["id"] > after]
             if path == "/news":
                 since = int(q.get("since", 0) or 0)
                 items = [n for n in m.news if n["news_id"] > since][::-1]
@@ -780,18 +959,29 @@ def route(m: Market, method: str, path: str, q: dict[str, str]) -> tuple[int, ob
                 if t is None:
                     return 404, {"code": "TENDER_NOT_FOUND"}
                 price = t["price"]
+                sign_t = 1 if t["action"] == "BUY" else -1
+                if m._over_limit(t["ticker"], sign_t * t["quantity"]):
+                    m.state["limit_rejects"] = m.state.get("limit_rejects", 0) + 1
+                    return 422, {"code": "LIMIT_EXCEEDED", "message": "tender would exceed the trading limits"}
                 if not t["is_fixed_bid"]:
+                    m.bid_windows[t["tender_id"]] = (t["ticker"], t["expires"])
                     price = float(q.get("price", 0))
                     # Official: any bid PAST the hidden reserve fills at our price. When we BUY the
                     # client is selling, so it takes bids at or above its reserve (and vice versa).
                     good = price >= t["_reserve"] if t["action"] == "BUY" else price <= t["_reserve"]
+                    if t["caption"].startswith("Winner"):
+                        # Winner-take-all: the bid is taken now, the award (best price past the reserve)
+                        # is only booked when the window closes.
+                        if good and t.get("_rival") is not None:
+                            good = price > t["_rival"] if t["action"] == "BUY" else price < t["_rival"]
+                        if good:
+                            m.bookings.append((t["expires"], t, price))
+                        return 200, {"success": True}
                     if not good:
                         return 200, {"success": False}
-                s = m.secs[t["ticker"]]
-                sign = 1 if t["action"] == "BUY" else -1
-                s.position += sign * t["quantity"]
-                s.cost += sign * t["quantity"] * price
-                m._settle(s.ccy, -sign * t["quantity"] * price)
+                # Booking delay: an accepted tender shows in the position ~1 s later (seen on the real
+                # server, 2026); trading before it lands is judged against the old position.
+                m.bookings.append((m.abs_tick + int(m.stress["book"]), t, price))
                 return 200, {"success": True}
         elif method == "DELETE":
             if path.startswith("/orders/"):
@@ -855,7 +1045,7 @@ class InProcessAdapter(requests.adapters.BaseAdapter):
 
 
 CASE_SHAPE = {          # ticks_per_period, periods
-    "liability": (300, 1), "etf": (300, 1), "equity": (300, 1),
+    "liability": (420, 1), "etf": (300, 1), "equity": (300, 1),
     "derivatives": (300, 2), "commodity": (300, 2),
 }
 

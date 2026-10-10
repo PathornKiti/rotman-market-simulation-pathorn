@@ -8,6 +8,61 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
+## 2026-10-09 → 2026-10-11: Liquidity Risk Case, "for selection 2027" brief (`liability` bot)
+
+The official brief for this week's trading (`document/Liquidity Risk Case - for selection 2027.pdf`) replaced
+the 2026 rules: 420 s, CRZY $10 / TAME $25 / CROC $20, $0.02 fees, max orders 25k / 10k / 20k, limits
+250k gross / **100k net**, speculation and front-running fined **$0.20/share (first 5k), $0.40 after**, and open
+positions closed at the last traded price with **no fine**. Details: [GAP_ANALYSIS.md](GAP_ANALYSIS.md),
+[RISK_REVIEW.md](RISK_REVIEW.md), [RESEARCH.md](RESEARCH.md); Sunday checklist: [PRACTICE_PLAN.md](PRACTICE_PLAN.md).
+
+**Kept** (paired t ≥ 2 on design seeds, confirmed on fresh seeds):
+
+| Change | Evidence | |
+|---|---|---|
+| Config to the brief (3 stocks, order sizes, net 100k) | the brief | kept |
+| Track accepted-but-unbooked tenders (`booking_ticks`); never unwind what a pending tender will offset | 0 fines over 64 runs (was up to $2.8k); P&L not significant | kept for fine safety |
+| Resting unwind orders never larger than the shares left | removes overshoot past zero | kept |
+| `respect_windows`: don't trade a stock while one of its tenders is undecided (incl. our auction bids) | strict reading +$8.3k (t 4.0); lenient ±$0.5k | kept |
+| `freeze_rejected_bids` | strict reading +$9.6k (t 3.0) | kept (fine safety) |
+| Kill switch off (`max_drawdown = 0`) | hostile holdout +$18.2k (t 3.1), all stresses +$69.7k (t 5.1), benign unchanged | kept |
+| `min_ticks_to_unwind` 15 → 5 (no end-of-case fine) | +$1.1–1.8k (t 2.2–3.0) | kept |
+| **Hold to the bell**: `close_hold_ticks = 90`, `hold_valuation`, `hold_risk_budget = 40000` | +$11.3k (t 4.8), holdout +$14.6k (t 5.1); hostile ≈ 0 | kept |
+| **Answer tenders late**: `decide_late_ticks = 3` (+ safety guards) | fresh 301–316: base +$25.3k (t 4.5), realistic hostile +$10.4k (t 4.2); losing heats over 21 scenarios **13 → 1** | kept |
+| `decide_late_end_guard` (found by a real-time test: 3 of 32 tenders missed) | +$3.7k (t 4.1) / +$2.3k (t 2.6) | kept |
+| Auction: ignore a zero / absurd reference price | unit test | kept (robustness) |
+
+**Removed after testing** (numbers in RESEARCH.md): crowd race M1, per-ticker crowd impact M2, crowd position cap
+M3 (all failed on fresh seeds 201–232); net-limit shadow price; live per-ticker depth; skip auctions while
+unwinding; `crowd_score_at = expiry`; fixed crowd charge; other `risk_aversion` / `refill_factor` /
+`competitive_margin` / `min_profit` values. Evaluated, not built: vol forecasting / HMM regimes (an oracle with the
+true volatility adds $0), market making / Avellaneda-Stoikov / RL (fined under this brief).
+
+**Final retest** (32 brand-new seeds 401–432, 23 scenarios): base $65.1k (worst +$25.2k, 0 losing); the bot loses
+17 of 736 heats (2.3%), 9 of them in the one known weak spot (a crowd unwinding at tender expiry); the official
+tender template loses on average in every scenario. Real-time HTTP heat: 31 of 32 tenders answered (the 32nd
+arrived in the last 5 s), no errors.
+
+**New tools**: `ritc stress` (22-23 adverse scenarios, `--set`, `--only`, `--sweep` risk frontier, `--template`),
+`ritc record` (read-only practice recorder incl. time and sales), `ritc calibrate` (vol, depth, tenders,
+windows, booking delay, crowd event study pooled across heats, fill model / kappa, vol clustering, book
+imbalance), `ritc run --set` (one-off overrides). Simulator: brief-aligned case, booking delay, winner-take-all,
+limit enforcement, last-price close, speculation fines, random tender times, `anchor`, and gap knobs
+(`maker_fee`, `spread`, `close_slip`, `bell`, `crowd_at_expiry`, `vol_regime`, `flow`).
+
+## 2026-10-09 (later): RITC 2026 rules (official 2026 case package)
+
+Source: Rotman's own lab repo, [OFFICIAL_RULES.md](OFFICIAL_RULES.md). Two rules would have cost real money:
+
+| Case | Change | Benign 1–16 / 101–116 | Hostile 1–16 / 101–116 | |
+|---|---|---|---|---|
+| Liability | **Trade the stocks `/securities` lists**, not only the config's. 2026 sub-heats each use different tickers; before, a tender on one was never unwound ($10/share uncovered fine). Fees and max order from the server row | identical on all 32 runs (same tickers) | identical | kept: a test renames the sim's stocks and checks every tender is unwound |
+| Equity | **Sim: the 2026 case.** WNTR added, all four at $25, per-stock rebates 0.01/0.02/0.015/0.025, aggregate limit (10k/15k/20k) announced by news and fined $10/share over at each minute close, news shock after each close. Old bot on it: fined in 4/16 seeds, up to $55k | new baseline | | simulator |
+| Equity | **`close_every = 60`**: quote only the reducing side 5 ticks before each close, cross for anything over 90% of the limit 2 ticks before; limit parsed from news | **+$7.4k (t 2.1) / +$12.7k (t 2.4)**; worst −$49.1k → −$2.4k / −$56.5k → −$9.0k | **+$7.9k (t 2.6) / +$9.3k (t 2.6)**; worst −$38.7k → −$7.0k | kept |
+| Equity | `close_lead` 2/10/20 × `close_buffer` 0.7/1.0 | all within noise of 5 / 0.9 (best +$0.5k hostile, t 1.6) | | defaults kept |
+
+New equity baselines (2026 sim): benign $5.1k / $4.7k, hostile −$0.4k / −$2.1k; zero fines on seeds 1–16.
+
 ## 2026-10-09: why the losing seeds lose; a queue model; a faster tuner
 
 **Losing-seed diagnosis** (per-seed P&L attribution on the current code):

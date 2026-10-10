@@ -145,3 +145,95 @@ def test_crowd_gate_charges_nothing_without_evidence_and_skips_our_own_tenders()
     assert s.crowd.n == 1
     assert s.crowded() == (s.crowd.mean > 2 * s.crowd.sd)  # ...charged only once it is significant
     assert (s.crowd_cost(50_000) > 0) == s.crowded()
+
+
+def test_rejected_auction_bid_still_freezes_the_stock_until_expiry():
+    # 2027 brief: trading during a tender's window "before the decision is finalized" is front-running.
+    # An auction is only final at expiry, even when the server answers success=false at once.
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    tender = {"tender_id": 7, "ticker": "X", "action": "BUY", "quantity": 10_000, "price": None,
+              "is_fixed_bid": False, "tick": 10, "expires": 40}
+
+    class Client:
+        def tenders(self):
+            return [tender]
+
+        def accept_tender(self, tid, price=None):
+            return {"success": False}
+
+    for freeze in (True, False):
+        cfg = {"case": {"tickers": ["X"], "fee": {"X": 0.02}},
+               "strategy": {"freeze_rejected_bids": freeze, "respect_windows": True, "min_profit_per_share": -1}}
+        s = LiabilityStrategy(Context(Client(), Executor(None, dry_run=False), RiskManager(), cfg))
+        book = OrderBook("X", [Level(24.99, 50_000)], [Level(25.01, 50_000)])
+        snap = Snapshot({"tick": 10, "period": 1, "ticks_per_period": 300}, {"X": {"bid": 24.99, "ask": 25.01}})
+        snap._books["X"] = book
+        s.handle_tenders(snap)
+        tender_gone = Snapshot({"tick": 20, "period": 1, "ticks_per_period": 300}, {"X": {}})
+        s.current_tenders = lambda: []
+        assert (s.undecided(tender_gone) == {"X"}) == freeze
+        assert s.undecided(Snapshot({"tick": 41, "period": 1, "ticks_per_period": 300}, {"X": {}})) == set()
+
+
+def test_anchor_prices_tenders_off_the_visible_mid(monkeypatch):
+    # RITC_STRESS anchor=1: tenders are quoted off the VISIBLE mid (true + crowd / manipulation offset), as a real
+    # server pricing off the current market would; default: off the true mid. Same tender stream, same market.
+    def run(anchor: str) -> list[tuple]:
+        monkeypatch.setenv("RITC_STRESS", f"anchor={anchor}")
+        m = Market("liability", 420, 1, seed=7, hostile=1.0)
+        m.status = "ACTIVE"
+        out, seen = [], set()
+        for _ in range(250):
+            off = dict(m.adv_off)                      # the offset the new tenders are priced against
+            m.advance()
+            for tid, t in m.tenders.items():
+                if tid not in seen:
+                    seen.add(tid)
+                    out.append((tid, t["ticker"], t["action"], t["quantity"], t["price"], t["_reserve"],
+                                off.get(t["ticker"], 0.0)))
+        return out
+
+    true, vis = run("0"), run("1")
+    assert [x[:4] for x in true] == [x[:4] for x in vis] and len(true) > 5
+    shifted = 0
+    for a, b in zip(true, vis):
+        assert abs((b[5] - a[5]) - b[6]) < 0.011             # reserve moved by the visible offset
+        if a[4] is not None:
+            assert abs((b[4] - a[4]) - b[6]) < 0.011         # so did the fixed price
+        shifted += abs(b[6]) > 0.05
+    assert shifted                                            # and the offset was material for some tenders
+
+
+def test_decide_late_waits_for_the_deadline_but_never_risks_missing_a_tender():
+    # decide_late_ticks: answer a tender `late` ticks before it expires (option value: re-price then).
+    # Safety: answer at once if `expires` is missing or the window looks wrong, and never wait past the cap.
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]}, "strategy": {"decide_late_ticks": 3, "decide_late_max_window": 30}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+
+    def snap(tick: int) -> Snapshot:
+        return Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420}, {"X": {"bid": 9.99, "ask": 10.01}})
+
+    t = {"tender_id": 1, "ticker": "X", "tick": 100, "expires": 125}
+    assert s.wait_to_decide(t, 1, snap(100))               # 25 ticks left: wait
+    assert s.wait_to_decide(t, 1, snap(121))               # 4 left: still wait
+    assert not s.wait_to_decide(t, 1, snap(122))           # 3 left: decide now
+    assert not s.wait_to_decide({"tender_id": 2, "ticker": "X"}, 2, snap(100))           # no expires
+    assert not s.wait_to_decide({"tender_id": 3, "expires": "?"}, 3, snap(100))          # unreadable
+    assert not s.wait_to_decide({"tender_id": 4, "expires": 400}, 4, snap(100))          # 300 away: wrong unit?
+    s.first_seen[5] = 70                                                                   # waited 30 already
+    assert not s.wait_to_decide({"tender_id": 5, "expires": 125}, 5, snap(100))
+    # A window that runs past the bell: answer while the tender can still be accepted (min_ticks 5, wind-down 5).
+    end = LiabilityStrategy(Context(None, Executor(None), RiskManager(),
+                                    {"case": {"tickers": ["X"]}, "run": {"wind_down_ticks": 5},
+                                     "strategy": {"decide_late_ticks": 3, "min_ticks_to_unwind": 5}}))
+    assert end.wait_to_decide({"tender_id": 6, "expires": 421}, 6, snap(400))     # 20 left in the heat: wait
+    assert not end.wait_to_decide({"tender_id": 6, "expires": 421}, 6, snap(411))  # 9 left: answer now
+    off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
+    assert not off.wait_to_decide(t, 1, snap(100))         # off by default

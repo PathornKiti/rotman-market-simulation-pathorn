@@ -3,16 +3,18 @@
 # order sizes and limits from the case brief.
 
 [case]
-tickers = ["CRZY", "TAME"]
-fee = { CRZY = 0.02, TAME = 0.02 }          # taker commission per share
-max_order = { CRZY = 10000, TAME = 10000 }  # max shares per order
+# 2027 selection brief (Liquidity Risk Case): 420 s, CRZY $10 / TAME $25 / CROC $20.
+tickers = ["CRZY", "TAME", "CROC"]           # the bot also trades every other stock /securities lists
+                                             # (RITC 2026 sub-heats each use different tickers)
+fee = { CRZY = 0.02, TAME = 0.02, CROC = 0.02 }               # taker commission per share
+max_order = { CRZY = 25000, TAME = 10000, CROC = 20000 }      # max shares per order (brief)
 
 [risk]
 buffer = 0.98
 [risk.groups.equity]                         # name must match /limits
 gross = 250000
-net = 150000
-weights = { CRZY = 1.0, TAME = 1.0 }
+net = 100000                                 # 2027 brief (was 150,000 in 2026)
+weights = { CRZY = 1.0, TAME = 1.0, CROC = 1.0 }
 
 [strategy]
 min_profit_per_share = 0.01   # accept only if expected profit/share after costs >= this (0.01: mean $34.1k vs $31.6k at 0.03,
@@ -21,13 +23,39 @@ refill_factor = 2.0           # visible depth is ~this fraction of what you can 
 competitive_margin = 0.05     # $/share kept when bidding on non-fixed tenders
 drift_halflife = 15           # ticks, for the adverse-drift estimate
 unwind_ticks_per_share = 0.0005  # expected unwind time per share (drift exposure)
-min_ticks_to_unwind = 15      # decline tenders this close to the bell
+min_ticks_to_unwind = 5       # 2027 brief: no end-of-case fine (closed at last price). 15 -> 5: +$1.1-1.8k (t 2.2-3.0), holdout +$0.4-0.6k (t 1.9-2.2), hostile +$0.5-2.0k (t 1.5-1.8)
 risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind ticks)
 max_slippage = 0.04           # unwind slices keep VWAP within this of the touch
 participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
+decide_late_ticks = 3         # ANSWER LATE: a tender's price is fixed when it arrives but the market moves for its whole
+                              # 15-30 s window, so answer 3 ticks before `expires` with the book of THEN (an option on
+                              # the tender; a crowd unwinding the same block shows in the price before we commit).
+                              # Fresh seeds 301-316: normal +$25.3k (t 4.5, 15/16); anchored hostile +$10.4k (t 4.2);
+                              # real-world gaps + hostile +$9.7k (t 3.8); losing heats over 21 stress scenarios 13 -> 1,
+                              # worst -$104.9k -> -$2.5k. Seeds 1-16: +$17.0k (t 3.1); holdout 101-116 +$22.0k (t 3.5).
+                              # Unanchored hostile -$4.6k (t -0.9): it forgoes the sim's fake displacement edge.
+                              # 2 and 4 similar (4: 4 losing heats on 301-316). 0 = answer at once (old behaviour).
+decide_late_end_guard = true  # ...but never wait past the last tick a tender can still be accepted (min_ticks_to_unwind /
+                              # wind-down): a real-time test missed 3 of 32 tenders whose windows ran past the bell.
+                              # Seeds 1-16 +$3.7k (t 4.1), 301-316 +$2.3k (t 2.6); anchored hostile +-$0.1k.
+decide_late_max_window = 30   # safety: answer AT ONCE if `expires` is missing / further than this / unreadable, and never
+                              # wait longer than this. Raise it if practice shows windows longer than 30 s.
+respect_windows = true        # 2027 brief: "Any trades executed during this window, before the tender decision is
+                              # finalized, are flagged as front-running". Don't trade a stock while one of its tenders is
+                              # undecided - including our own auction / winner-take-all bids until they expire. Strict
+                              # reading: +$3.8k (t 3.6), holdout +$8.3k (t 4.0); lenient reading -$0.4k / +$0.5k (t -0.7/0.7).
+booking_ticks = 3             # an accepted tender reaches the position ~1 s later; don't unwind what it will offset (3: with min_ticks 5, t 3.0 / holdout 2.2)
+freeze_rejected_bids = true   # SAFETY: an auction / winner-take-all bid stays in the window until it expires even if the
+                              # server answers success=false at once, so don't trade that stock before expiry (the bot
+                              # did). Strict front-running sim: +$9.6k (t 3.0), hostile+strict +$2.9k (t 2.1); lenient
+                              # sim +$2.3k (t 2.3) but holdout -$0.1k (t -0.3). Kept as a fine-safety fix, not for P&L.
+hold_valuation = true         # inside close_hold_ticks, value a tender's exit at the mid (the case's free close-out)
+                              # with the risk of holding to the bell, when that beats walking the book + fees. Part of
+                              # the hold (see close_hold_ticks). Alone on top of the hold: +$3.5k (t 1.9), holdout
+                              # +$7.2k (t 3.8). Valuing every tender this way (window 420): +$7.4k but hostile -$2.4k.
 decline_explicitly = true     # official rule: trading a ticker while one of its tenders is still PENDING is
-                              # "front-running"; its profit is dropped from the Adjusted P&L but losses count.
+                              # "front-running" (2026: fined $1/share, $2 past 5,000 shares, in real time).
                               # Declining at once closes the window, so unwinds of earlier tenders stay clean.
 # CROWDED TENDERS (docs/HOSTILE_MARKET.md): every desk gets the same block and unwinds it into the same book.
 # Learn from every tender we did NOT take how far the mid runs against its unwind over `crowd_ticks`, per 10k
@@ -43,9 +71,30 @@ crowd_prior_sd = 0.10
 crowd_noise_sd = 0.10         # price noise over the scoring window
 crowd_ticks = 10              # score each tender's crowd reaction this many ticks after it appears
 crowd_weight = 1.0
+# Not added (fresh seeds 201-232, RISK_REVIEW.md "Validation on 201-232"): crowd race on adverse arrival, per-ticker
+# crowd impact, crowd position cap. Each worsened the worst seed with tenders priced off the visible price (anchor=1).
+# If the practice rounds show a crowd, set crowd_prior_mean to the learned $/10k (prior sd ~ half of it) instead.
 
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
+close_hold_ticks = 90         # HOLD TO THE BELL (2027 brief: open positions close at the last traded price, no fine).
+                              # In the last 90 s never cross, only rest at the touch; the rest closes at ~mid.
+                              # With hold_valuation, 16 seeds: +$7.0k (t 3.8, 16/16), worst $9.9k -> $13.8k; holdout
+                              # +$9.5k (t 4.6); hostile -$0.2k (t -0.2) / holdout +$1.3k, worst -$6.5k -> +$2.2k;
+                              # all stresses +$2k-$14k. 60: +$5.7k (t 2.8); 120: +$9.4k but gap=6 worst $31k -> $17k.
+hold_risk_budget = 40000      # ...and before that, only REST (never cross) while |position| x GARCH sigma x sqrt(ticks
+                              # left), the 1-sd $ risk of holding to the bell, is within this budget; cross only the
+                              # excess. Random walk + free close-out: holding costs 0 on average, crossing always costs.
+                              # 16 seeds: +$4.3k (t 2.9, p adj 0.044), worst $13.8k -> $24.0k, CVaR $21.3k -> $24.5k;
+                              # holdout +$5.0k (t 2.2); hostile +$1.7k (t 0.9, worst -$17.6k -> -$4.5k) but hostile
+                              # holdout -$1.9k (t -0.6, worst $2.2k -> -$7.4k); scarce passive fills (flow 0.3) +$5.0k,
+                              # tenders x2 +$3.7k (t 3.8), twice as often +$9.6k (t 3.4); vol x2 +$0.5k (t 1.1).
+                              # 20k: +$3.8k (t 2.9) / holdout t 2.0. Never crossing (close_hold_ticks 420): +$11.7k but
+                              # ignores vol; a budget in $ crosses more automatically when GARCH sigma is high.
+                              # 2nd holdout (201-216) vs off: +$2.4k (t 2.8); hostile +$6.1k (t 2.1, worst -$9.6k -> +$2.7k).
+                              # CAVEAT "everything at once" stress (hostile + vol 1.5 + thin + strict): mean same, worst
+                              # -$84k -> -$105k (sd ~$95k, not significant). If the practice case looks manipulated or
+                              # far more volatile, lower this (20000) or set 0 for the old cross-to-schedule unwind.
 unwind_horizon_ticks = 30     # target: flat within this many ticks of accepting a tender
 crowd_horizon_ticks = 12      # ...but race the crowd once it is detected (learned impact > 2 sd). A FIXED 12 cost
                               #   -$7.6k (t -6.1) in the benign sim; switching only on evidence costs nothing there.
@@ -61,9 +110,10 @@ ac_risk_aversion = 3e-7       # Almgren-Chriss lambda (1/$): higher = unwind fas
                               # (higher GARCH sigma) the same lambda front-loads automatically.
 
 [run]
-max_drawdown = 15000          # kill switch: $ below peak NLV -> flatten + halt. A CATASTROPHE stop, ~1.5-2x the
-                             # worst normal drawdown on 8 sim seeds: $9.4k.
-                             # Set near the normal drawdown it cuts winners at the bottom. Rescale to the real case's P&L.
+max_drawdown = 0              # kill switch OFF (0 = off; was 15000). Halting after one bad block forfeits every later
+                              # tender, and the brief's prices are a random walk (no momentum to stop). 2027 sim, 16 seeds:
+                              # hostile +$16.9k (t 2.7), holdout +$18.2k (t 3.1, worst -$14.7k -> +$6.3k); all stresses
+                              # at once +$69.7k (t 5.1); normal market exactly unchanged.
 drawdown_soft_start = 0.5     # from this fraction of max_drawdown, new-risk sizes shrink linearly...
 drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges always run at full size)
 feed_poll = 0.1               # real-time news/tender poll interval, seconds

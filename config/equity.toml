@@ -2,18 +2,19 @@
 # Defaults match `python -m ritc sim equity`.
 
 [case]
-tickers = ["SPNG", "SMMR", "ATMN"]
-max_order = { SPNG = 10000, SMMR = 10000, ATMN = 10000 }
+tickers = ["SPNG", "SMMR", "ATMN", "WNTR"]   # RITC 2026: all four start at $25; passive rebates 0.01 /
+max_order = { SPNG = 10000, SMMR = 10000, ATMN = 10000, WNTR = 10000 }   # 0.02 / 0.015 / 0.025, taker fee 0.02
 
 [risk]
 [risk.max_position]
 SPNG = 25000
 SMMR = 25000
 ATMN = 25000
+WNTR = 25000
 [risk.groups.equity]
 gross = 200000
 net = 100000
-weights = { SPNG = 1.0, SMMR = 1.0, ATMN = 1.0 }
+weights = { SPNG = 1.0, SMMR = 1.0, ATMN = 1.0, WNTR = 1.0 }
 
 [strategy]
 min_half_spread = 0.02         # never quote tighter than this each side
@@ -39,6 +40,14 @@ block_cut = 1.0                # ASSIGNED BLOCKS: a position jump >= block_detec
 block_detect = 5000            #   can fill) is a block pushed onto us; cut this fraction at once, limit
 block_slippage = 0.03          #   block_slippage through the touch. Sim with block transfers, 16 seeds: +$1.8k
                                #   (t 2.6), hostile +$1.6k (t 3.0); holdout 101-116 +$2.4k (t 3.2) / +$0.9k (t 2.1)
+# MARKET CLOSES (RITC 2026): every minute (60 ticks) the CRO checks |SPNG|+|SMMR|+|ATMN|+|WNTR| against an
+# aggregate limit announced by news at the start of the heat: $10 per share over it, every close.
+close_every = 60              # ticks between closes; 0 = off
+close_lead = 5                # this many ticks before a close, quote only the side that shrinks inventory
+close_cross = 2               # this many ticks before, cross the spread for what is still over the limit...
+close_buffer = 0.9            # ...times this (fills overshoot; blocks can land at any time)
+close_slippage = 0.05         # protective limit through the touch for those crosses
+aggregate_limit = 15000       # until the news announces it (the package's example)
 [strategy.per_ticker.ATMN]
 min_half_spread = 0.03
 

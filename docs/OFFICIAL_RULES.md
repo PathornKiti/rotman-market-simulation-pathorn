@@ -12,12 +12,20 @@ configs follow them.
 The cases have kept the same rules from 2019 to 2023 (often word for word). Expect the
 same in the real case, but check every number against the new brief on the day.
 
+**RITC 2026.** Rotman's lab publishes the newest package itself, in
+[RotmanFRTL/RotmanFRTL.github.io](https://github.com/RotmanFRTL/RotmanFRTL.github.io)
+(`RITC 2026 Case Package.pdf`, `RITC 2026-Closing Thoughts.pdf`, the RITCx briefs and base
+scripts). It is copyrighted: as above, we record rules, never files. The 2026 cases are
+Liquidity Risk (`liability`), Volatility (`derivatives`), GBE Electricity (API orders disabled),
+**Merger Arbitrage** (new, no bot yet) and Algorithmic Market Making (`equity`), 20% each.
+There is no ETF or BP commodity case in 2026; those live on in the RITCx events.
+
 | Our bot | Official case | Years | API orders |
 |---|---|---|---|
 | `derivatives` | (MATLAB) Volatility Trading | 2019, 2020, 2023, 2024 | **enabled** |
 | `etf` | (Citadel Securities) Algorithmic Trading: ETF + FX + tenders | 2019, 2020, 2023 | **enabled** (algo only, no manual trading) |
-| `liability` | Liquidity Risk / Flow Traders ETF (tender offers) | 2019, 2020, 2023, 2024 | **disabled** in the packages |
-| `equity` | Algorithmic Market Making | 2024 (no package in the mirror) | enabled |
+| `liability` | Liquidity Risk / Flow Traders ETF (tender offers) | 2019, 2020, 2023, 2024, 2026 | disabled 2019–2023, **enabled 2026** |
+| `equity` | Algorithmic Market Making | 2024, 2026 | enabled (algo only, no manual trading) |
 | `commodity` | BP Commodities (role-based crude + carbon credits) | 2019, 2020, 2024 | **disabled** |
 
 ---
@@ -74,7 +82,10 @@ same in the real case, but check every number against the new brief on the day.
 | Tenders | Private (fixed price), competitive auction (any bid past a hidden reserve fills at your price), winner-take-all (best bid wins if past reserve). Window **15–30 s** | all three handled |
 | **Adjusted P&L** | `P&L from tenders + min(0, P&L from speculation)`. Speculation = any trade not closing a tender position. **Front-running** = trading a ticker while a tender on it is pending (not yet accepted or declined) | `decline_explicitly` now **true** by default. Before, a rejected tender stayed pending for its whole window, so unwinding an earlier tender in the same ticker counted as front-running |
 | Close-out | Last price; market makers add liquidity near the end | `urgent_ticks` |
-| **API orders** | **Disabled** in 2019 and 2023 (the RTD/API data feed stays on) | If this holds, run the bot **dry** as a decision aid: it logs `ACCEPT/decline` and unwind sizes, and a human places the trades |
+| **API orders** | **Disabled** in 2019 and 2023 (the RTD/API data feed stays on); **enabled in 2026** | If disabled, run the bot **dry** as a decision aid: it logs `ACCEPT/decline` and unwind sizes, and a human places the trades |
+| **2026: sub-heats** | 5 sub-heats of 600 s, each with **different stocks**: RITC/COMP, TRNT/MTRL, BLU/RED/GRN, WDY/BZZ/BNN, VNS/MRS/JPTR/STRN; fees $0.01–$0.04; tender windows 30 s, then 20 s | **Fixed 2026-10-09**: the bot only unwound the config's tickers, so a tender on any other stock was never covered. It now trades what `/securities` lists (fees and max order from the server row, each stock counts 1 share in the limits) |
+| **2026: fines** (real time, in RIT P&L) | Flagged speculative / front-running shares: $1/share up to 5,000, $2 beyond. **$10/share** for any tender exposure still open at the end | unwind by `unwind_horizon_ticks`, `wind_down` crosses for the rest |
+| 2026: booking delay | Observed by another team (Columbia, Sep 2026): an accepted tender appears in the position ~950 ms after the accept. Hedging before that was fined as speculation | we unwind from server positions, so we wait for the booking. The sim books instantly: untested |
 
 ## Commodity: BP Commodities Case
 
@@ -86,11 +97,20 @@ submission is disabled.** Our `commodity` bot (CL spot vs futures carry plus inv
 momentum) models a different, generic RIT commodity case. On the day it can serve only as
 a signal display. No changes were made for this case.
 
-## Equity: Algorithmic Market Making
+## Equity: Algorithmic Market Making (RITC 2026)
 
-The mirror has no official package for this case. Our sim already uses the same fee and
-rebate pattern as the other algo cases ($0.02 taker, $0.01 maker). Nothing to change until
-the brief is out.
+| Rule | Official value | Ours |
+|---|---|---|
+| Heat | 12 heats of 300 s = 1 week; **each minute is a trading day**, news after each close (not shown to us) moves the stocks | sim: at each close, 80% chance of a common shock with a per-stock sensitivity plus own news (sizes are a guess) |
+| Securities | SPNG, SMMR, ATMN, **WNTR**, all start at $25 CAD | sim and config now have WNTR |
+| Fees | $0.02/share taker; passive rebate **SPNG 0.01, SMMR 0.02, ATMN 0.015, WNTR 0.025** | sim ✓ (the bot doesn't use rebates in its quotes yet) |
+| **Aggregate limit** | \|SPNG\| + \|SMMR\| + \|ATMN\| + \|WNTR\|, announced at the start of the heat, assessed **at every market close: $10 per share over** (example: 15,000) | `close_every = 60`: quote only the reducing side from 5 ticks before a close, cross the spread for anything over 90% of the limit from 2 ticks before. Limit parsed from news (`parse_position_limit`, wording unpublished), 15,000 until then |
+| Gross / net limits | Numbers not published; **$5/share** over them | `[risk.groups.equity]` 200k / 100k, tightened from `/limits` at start |
+| Max order | 10,000 per stock | ✓ |
+| Rules | All trades by algorithm; 2 minutes between heats to change it | — |
+
+The official 2026 base script flattens everything from second 55 of each minute. The director's
+closing note says the case "may be revamped" next year.
 
 ---
 

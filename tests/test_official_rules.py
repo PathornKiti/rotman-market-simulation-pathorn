@@ -109,9 +109,11 @@ def test_competitive_tender_fills_only_past_the_reserve():
     from ritc.sim.server import make_handler
 
     m = active("liability", 3)
-    while not any(not t["is_fixed_bid"] for t in m.tenders.values()):
+    def auction(v: dict) -> bool:                 # competitive, not winner-take-all
+        return not v["is_fixed_bid"] and not v["caption"].startswith("Winner")
+    while not any(auction(t) for t in m.tenders.values()):
         m.advance()
-    tid, t = next((k, v) for k, v in m.tenders.items() if not v["is_fixed_bid"])
+    tid, t = next((k, v) for k, v in m.tenders.items() if auction(v))
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(m))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
@@ -138,6 +140,89 @@ def test_equity_assigns_unannounced_blocks_that_drift_against_the_holder():
         if moved:
             break
     s = moved[0]
-    assert abs(s.position) in (5_000, 10_000, 15_000) and not m.news
+    assert abs(s.position) in (5_000, 10_000, 15_000)
+    assert [n["headline"] for n in m.news] == ["Position limit"]        # nothing announces the block
     d = m.state["block_drift"][0]
     assert d[1] == s.ticker and (d[2] < 0) == (s.position > 0)        # the drift runs against the block
+
+
+# ------------------------------------------------------------------ RITC 2026 liquidity risk case
+def test_liability_trades_the_sub_heats_tickers_not_the_configs(monkeypatch):
+    # RITC 2026: each sub-heat has DIFFERENT stocks (RITC/COMP, TRNT/MTRL, BLU/RED/GRN, ...). The config
+    # names CRZY/TAME; a bot that only unwinds configured tickers is left holding accepted tenders
+    # ($10/share uncovered fine). Rename the simulator's stocks and check every tender is unwound.
+    from ritc.cli import build
+    from ritc.sim.server import InProcessAdapter, serve
+    from ritc.tune import _free_port
+
+    port = _free_port()
+    monkeypatch.setenv("RIT_URL", f"http://127.0.0.1:{port}/v1")
+    srv, m = serve("liability", port, speed=0, seed=3, block=False)
+    try:
+        m.secs = {new: m.secs[old] for old, new in (("CRZY", "BLU"), ("TAME", "RED"))}
+        for t, s in m.secs.items():
+            s.ticker = t
+            s.fee = 0.04 if t == "BLU" else 0.03
+        # 2027 brief: holding to the bell is free (close-out at the last price), so the bot may end with a
+        # position on purpose; switch the hold off to check that every tender on these tickers IS unwound.
+        runner, _ = build("liability", None, live=True, overrides={"execution.close_hold_ticks": 0})
+        runner.client.adapter = InProcessAdapter(m)
+        runner.interval = 0.0
+        held = []
+
+        def tick():
+            if runner.loops % 4 == 0:
+                if m.tick == m.tpp - 1:
+                    held.append({t: s.position for t, s in m.secs.items()})
+                m.advance()
+
+        runner.on_loop = tick
+        runner.run()
+        assert {o["ticker"] for o in m.done_orders} >= {"BLU", "RED"}     # tenders taken AND unwound
+        assert held and not any(held[-1].values())                           # flat before the close-out
+        assert runner.s.fees == {"CRZY": 0.02, "TAME": 0.02, "CROC": 0.02, "BLU": 0.04, "RED": 0.03}   # server's fees
+        assert runner.s.risk.room("BLU", "BUY", {"BLU": 249_000}) < 1_000           # counted in the limit
+    finally:
+        srv.shutdown()
+
+
+# ------------------------------------------------------------------ RITC 2026 algorithmic market making case
+def test_equity_is_the_2026_universe_with_its_rebates():
+    m = active("equity")
+    assert sorted(m.secs) == ["ATMN", "SMMR", "SPNG", "WNTR"]
+    assert all(s.mid == 25.0 and s.fee == 0.02 for s in m.secs.values())
+    assert {t: s.rebate for t, s in m.secs.items()} == {"SPNG": 0.01, "SMMR": 0.02, "ATMN": 0.015, "WNTR": 0.025}
+
+
+def test_equity_aggregate_limit_is_announced_and_fined_at_each_close():
+    from ritc.pricing.news import parse_position_limit
+
+    m = active("equity", seed=4)
+    m.state["blocks"] = False
+    m.advance()
+    assert parse_position_limit(m.news[0]["body"]) == m.state["agg_limit"]
+    m.secs["SPNG"].position = m.state["agg_limit"] + 700
+    m.secs["WNTR"].position = -300                         # |short| counts too
+    while m.tick < 59:
+        m.advance()
+    assert m.penalty == 0                                   # only assessed at a close
+    m.advance()                                             # tick 60: the close
+    assert m.penalty == 10 * 1000
+
+
+def test_position_limit_news_parser():
+    from ritc.pricing.news import parse_position_limit
+
+    assert parse_position_limit("The aggregate position limit for this week is 15,000 shares") == 15000
+    assert parse_position_limit("Your CRO set an aggregate position limit of 20000 shares") == 20000
+    assert parse_position_limit("The delta limit for this sub-heat is 10,000") is None
+    assert parse_position_limit("Stocks rallied 1,200 points") is None
+
+
+def test_close_cuts_largest_positions_first():
+    from ritc.strategies.equity import close_cuts, ticks_to_close
+
+    assert close_cuts({"A": 9000, "B": -6000, "C": 1000}, 13500) == [("A", "SELL", 2500)]
+    assert close_cuts({"A": 4000, "B": -6000}, 1000) == [("B", "BUY", 6000), ("A", "SELL", 3000)]
+    assert close_cuts({"A": 4000}, 15000) == []
+    assert [ticks_to_close(t, 60) for t in (1, 55, 59, 60, 61)] == [59, 5, 1, 0, 59]

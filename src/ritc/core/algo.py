@@ -104,8 +104,12 @@ def schedule_position(start: int, target: int, start_tick: int, deadline: int, n
 
 
 def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks_left: int,
-                  max_order: int, p: AlgoParams, limit_price: float | None = None) -> list[Child]:
-    """Pure function: the child orders to have working this loop."""
+                  max_order: int, p: AlgoParams, limit_price: float | None = None,
+                  passive_only: bool = False) -> list[Child]:
+    """
+    Pure function: the child orders to have working this loop. `passive_only`: never cross, just
+    rest at the touch (the case closes what is left at the last price, so crossing buys nothing).
+    """
     remaining = target - position
     if remaining == 0 or book.best_bid is None or book.best_ask is None:
         return []
@@ -115,6 +119,8 @@ def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks
     behind = max(0, sign * (sched - position))           # units behind schedule
     if ticks_left <= p.urgent_ticks:
         behind = remaining
+    if passive_only:
+        behind = 0
     children: list[Child] = []
 
     # ---- aggressive part: catch up with the schedule
@@ -134,7 +140,7 @@ def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks
             remaining -= qty
 
     # ---- passive part: rest the rest (iceberg) at the touch to earn the spread
-    if remaining > 0 and ticks_left > p.urgent_ticks:
+    if remaining > 0 and (ticks_left > p.urgent_ticks or passive_only):
         spread_ticks = round((book.best_ask - book.best_bid) / p.tick)
         if action == "SELL":
             px = book.best_ask - (p.tick if spread_ticks >= p.improve_if_spread_ticks else 0)
@@ -176,8 +182,10 @@ class BlockExecutor:
         from .execution import QuoteManager
         self.ex = executor
         self.p = params or AlgoParams()
-        self.qm = QuoteManager(executor, tolerance=self.p.tick / 2)
+        self.qm = QuoteManager(executor, tolerance=self.p.tick / 2, never_larger=True)
         self.blocks: dict[str, Block] = {}
+        self.passive_from: int | None = None     # abs tick from which nothing crosses (hold to the bell)
+        self.passive: set[str] = set()           # tickers that only rest this loop (risk within budget)
 
     def work(self, ticker: str, position: int, target: int, now: int, deadline: int,
              limit_price: float | None = None, kappa: float = 0.0) -> Block:
@@ -202,7 +210,9 @@ class BlockExecutor:
             sched = schedule_position(b.start_pos, b.target, b.start_tick, b.deadline, now, self.p.front_load,
                                       b.kappa)
             kids = plan_children(books[t], pos, sched, b.target, b.deadline - now,
-                                 self.ex.max_size(t), self.p, b.limit_price)
+                                 self.ex.max_size(t), self.p, b.limit_price,
+                                 passive_only=t in self.passive or (self.passive_from is not None
+                                                                     and now >= self.passive_from))
             passive = {c.action: c for c in kids if c.passive}
             for c in kids:
                 if not c.passive:

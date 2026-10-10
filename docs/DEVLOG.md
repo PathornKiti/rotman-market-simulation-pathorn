@@ -1,5 +1,53 @@
 # Development log and plan
 
+## 2026-10-11: Liquidity Risk Case, "for selection 2027" brief
+
+The organisers sent the official brief, an Excel RTD helper, the RTD and REST API docs and a Python tender
+template (`document/`, `Python package/`). This week's case is the **`liability` bot** (Rotman's "LT" =
+liability trading: take a client's block onto your book, then unwind it). Practice server opens Sun 2026-10-11.
+
+| Area | Change | Files |
+|---|---|---|
+| Config | 2027 brief: CRZY/TAME/CROC, max orders 25k/10k/20k, net 100k; kill switch off; `respect_windows`, `booking_ticks`, `freeze_rejected_bids`, hold-to-the-bell settings, `decide_late_ticks = 3` + guards, `min_ticks_to_unwind = 5` | `config/liability.toml` |
+| Liability bot | unbooked-tender tracking and `unwind_target`; undecided-window freeze; hold to the bell (passive-only window, $ risk budget, close-out valuation); late answers with expiry / end-of-heat safety; auction reference-price guard; `VOL` log line | `strategies/liability.py` |
+| Execution | resting orders never larger than requested (`never_larger`); passive-only blocks | `core/execution.py`, `core/algo.py` |
+| Simulator | 2027 case (prices, vols, depths, CROC regimes, end-of-case liquidity, 420 ticks), booking delay, winner-take-all, limit enforcement, last-price close, speculation / front-running fines, random tender times, time and sales; stress knobs `vol depth edge size gap book strict_fr flow anchor maker_fee spread close_slip bell crowd_at_expiry vol_regime` | `sim/server.py` |
+| Tools | `ritc stress` (scenarios, frontier sweep, template benchmark, oracle-vol env), `ritc record` / `ritc calibrate` (practice measurement), `ritc run --set` | `stress.py`, `recorder.py`, `cli.py` |
+| Tests | 130 → 139: auction reserve / WTA, sub-heat tickers, late answers and guards, rejected-bid freeze, anchored tenders, auction reference price, recorder fill model and crowd study | `tests/` |
+| Docs | GAP_ANALYSIS (16 gaps), RISK_REVIEW (risk-manager diagnosis + validation), PRACTICE_PLAN (heat-by-heat, stop rules, playbooks, risk profiles), RESEARCH entries, OFFICIAL_RULES | `docs/` |
+
+Work was split with two agents: a quant analyst (hold-to-the-bell, later the crowd mitigations) and a risk
+manager (loss attribution). Every kept change was re-run independently before being reported.
+
+Open questions only the practice server can answer (all measured by `ritc record` + `ritc calibrate`):
+1. Is the close-out at the last price really free? (the hold-to-the-bell gain depends on it)
+2. Do resting orders fill, and how far from the mid do trades reach (fill model / kappa)?
+3. Is there a crowd, and does it hit on tender arrival or at expiry? (decides the head-start playbook)
+4. Real tender windows, `expires` semantics, booking delay; does an auction we bid on stay listed?
+5. Real vol / depth / tender edges, to recalibrate the simulator and re-run `ritc stress`.
+6. The `/limits` name (brief says LIMIT-STOCK; config group is `equity`).
+
+Next: Sunday practice per [PRACTICE_PLAN.md](PRACTICE_PLAN.md), then recalibrate the simulator from the
+recordings and retune; build a resting-depth rule only if the fill data supports it.
+
+## 2026-10-09 (later): RITC 2026 rules
+
+The official RITC 2026 package (github.com/RotmanFRTL/RotmanFRTL.github.io) changes the case lineup:
+Liquidity Risk, Volatility, Electricity (API orders off), **Merger Arbitrage (new)**, Algo Market Making.
+
+| Area | Change | Files |
+|---|---|---|
+| Liability | Trades every stock `/securities` lists (2026 sub-heats change tickers); new tickers get the server's fee and max order and count in the limit groups | `strategies/liability.py`, `core/risk.py` (`add_ticker`) |
+| Equity | Minute-close aggregate limit: reduce-only quoting into each close, cross the excess, limit parsed from news | `strategies/equity.py`, `pricing/news.py`, `config/equity.toml` |
+| Simulator | Equity is the 2026 case (WNTR, rebates, aggregate limit + $10/share fine at each close, close news shocks) | `sim/server.py` |
+| Docs | 2026 rules for liability and equity | `docs/OFFICIAL_RULES.md` |
+| Tests | sub-heat tickers, 2026 equity universe, close fine, limit parser, close cuts | `tests/test_official_rules.py` |
+
+Next, in order: derivatives on the 2026 format (one 1-month expiry, $0.01/share and $1/contract) and
+the vol market maker as measured on real practice servers in Sep 2026 (holds the old vol through a week
+boundary, then ~12-tick half-life; 4–14 pt stale at tick 1; 3–4 pt wobble); a hedgeability guard
+near expiry; a ~1 s tender booking delay in the liability sim; a Merger Arbitrage bot; DMA API support.
+
 ## 2026-10-09: losing seeds diagnosed; queue model; in-process tuner
 
 | Area | Change | Files |

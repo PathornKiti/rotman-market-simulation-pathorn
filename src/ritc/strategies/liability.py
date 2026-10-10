@@ -36,8 +36,35 @@ ticker restarts the schedule from the new position.
 the largest slice whose VWAP stays within `max_slippage` of the touch, capped by
 a participation rate. Kept for A/B testing (`python -m ritc tune`).
 
-Tenders arrive through the real-time feed (polled every ~100 ms), so a
-profitable block is evaluated and accepted as soon as it appears.
+Hold to the bell (2027 brief)
+-----------------------------
+"All open positions are closed at the end ... based on the last traded price" with
+no fine, and prices are a random walk. So holding inventory costs NOTHING on
+average, while every crossed share pays fee + spread (+ impact). Crossing only
+buys risk reduction. So:
+
+    hold_risk_budget   cross only the part of a position whose 1-sd risk to the bell,
+                       |pos| x GARCH sigma x sqrt(ticks left), is over the budget ($);
+                       the rest only RESTS at the touch (earns the spread, no impact)
+    close_hold_ticks   in the final seconds never cross at all
+    hold_valuation     inside that window a tender's exit is the close-out at ~mid
+                       (no fee, no book to walk) less the risk premium of holding
+
+A volatile market (GARCH sigma up) shrinks the held part automatically.
+
+Tenders arrive through the real-time feed (polled every ~100 ms). By default a
+block is evaluated and answered as soon as it appears.
+
+Deciding late (`decide_late_ticks`)
+-----------------------------------
+A tender's price is fixed when it arrives, but the market keeps moving for the
+whole 15-30 s decision window. Answering at once throws that away: wait until
+`decide_late_ticks` before expiry, re-price against the book THEN, and accept
+only if it still pays. Under a random walk that is an option on the tender
+(accept the ones that drifted our way, drop the ones that drifted away), and a
+crowd unwinding the same block shows up in the price before we commit. The cost:
+the stock is frozen while we wait (`respect_windows`: trading it during an open
+window is front-running).
 
 Crowded tenders (`crowd_learn = true`)
 --------------------------------------
@@ -103,6 +130,7 @@ def evaluate_tender(
     price_vol_per_tick: float = 0.0,
     risk_aversion: float = 0.0,
     crowd_cost: float = 0.0,
+    close_hold_ticks: int = 0,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -162,6 +190,13 @@ def evaluate_tender(
     drift_cost += crowd_cost             # learned: how far the price runs against tenders' unwinds
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
 
+    # Close to the bell the exit is the case's own close-out at the last traded price (~mid): no fee,
+    # no book to walk, only the price risk of holding to the end. Value it that way when it is better.
+    if close_hold_ticks and ticks_left <= close_hold_ticks and book.mid:
+        hold_cost = risk_aversion * price_vol_per_tick * ticks_left ** 0.5 + crowd_cost
+        if sign * book.mid - hold_cost > sign * vwap_unwind - fees - drift_cost:
+            vwap_unwind, fees, drift_cost = book.mid, 0.0, hold_cost
+
     if fixed:
         if tender_px is None:
             return TenderDecision(False, None, 0.0, vwap_unwind, "fixed tender without price")
@@ -172,13 +207,26 @@ def evaluate_tender(
 
     # Competitive: bid the price that still leaves our margin.
     bid = vwap_unwind - sign * (fees + drift_cost + competitive_margin)
-    if tender_px is not None:
-        # Some cases show a reference price; never bid worse for ourselves than it.
-        ref = float(tender_px)
+    ref = float(tender_px) if tender_px is not None else 0.0
+    if ref > 0 and book.mid and abs(ref / book.mid - 1) < 0.2:
+        # Some cases show a reference price; never bid worse for ourselves than it. A zero or absurd one
+        # (the API's placeholder on an auction?) is ignored: min(bid, 0) would bid $0 and never win.
         bid = min(bid, ref) if action == "BUY" else max(bid, ref)
     pps = sign * (vwap_unwind - bid) - fees - drift_cost
     ok = pps >= min_profit
     return TenderDecision(ok, round(bid, 2), pps, vwap_unwind, f"competitive bid {bid:.2f}, profit/share {pps:+.4f}")
+
+
+def hold_within_budget(qty: int, price_vol_per_tick: float, ticks_left: int, budget: float) -> bool:
+    """
+    Holding `qty` to the bell risks |qty| x sigma x sqrt(ticks left) (1 sd, $). Under a random walk, with
+    the case closing what is left at the last price for free, holding costs nothing on average and
+    crossing always costs fee + spread (+ impact). So only cross while that risk is over `budget`.
+    No vol estimate yet -> not within budget (unwind as usual).
+    """
+    if price_vol_per_tick <= 0:
+        return False
+    return abs(qty) * price_vol_per_tick * max(ticks_left, 0) ** 0.5 <= budget
 
 
 def unwind_slice(book: OrderBook, position: int, max_slippage: float, participation: float,
@@ -218,12 +266,16 @@ class LiabilityStrategy(Strategy):
         self.last_mid: dict[str, float] = {}
         self.garch = {t: OnlineGarch() for t in self.tickers}
         self.last_tick = -1
-        self.seen: set[int] = set()
+        self.seen: set[int] = set()              # tenders we have ANSWERED (accepted / declined / bid)
+        self.observed: set[int] = set()          # tenders whose crowd reaction we are already scoring
+        self.first_seen: dict[int, int] = {}     # tender id -> abs tick we first saw it (decide_late safety)
         ex_cfg = self.cfg.get("execution", {})
         self.mode = ex_cfg.get("unwind_mode", "block")
         self.horizon = int(ex_cfg.get("unwind_horizon_ticks", 30))
         self.schedule = ex_cfg.get("schedule", "almgren_chriss")          # or "almgren_chriss"
         self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 3e-7))
+        self.close_hold = int(ex_cfg.get("close_hold_ticks", 0))   # passive only this close to the bell
+        self.hold_budget = float(ex_cfg.get("hold_risk_budget", 0.0))   # $ 1-sd risk to the bell held passively
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
         # CROWDED TENDERS: other desks get the same block and unwind it into the same book.
@@ -235,10 +287,42 @@ class LiabilityStrategy(Strategy):
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
         self.taken: set[int] = set()             # tenders we hold: our own unwind moves their price
+        # Accepted tenders the server may not have booked yet: id -> (ticker, signed qty, abs tick by which
+        # it is surely booked). RIT books ~1 s after the accept (winner-take-all only at the window's end).
+        self.pending: dict[int, tuple[str, int, int]] = {}
+        self.bidding: dict[int, tuple[str, int]] = {}    # our open auction bids: id -> (ticker, abs expiry tick)
+        self.frozen: set[str] = set()                   # tickers with an undecided tender (respect_windows)
 
     @property
     def book_tickers(self) -> list[str]:
         return self.tickers
+
+    def sync_tickers(self, snap: Snapshot) -> None:
+        """
+        RITC 2026: each sub-heat trades 2-4 DIFFERENT stocks, so trade what the server lists, not
+        the config. A tender on a ticker we don't track would be accepted and never unwound
+        ($10/share uncovered fine). Fees and order sizes come from the server row unless the
+        config sets them; every stock counts 1 share against the limit groups.
+        """
+        live = [t for t, s in snap.securities.items()
+                if s.get("type", "STOCK") == "STOCK" and s.get("is_tradeable", True)]
+        held = [t for t, q in snap.positions.items() if q and t not in live]
+        tickers = live + held
+        if tickers == self.tickers:
+            return
+        for t in tickers:
+            if t in self.drift:
+                continue
+            row = snap.securities.get(t, {})
+            if t not in self.fees and row.get("trading_fee") is not None:
+                self.fees[t] = float(row["trading_fee"])
+            if t not in self.ex.max_order_size and row.get("max_trade_size"):
+                self.ex.max_order_size[t] = int(row["max_trade_size"])
+            self.risk.add_ticker(t)
+            self.drift[t] = EWMA(self.p.get("drift_halflife", 15))
+            self.garch[t] = OnlineGarch()
+        log.info("tickers: %s", ", ".join(tickers))
+        self.tickers = tickers
 
     def _update_drift(self, snap: Snapshot) -> None:
         if snap.tick == self.last_tick:          # one time-series observation per tick
@@ -254,6 +338,8 @@ class LiabilityStrategy(Strategy):
             if t in self.last_mid:
                 self.drift[t].update(m - self.last_mid[t])
             self.last_mid[t] = m
+        if snap.tick % 60 == 0:      # practice check: compare with `calibrate`'s measured sigma/tick per stock
+            log.info("VOL " + "  ".join(f"{t} ${self.price_vol(t, snap):.4f}/tick" for t in self.tickers))
 
     def _learn_crowd(self, snap: Snapshot) -> None:
         lag, keep = int(self.p.get("crowd_ticks", 10)), []
@@ -285,27 +371,98 @@ class LiabilityStrategy(Strategy):
         return min(self.horizon, fast) if fast and self.crowded() else self.horizon
 
     def step(self, snap: Snapshot) -> None:
+        self.sync_tickers(snap)
         self._update_drift(snap)
         self.handle_tenders(snap)
+        self.frozen = self.undecided(snap) if self.p.get("respect_windows", False) else set()
+        for t in self.frozen:
+            if t in self.algo.blocks:
+                self.algo.cancel(t)                  # pull resting orders: a fill now is front-running
         self.unwind(snap)
+
+    def undecided(self, snap: Snapshot) -> set[str]:
+        """
+        Tickers with a tender still in its decision window for us: offered and not yet answered, or an
+        auction / winner-take-all we bid on that is not resolved until it expires. The brief: "Any trades
+        executed during this window, before the tender decision is finalized, are flagged as front-running".
+        """
+        now = snap.abs_tick
+        self.bidding = {k: v for k, v in self.bidding.items() if v[1] >= now}
+        out = {t for t, _ in self.bidding.values()}
+        out |= {t.get("ticker") for t in self.current_tenders()
+                if int(t.get("tender_id", -1)) not in self.seen and t.get("ticker")}
+        return out
 
     def price_vol(self, ticker: str, snap: Snapshot) -> float:
         g, mid = self.garch.get(ticker), snap.mid(ticker)
         return g.vol() * mid if g is not None and g.ready and mid else 0.0
 
+    def pending_delta(self, ticker: str, now: int) -> int:
+        """Signed shares of accepted tenders on `ticker` that may still be unbooked."""
+        self.pending = {k: v for k, v in self.pending.items() if v[2] > now}
+        return sum(q for t, q, _ in self.pending.values() if t == ticker)
+
+    def unwind_target(self, ticker: str, pos: int, now: int) -> int:
+        """
+        Where to unwind `pos` to. Normally flat; but an accepted, not-yet-booked tender in the other
+        direction will offset part of it when it lands, so keep that part. Trading it away first would
+        take the position through zero once the tender books: fined as speculation (2027 brief), and a
+        round trip of spread and fees. Never past zero of the current position, whatever is pending.
+        """
+        d = self.pending_delta(ticker, now)
+        if not d or not pos or (d > 0) == (pos > 0):
+            return 0
+        return (1 if pos > 0 else -1) * min(abs(pos), abs(d))
+
+    def wait_to_decide(self, t: dict, tid: int, snap: Snapshot) -> bool:
+        """
+        decide_late_ticks: hold the answer until that many ticks before `expires`. Safety for the real
+        server, whose `expires` we have not seen yet: answer AT ONCE if the window looks wrong (expires
+        missing, already inside `late`, or more than `decide_late_max_window` ticks away), and never wait
+        longer than that since we first saw the tender. A missed tender is a declined one: never risk it.
+        """
+        late = int(self.p.get("decide_late_ticks", 0))
+        if not late:
+            return False
+        if tid not in self.first_seen:
+            log.info("TENDER %s %s %s x%s @ %s seen at tick %s, expires %s: answering %s ticks before it", tid,
+                     t.get("action"), t.get("ticker"), t.get("quantity"), t.get("price"), snap.tick,
+                     t.get("expires"), late)
+        first = self.first_seen.setdefault(tid, snap.tick)
+        cap = int(self.p.get("decide_late_max_window", 30))
+        try:
+            left = int(t["expires"]) - snap.tick
+        except (KeyError, TypeError, ValueError):
+            return False
+        if left <= late or left > cap or snap.tick - first >= cap - late:
+            return False
+        if self.p.get("decide_late_end_guard", True):
+            # Don't wait past the last tick a tender can still be ACCEPTED: evaluate_tender refuses with fewer
+            # than `min_ticks_to_unwind` left, and the wind-down stops answering. A window running past the
+            # bell would otherwise be answered too late (real-time test, 2026-10-11: 3 of 32 missed).
+            last_ok = max(int(self.p.get("min_ticks_to_unwind", 10)),
+                          int(self.cfg.get("run", {}).get("wind_down_ticks", 5))) + 1
+            if snap.ticks_left <= last_ok + late:
+                return False
+        return True
+
     def handle_tenders(self, snap: Snapshot) -> None:
-        positions = snap.positions
+        now = snap.abs_tick
+        positions = {t: q + self.pending_delta(t, now) for t, q in snap.positions.items()}
         for t in self.current_tenders():
             tid = int(t.get("tender_id", -1))
             ticker = t.get("ticker")
             if tid in self.seen or ticker is None:
                 continue
             book = snap.book(ticker)
-            if self.crowd_learn and snap.mid(ticker) is not None:
+            if self.crowd_learn and snap.mid(ticker) is not None and tid not in self.observed:
+                self.observed.add(tid)
                 # The price runs AGAINST our unwind: down after a BUY tender (we must sell).
                 sign = -1 if str(t.get("action", "BUY")).upper() == "BUY" else 1
                 self.crowd_obs.append((snap.abs_tick, ticker, sign, int(t.get("quantity", 0)) / 10_000,
                                        snap.mid(ticker), tid))
+            if self.wait_to_decide(t, tid, snap):
+                continue          # keep the option open: answer `decide_late_ticks` before the window closes
             d = evaluate_tender(
                 t, book,
                 fee=float(self.fees.get(ticker, 0.0)),
@@ -322,6 +479,7 @@ class LiabilityStrategy(Strategy):
                 price_vol_per_tick=self.price_vol(ticker, snap),
                 risk_aversion=self.p.get("risk_aversion", 0.0),
                 crowd_cost=self.crowd_cost(int(t.get("quantity", 0))),
+                close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
             )
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
@@ -331,12 +489,23 @@ class LiabilityStrategy(Strategy):
             try:
                 if d.accept:
                     resp = self.client.accept_tender(tid, None if t.get("is_fixed_bid", True) else d.price)
+                    if not t.get("is_fixed_bid", True) and self.p.get("freeze_rejected_bids", True):
+                        # A bid is in the auction until the window closes, whatever the immediate reply says:
+                        # the award is only final at expiry, so trading the stock before then is front-running.
+                        self.bidding[tid] = (ticker, now + max(0, int(t.get("expires", snap.tick)) - snap.tick))
                     if isinstance(resp, dict) and resp.get("success") is False:
                         log.info("TENDER %s not filled (competitive bid %s rejected)", tid, d.price)
                         continue          # we hold nothing: don't spend risk room on it
                     self.taken.add(tid)
                     sign = 1 if str(t.get("action")).upper() == "BUY" else -1
                     positions[ticker] = positions.get(ticker, 0) + sign * int(t["quantity"])
+                    wait = int(self.p.get("booking_ticks", 2))
+                    if not t.get("is_fixed_bid", True):    # auctions may only be awarded at the window's end
+                        wait += max(0, int(t.get("expires", snap.tick)) - snap.tick)
+                    if not t.get("is_fixed_bid", True):
+                        self.bidding[tid] = (ticker, now + max(0, int(t.get("expires", snap.tick)) - snap.tick))
+                    if self.p.get("track_bookings", True):
+                        self.pending[tid] = (ticker, sign * int(t["quantity"]), now + wait)
                 elif self.p.get("decline_explicitly", True):
                     self.client.decline_tender(tid)
             except Exception as exc:       # tender may have expired between read and accept
@@ -351,21 +520,34 @@ class LiabilityStrategy(Strategy):
     def unwind_block(self, snap: Snapshot) -> None:
         now = snap.abs_tick
         period_end = snap.period * snap.ticks_per_period - int(self.cfg.get("run", {}).get("wind_down_ticks", 5)) - 1
+        if self.close_hold:
+            # HOLD TO THE BELL (2027 brief): what is still open at the end is closed at the last traded
+            # price, with no fine. Crossing a thin book in the final seconds pays fee + spread + impact
+            # to avoid a few seconds of random-walk risk, so near the end only rest at the touch.
+            self.algo.passive_from = snap.period * snap.ticks_per_period - self.close_hold
         for t in self.tickers:
+            if t in self.frozen:
+                continue
             pos = snap.positions.get(t, 0)
+            target = self.unwind_target(t, pos, now)
             b = self.algo.blocks.get(t)
-            if pos == 0:
+            if pos == target:
                 if b:
                     self.algo.cancel(t)
                 continue
             # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
-            if b is None or (pos > 0) != (b.start_pos > 0) or abs(pos) > abs(b.start_pos):
+            if (b is None or b.target != target or (pos > 0) != (b.start_pos > 0)
+                    or abs(pos) > abs(b.start_pos)):
                 kappa = 0.0
                 if self.schedule == "almgren_chriss":
                     # sigma: GARCH $/share/tick; eta: from the side we unwind INTO.
                     kappa = ac_kappa(self.price_vol(t, snap), book_eta(snap.book(t), "bid" if pos > 0 else "ask"),
                                      self.ac_lambda)
-                self.algo.work(t, pos, 0, now, min(now + self.unwind_horizon(), period_end), kappa=kappa)
+                self.algo.work(t, pos, target, now, min(now + self.unwind_horizon(), period_end), kappa=kappa)
+        if self.hold_budget:
+            self.algo.passive = {t for t in self.algo.blocks
+                                 if hold_within_budget(snap.positions.get(t, 0) - self.algo.blocks[t].target,
+                                                       self.price_vol(t, snap), snap.ticks_left, self.hold_budget)}
         if self.algo.active:
             open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
             self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)
@@ -373,7 +555,10 @@ class LiabilityStrategy(Strategy):
     def unwind_slices(self, snap: Snapshot) -> None:
         urgency = self.p.get("urgent_ticks", 30)
         for ticker in self.tickers:
+            if ticker in self.frozen:
+                continue
             pos = snap.positions.get(ticker, 0)
+            pos -= self.unwind_target(ticker, pos, snap.abs_tick)
             if pos == 0:
                 continue
             slip = self.p.get("max_slippage", 0.05)
@@ -386,12 +571,22 @@ class LiabilityStrategy(Strategy):
                 self.ex.limit(ticker, o[0], o[1], o[2])
 
     def wind_down(self, snap: Snapshot) -> None:
+        self.sync_tickers(snap)
+        if self.close_hold:
+            # Hold to the bell: keep resting at the touch, never cross; the case closes the rest at the last price.
+            self.frozen = self.undecided(snap) if self.p.get("respect_windows", False) else set()
+            for t in self.frozen:
+                if t in self.algo.blocks:
+                    self.algo.cancel(t)
+            self.unwind(snap)
+            return
         # Last ticks: dump what is left - an unclosed position is pure risk.
         for t in list(self.algo.blocks):
             self.algo.cancel(t)
         self.ex.cancel_all()
         for ticker in self.tickers:
             pos = snap.positions.get(ticker, 0)
+            pos -= self.unwind_target(ticker, pos, snap.abs_tick)
             if pos:
                 book = snap.book(ticker)
                 touch = book.best_bid if pos > 0 else book.best_ask

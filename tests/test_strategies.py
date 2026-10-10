@@ -63,6 +63,42 @@ def test_adverse_drift_penalises():
     assert falling.profit_per_share < calm.profit_per_share
 
 
+def test_hold_valuation_prices_the_free_close_out_near_the_bell():
+    # 2027 brief: positions left at the end close at the last traded price with no fine. Near the bell a
+    # big block is worth ~mid (no fee, no book to walk), so a tender the book walk rejects is taken.
+    thin = make_book([(25.00, 2000), (24.90, 2000)], [(25.02, 2000)])
+    t = {"action": "BUY", "quantity": 30000, "price": 24.95, "is_fixed_bid": True}
+    early = evaluate_tender(t, thin, 0.02, ticks_left=200, refill_factor=1.0, close_hold_ticks=90)
+    late = evaluate_tender(t, thin, 0.02, ticks_left=60, refill_factor=1.0, close_hold_ticks=90)
+    off = evaluate_tender(t, thin, 0.02, ticks_left=60, refill_factor=1.0, close_hold_ticks=0)
+    assert not early.accept and not off.accept
+    assert late.accept and abs(late.unwind_vwap - thin.mid) < 1e-9
+    risky = evaluate_tender(t, thin, 0.02, ticks_left=60, refill_factor=1.0, close_hold_ticks=90,
+                            price_vol_per_tick=0.05, risk_aversion=0.3)
+    assert risky.profit_per_share < late.profit_per_share          # holding risk is still charged
+
+
+def test_hold_risk_budget():
+    from ritc.strategies.liability import hold_within_budget
+
+    # 20k shares x $0.04/tick x sqrt(100 ticks) = $8k of 1-sd risk to the bell
+    assert hold_within_budget(20_000, 0.04, 100, 10_000)
+    assert not hold_within_budget(-20_000, 0.04, 100, 5_000)           # short side: same risk
+    assert not hold_within_budget(20_000, 0.08, 100, 10_000)           # vol doubles -> cross the excess
+    assert hold_within_budget(20_000, 0.08, 9, 10_000)                 # ...but not with 9 s to the bell
+    assert not hold_within_budget(1_000, 0.0, 100, 10_000)             # no vol estimate yet: unwind as usual
+
+
+def test_passive_only_never_crosses():
+    from ritc.core.algo import AlgoParams, plan_children
+
+    p = AlgoParams(urgent_ticks=10)
+    urgent = plan_children(DEEP, 30000, 0, 0, ticks_left=2, max_order=10000, p=p)
+    assert urgent and not urgent[0].passive                        # normally: cross at the deadline
+    held = plan_children(DEEP, 30000, 0, 0, ticks_left=2, max_order=10000, p=p, passive_only=True)
+    assert len(held) == 1 and held[0].passive and held[0].action == "SELL" and held[0].price >= DEEP.best_ask
+
+
 def test_unwind_slice():
     o = unwind_slice(DEEP, 30000, max_slippage=0.02, participation=0.5, max_order=10000)
     assert o[0] == "SELL" and 0 < o[1] <= 10000
@@ -286,3 +322,16 @@ def test_etf_fx_hedge_flattens_the_usd_balance_past_the_band():
     pos = {"USD": -3_000_000}
     s.hedge_fx(pos)                                          # short USD: buy it back, one max order
     assert c.sent == [("USD", "BUY", 2_500_000)] and pos["USD"] == -500_000
+
+
+def test_auction_ignores_a_zero_or_absurd_reference_price():
+    from ritc.core.book import Level, OrderBook
+    # If the real API sends price=0 on a competitive tender, min(bid, 0) used to make us bid $0 (never filled).
+    book = OrderBook("X", [Level(9.99, 50_000)], [Level(10.01, 50_000)])
+    base = {"action": "BUY", "quantity": 10_000, "is_fixed_bid": False}
+    none = evaluate_tender({**base, "price": None}, book, fee=0.02, min_profit=0.0)
+    zero = evaluate_tender({**base, "price": 0}, book, fee=0.02, min_profit=0.0)
+    silly = evaluate_tender({**base, "price": 2.50}, book, fee=0.02, min_profit=0.0)
+    near = evaluate_tender({**base, "price": 9.80}, book, fee=0.02, min_profit=0.0)
+    assert none.price == zero.price == silly.price > 9.5          # ignored
+    assert near.price == 9.80                                      # a sane reference still caps the bid
