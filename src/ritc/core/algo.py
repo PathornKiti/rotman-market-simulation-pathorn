@@ -221,6 +221,71 @@ class BlockExecutor:
                 c = passive.get(side)
                 self.qm.sync(t, side, c.price if c else None, c.qty if c else 0, open_ids)
 
+    def step_fresh(self, books: dict[str, OrderBook], positions: dict[str, int], now: int, refresh,
+                   target_of) -> None:
+        """
+        `step` for a slow loop against a live book. Resting orders keep filling while a loop runs, so
+        positions read at the start are stale by the time orders go out, and an order sized from them
+        can take the position through zero (fined as speculation in the liability case). So:
+        1. plan from the loop's positions and cancel every resting quote that will not be kept;
+        2. `refresh()` -> (open orders, positions), read in that order: a fill between the two reads is
+           counted twice (safe), never missed;
+        3. re-plan from the fresh positions and cap IOC + new resting at what is left to unwind after
+           the kept quotes' unfilled shares, never past zero.
+        """
+        kept: dict[tuple[str, str], bool] = {}
+        for t, b in self.blocks.items():
+            kids = self._kids(t, b, books[t], positions.get(t, 0), now)
+            passive = {c.action: c for c in kids if c.passive}
+            for side in ("BUY", "SELL"):
+                c = passive.get(side)
+                kept[(t, side)] = self.qm.keeps(t, side, c.price if c else None, c.qty if c else 0)
+        orders, fresh = refresh()
+        for t, b in list(self.blocks.items()):
+            pos = fresh.get(t, 0)
+            b.target = target_of(t, pos)
+            if pos == b.target or (b.target - pos > 0) == (pos > 0) and pos != 0:
+                log.info("BLOCK done %s", b)
+                self.cancel(t)
+                continue
+            side = "BUY" if b.target > pos else "SELL"
+            left = min(abs(b.target - pos), abs(pos))      # never through zero
+            for o in orders:
+                if o.get("ticker") != t:
+                    continue
+                q = self.qm.live.get((t, str(o.get("action", "")).upper()))
+                if q is not None and q.order_id == o.get("order_id"):
+                    q.quantity = int(o.get("quantity", 0)) - int(o.get("quantity_filled", 0) or 0)
+                if str(o.get("action", "")).upper() == side:
+                    left -= int(o.get("quantity", 0)) - int(o.get("quantity_filled", 0) or 0)
+            open_ids = {o.get("order_id") for o in orders}
+            for s_ in ("BUY", "SELL"):
+                q = self.qm.live.get((t, s_))
+                if q is not None and q.order_id not in open_ids:
+                    self.qm.live.pop((t, s_), None)          # filled or gone: forget it
+                    kept[(t, s_)] = False
+            for c in self._kids(t, b, books[t], pos, now):
+                if c.action != side or left <= 0:
+                    continue
+                if c.passive:
+                    if kept.get((t, side)) and (t, side) in self.qm.live:
+                        continue                              # its unfilled shares are already counted
+                    qty = min(c.qty, left)
+                    self.qm.sync(t, side, c.price, qty)
+                else:
+                    qty = min(c.qty, left)
+                    self.ex.limit(t, c.action, qty, c.price, ioc=True)
+                left -= qty
+            other = "SELL" if side == "BUY" else "BUY"
+            if (t, other) in self.qm.live:
+                self.qm.sync(t, other, None, 0)
+
+    def _kids(self, t: str, b: Block, book: OrderBook, pos: int, now: int) -> list[Child]:
+        sched = schedule_position(b.start_pos, b.target, b.start_tick, b.deadline, now, self.p.front_load, b.kappa)
+        return plan_children(book, pos, sched, b.target, b.deadline - now, self.ex.max_size(t), self.p,
+                             b.limit_price, passive_only=t in self.passive or (self.passive_from is not None
+                                                                                and now >= self.passive_from))
+
     @property
     def active(self) -> bool:
         return bool(self.blocks)

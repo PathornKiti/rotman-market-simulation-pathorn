@@ -1050,11 +1050,19 @@ CASE_SHAPE = {          # ticks_per_period, periods
 }
 
 
+class _Server(ThreadingHTTPServer):
+    # The bot fires ~8 requests at once and this server closes every connection (HTTP/1.0). Python's default
+    # listen queue of 5 drops the extra connects and the client's TCP retries after exactly 1 s: every
+    # "slow loop: ~1008 ms" in a simulator run was this, not the bot.
+    request_queue_size = int(os.environ.get("RITC_SIM_BACKLOG", 128))   # 5 = the old slow-loop world (testing)
+    daemon_threads = True
+
+
 def serve(case: str, port: int = 9999, speed: float = 4.0, delay: float = 2.0, seed: int | None = None,
           block: bool = True, hostile: float = 0.0, queue: bool = False) -> tuple[ThreadingHTTPServer, Market]:
     tpp, periods = CASE_SHAPE[case]
     m = Market(case, tpp, periods, seed, hostile, queue)
-    srv = ThreadingHTTPServer(("127.0.0.1", port), make_handler(m))
+    srv = _Server(("127.0.0.1", port), make_handler(m))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     if speed <= 0:
         # LOCK-STEP: no clock thread. The caller advances the market itself with

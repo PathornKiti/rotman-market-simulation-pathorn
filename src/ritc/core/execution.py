@@ -231,6 +231,21 @@ class QuoteManager:
         oid = resp[0].get("order_id") if resp and isinstance(resp[0], dict) else None
         self.live[key] = Quote(oid, price, quantity)
 
+    def keeps(self, ticker: str, side: str, price: float | None, quantity: int) -> bool:
+        """Would `sync` leave the current quote alone? Cancels it now if not (fresh_unwind phase 1)."""
+        key = (ticker, side.upper())
+        cur = self.live.get(key)
+        if cur is None:
+            return False
+        if (price is not None and quantity > 0 and abs(cur.price - price) < self.tolerance
+                and abs(cur.quantity - quantity) < max(1, quantity // 4)
+                and not (self.never_larger and cur.quantity > quantity)):
+            return True
+        if cur.order_id is not None:
+            self.ex.cancel(cur.order_id)
+        self.live.pop(key, None)
+        return False
+
     def clear(self) -> None:
         for q in self.live.values():
             if q.order_id is not None:

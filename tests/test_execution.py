@@ -251,3 +251,55 @@ def test_in_process_transport_answers_like_http():
         assert [o["price"] for o in http.orders()] == [1.0]      # both see one market
     finally:
         srv.shutdown()
+
+
+# ------------------------------------------------------- slow loop vs live book
+class _Ex:
+    """Executor stub: records orders; `filled_between` shares of the resting quote fill mid-loop."""
+    def __init__(self):
+        self.sent: list[tuple] = []
+        self.cancelled: list[int] = []
+        self.next_id = 100
+
+    def max_size(self, _t):
+        return 25000
+
+    def limit(self, t, action, qty, px, ioc=True):
+        self.next_id += 1
+        self.sent.append((t, action, qty, ioc))
+        return [{"order_id": self.next_id}]
+
+    def cancel(self, oid):
+        self.cancelled.append(oid)
+
+
+def test_fresh_unwind_never_sizes_past_zero_after_a_mid_loop_fill():
+    from ritc.core.algo import BlockExecutor
+    ex = _Ex()
+    algo = BlockExecutor(ex, P)
+    algo.work("TAME", 8000, 0, now=0, deadline=100)
+    algo.step({"TAME": BOOK}, {"TAME": 8000}, 1, set())          # rests SELL 4000
+    oid = ex.next_id
+    ex.sent.clear()
+    # Next loop starts from a stale +8,000 but the resting 4,000 filled meanwhile, and the schedule
+    # is now far behind (it would cross). Fresh read: no open orders, position +4,000.
+    algo.step_fresh({"TAME": BOOK}, {"TAME": 8000}, 90, lambda: ([], {"TAME": 4000}), lambda t, p: 0)
+    assert sum(q for _, a, q, _ in ex.sent if a == "SELL") <= 4000
+    # And a resting order still open counts against what is left.
+    ex.sent.clear()
+    algo.work("TAME", 4000, 0, now=90, deadline=100)
+    algo.qm.live.clear()
+    algo.step_fresh({"TAME": BOOK}, {"TAME": 4000}, 91,
+                    lambda: ([{"order_id": oid, "ticker": "TAME", "action": "SELL", "quantity": 4000,
+                               "quantity_filled": 1000}], {"TAME": 3000}), lambda t, p: 0)
+    assert sum(q for _, a, q, _ in ex.sent if a == "SELL") <= 0   # 3,000 left, 3,000 still resting
+
+
+def test_fresh_unwind_never_adds_to_a_position_kept_for_a_pending_tender():
+    from ritc.core.algo import BlockExecutor
+    ex = _Ex()
+    algo = BlockExecutor(ex, P)
+    algo.work("CRZY", 20000, 15000, now=0, deadline=100)          # keep 15k for an unbooked SELL tender
+    # The tender booked mid-loop: fresh position +5,000, the pending part still covers it.
+    algo.step_fresh({"CRZY": BOOK}, {"CRZY": 20000}, 5, lambda: ([], {"CRZY": 5000}), lambda t, p: min(p, 15000))
+    assert not [o for o in ex.sent if o[1] == "BUY"] and "CRZY" not in algo.blocks

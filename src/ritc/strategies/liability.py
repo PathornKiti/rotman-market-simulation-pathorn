@@ -276,6 +276,7 @@ class LiabilityStrategy(Strategy):
         self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 3e-7))
         self.close_hold = int(ex_cfg.get("close_hold_ticks", 0))   # passive only this close to the bell
         self.hold_budget = float(ex_cfg.get("hold_risk_budget", 0.0))   # $ 1-sd risk to the bell held passively
+        self.fresh_unwind = bool(ex_cfg.get("fresh_unwind", False))   # re-read positions before sizing orders
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
         # CROWDED TENDERS: other desks get the same block and unwind it into the same book.
@@ -565,7 +566,13 @@ class LiabilityStrategy(Strategy):
             self.algo.passive = {t for t in self.algo.blocks
                                  if hold_within_budget(snap.positions.get(t, 0) - self.algo.blocks[t].target,
                                                        self.price_vol(t, snap), snap.ticks_left, self.hold_budget)}
-        if self.algo.active:
+        if self.algo.active and self.fresh_unwind and not self.ex.dry_run:
+            def refresh():
+                orders = self.client.orders("OPEN")         # orders FIRST, then positions (see step_fresh)
+                return orders, self.client.positions()
+            self.algo.step_fresh({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, refresh,
+                                 lambda t, pos: self.unwind_target(t, pos, now))
+        elif self.algo.active:
             open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
             self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)
 

@@ -55,6 +55,23 @@ unwinding; `crowd_score_at = expiry`; fixed crowd charge; other `risk_aversion` 
 `competitive_margin` / `min_profit` values. Evaluated, not built: vol forecasting / HMM regimes (an oracle with the
 true volatility adds $0), market making / Avellaneda-Stoikov / RL (fined under this brief).
 
+**Local test day (2026-10-11):** a real-speed `_local` heat (seed 7, 1 tick/s) scored $44.2k vs $49.2k for the
+lock-step replay of the same market: $3,336 of **speculation fines** from unwinds overshooting zero, invisible in
+lock-step. Two causes, both fixed:
+- Simulator: every `slow loop: ~1008 ms` was its HTTP listen queue (5) dropping the bot's ~8 parallel connects;
+  macOS retries after exactly 1 s. Queue now 128 (8-16 parallel requests: 2-7 ms; were ~1,005 ms).
+- Bot: `fresh_unwind = true` (stale positions + resting fills between reads). Real time, slow loops: fines
+  $1,414 -> $48/heat on fresh seeds 201-210, score +$2.5k (t 3.1); neutral in lock-step and with fast loops.
+Stress report (23 scenarios x 16 seeds): 5 losing heats of 368, all in the known crowd/hostile corners. 149 tests.
+
+**Arbitrage review of the brief (2026-10-11 evening):** the only legal arbitrage is tender price vs market;
+cross-stock / pairs / two-sided market making / moving the closing price all open new positions and are fined
+$0.20–0.40/share, and the stocks are independent random walks. The openings the brief does leave are already in
+the bot (book-walk tender pricing, the decision-window option `decide_late_ticks`, the free close-out at last
+price). Tested and removed: tender-vs-tender crossing, i.e. pricing the offsetting part of a tender at the held
+position's exit price (`exit` −$0.3k t −0.3, `mid` −$0.1k t −1.1; hostile −$0.05k). Left open: learning the
+competitive-auction reserve from practice data (PRACTICE_PLAN.md, auction reserve check).
+
 **Final retest** (32 brand-new seeds 401–432, 23 scenarios): base $65.1k (worst +$25.2k, 0 losing); the bot loses
 17 of 736 heats (2.3%), 9 of them in the one known weak spot (a crowd unwinding at tender expiry); the official
 tender template loses on average in every scenario. Real-time HTTP heat: 31 of 32 tenders answered (the 32nd

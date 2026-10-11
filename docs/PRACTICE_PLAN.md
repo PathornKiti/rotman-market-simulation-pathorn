@@ -58,6 +58,16 @@ with no fine. Worth +$11k-15k a heat in the simulator. Confirm on the real serve
       `--set execution.hold_risk_budget=0 --set execution.close_hold_ticks=0 --set strategy.hold_valuation=false`.
 - [ ] Is the real spread at least 3 cents? If it is tighter, the bot rests behind other orders and gets fewer fills.
 - [ ] A bid on an auction: does it return `success=false` at once, or only at expiry? Does the caption say "winner-take-all"?
+- [ ] **Slow loops**: count `slow loop` warnings in the bot log. A few are fine. Many at ~1,000 ms, or a p95 over
+      1 s in the end-of-run `loop p50 ... p95` line, means the RIT API is slow on this machine: tenders may be
+      answered late (`fresh_unwind` already stops the overshoot fines). Report it: the bot-side fix is fewer
+      parallel requests per loop.
+- [ ] **Auction reserve (the one arbitrage left, docs/RESEARCH.md 2026-10-11)**: a competitive auction fills at OUR
+      bid whenever it beats the hidden reserve, so the edge is learning where the reserve sits vs the mid. Run the
+      live heats as usual; the journal (`logs/*.jsonl`) already holds our bid, the mid at answer time, `expires` and
+      positions every tick. After the session, per auction tender: (bid − mid) signed for our side, filled or not
+      (position jump at expiry; cross-check the RIT Transaction Log). If fills cluster well inside our bids,
+      `competitive_margin` (0.05) can widen; if most bids miss, it should narrow. Needs ~10+ auctions across heats.
 - [ ] `/securities`: `trading_fee` and `limit_order_rebate` (is a resting fill charged?).
 
 ### Late-answer check (heat 1, dry run): the biggest setting depends on it

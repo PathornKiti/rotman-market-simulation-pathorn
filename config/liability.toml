@@ -95,6 +95,11 @@ hold_risk_budget = 40000      # ...and before that, only REST (never cross) whil
                               # CAVEAT "everything at once" stress (hostile + vol 1.5 + thin + strict): mean same, worst
                               # -$84k -> -$105k (sd ~$95k, not significant). If the practice case looks manipulated or
                               # far more volatile, lower this (20000) or set 0 for the old cross-to-schedule unwind.
+fresh_unwind = true           # SLOW-LOOP SAFETY: resting orders fill while a loop runs, so orders sized from the loop's
+                              # start positions took positions through zero (speculation fine). Cancel stale quotes, re-read
+                              # open orders THEN positions, cap IOC + resting at what is left (never past zero). Real time,
+                              # 1 s loops: seeds 1-10 +$7.6k (t 2.7); 201-210 fines $1,414 -> $48/heat (t -3.7), score +$2.5k
+                              # (t 3.1), worst $8.7k -> $12.4k; 101-110 +$1.9k (t 1.1). Lock-step / fast loops: +-$0.1k.
 unwind_horizon_ticks = 30     # target: flat within this many ticks of accepting a tender
 crowd_horizon_ticks = 12      # ...but race the crowd once it is detected (learned impact > 2 sd). A FIXED 12 cost
                               #   -$7.6k (t -6.1) in the benign sim; switching only on evidence costs nothing there.
