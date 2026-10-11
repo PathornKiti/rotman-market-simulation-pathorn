@@ -124,3 +124,5 @@ drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges al
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.25
 wind_down_ticks = 5
+
+# The more looking the right liquidity the better

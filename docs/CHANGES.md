@@ -8,6 +8,17 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
+## 2026-10-11: manual-trading advisor (`python -m ritc suggest`)
+
+`src/ritc/advisor.py`: connects to the live RIT API READ-ONLY (every non-GET call refused at the client) and runs
+the liability bot in dry-run on your own positions. Each refresh shows every open tender's ACCEPT / DECLINE /
+BID <price> with the $ edge and when to answer, each stock's limit orders (REST at the touch / CROSS), and red
+warnings for your resting orders that would be fined (through zero, wrong side, open tender). Tender pricing is
+the bot's own: `LiabilityStrategy.decide()` was split out of `handle_tenders` (no behaviour change, 152 tests).
+No trading logic changed, so there is no A/B number for it.
+Also: DMA API support (`RIT_AUTH` = Authorization header, sent with every request; same `/v1` paths as the client
+API per the DMA swagger), and `suggest` waits for a connection, saying what is missing, re-reading `.env` every 2 s.
+
 ## 2026-10-10: post-trade gap reports (`python -m ritc report`)
 
 `src/ritc/postmortem/` turns each `logs/liability-*.log` into `reports/liability-<date>-<time>_<local|live>.html`

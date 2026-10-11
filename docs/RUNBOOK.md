@@ -72,15 +72,27 @@ At the desk:
 3. Start the bot **before the heat opens** (it waits for ACTIVE; a late start forfeits every tender before it):
    `python -m ritc run <case> -v` (dry run), check ~30 s of decisions, then `--live`.
 4. Second terminal: `python -m ritc monitor`. Optional third: `python -m ritc record` (read-only recording).
-5. Run the bot on the same machine as the RIT client and keep antivirus HTTP inspection off localhost: slow
+5. **Manual trading (liability)**: `python -m ritc suggest` instead of `run`. Read-only (every non-GET call is
+   refused): it runs the bot's own logic on YOUR positions and shows, per tender, ACCEPT / DECLINE / BID <price>
+   with the $ edge and when to answer (WAIT until `decide_late_ticks` before expiry, then ANSWER NOW), and per
+   stock the limit orders to type in (REST at the touch, or CROSS = marketable limit, cancel the leftover).
+   Red `!` lines flag your resting orders that would be fined: through zero, wrong side, or on a stock whose
+   tender is still open. Takes the same `--config` / `--set` as `run`; the terminal bell rings on a new tender.
+   Start it before you have the key: it prints what is missing (empty key, key rejected, RIT not running) and
+   retries every 2 s, re-reading `.env`, so it connects by itself once you paste the key and save.
+   Rehearse with no key: `python -m ritc sim liability` + `python -m ritc suggest` in two terminals.
+   **DMA instead of the RIT client** (no client needed, any machine that can reach the server): in `.env` set
+   `RIT_URL=http://<server>:<port>/v1` and `RIT_AUTH=Basic <...>` (the header you were given). Same `/v1` paths
+   (DMA swagger 1.0.5), so `doctor` / `suggest` / `run` all work over it.
+6. Run the bot on the same machine as the RIT client and keep antivirus HTTP inspection off localhost: slow
    loops cost money even when every tender is answered (-$9.5k a heat at 3 ticks per loop in the simulator).
 
 | Symptom | Action |
 |---|---|
 | Orders rejected "exceeds limit" | Lower `[risk]` or `max_order`; check `/limits` in `doctor` |
 | HTTP 429 in the log | `RIT_MIN_INTERVAL=0.1` in `.env`, or raise `[run] interval` |
-| `OrdersDisabled` / 403 | API orders are off for this case: trade by hand with `monitor` |
-| Bot doing something odd | **Ctrl-C** (cancels everything), switch to manual |
+| `OrdersDisabled` / 403 | API orders are off for this case: trade by hand with `suggest` (liability) or `monitor` |
+| Bot doing something odd | **Ctrl-C** (cancels everything), switch to manual with `python -m ritc suggest` |
 | News not parsed | Add the phrasing to `pricing/news.py` with a test, or set the value in config |
 | Position stuck at the end | `python -c "from ritc.core import RITClient as C; C().cancel_all()"`, flatten by hand |
 

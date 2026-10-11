@@ -80,6 +80,11 @@ def api_key() -> str:
     return env("RIT_API_KEY")
 
 
+def auth() -> str:
+    """RIT_AUTH: Authorization header for the DMA API, e.g. "Basic cGF0aG9ybjoxMjM0"."""
+    return env("RIT_AUTH")
+
+
 def base_url() -> str:
     """RIT_URL if set, else http://RIT_HOST:RIT_PORT/v1 (default localhost:9999)."""
     explicit = env("RIT_URL")
@@ -94,7 +99,8 @@ def base_url() -> str:
 def describe() -> str:
     key = api_key()
     masked = f"{key[:3]}...{key[-2:]}" if len(key) > 6 else ("SET" if key else "MISSING")
-    return f"url={base_url()}  api_key={masked}  env_file={'found' if ENV_PATH.exists() else 'missing'}"
+    dma = "  auth=SET (DMA)" if auth() else ""
+    return f"url={base_url()}  api_key={masked}{dma}  env_file={'found' if ENV_PATH.exists() else 'missing'}"
 
 
 # --------------------------------------------------------------------- TOML

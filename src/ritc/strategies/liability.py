@@ -448,6 +448,28 @@ class LiabilityStrategy(Strategy):
                 return False
         return True
 
+    def decide(self, t: dict, snap: Snapshot, positions: dict[str, int]) -> TenderDecision:
+        """The bot's answer to tender `t` against the book of now (also used by `ritc suggest`)."""
+        ticker = t.get("ticker")
+        return evaluate_tender(
+            t, snap.book(ticker),
+            fee=float(self.fees.get(ticker, 0.0)),
+            position=positions.get(ticker, 0),
+            room=self.risk.room(ticker, t.get("action", "BUY"), positions),
+            ticks_left=snap.ticks_left,
+            refill_factor=self.p.get("refill_factor", 2.0),
+            # In a drawdown, only the best tenders: required margin scales with 1/throttle.
+            min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
+            competitive_margin=self.p.get("competitive_margin", 0.05),
+            drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
+            unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),
+            min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
+            price_vol_per_tick=self.price_vol(ticker, snap),
+            risk_aversion=self.p.get("risk_aversion", 0.0),
+            crowd_cost=self.crowd_cost(int(t.get("quantity", 0))),
+            close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
+        )
+
     def handle_tenders(self, snap: Snapshot) -> None:
         now = snap.abs_tick
         positions = {t: q + self.pending_delta(t, now) for t, q in snap.positions.items()}
@@ -474,24 +496,7 @@ class LiabilityStrategy(Strategy):
                                        snap.mid(ticker), tid))
             if self.wait_to_decide(t, tid, snap):
                 continue          # keep the option open: answer `decide_late_ticks` before the window closes
-            d = evaluate_tender(
-                t, book,
-                fee=float(self.fees.get(ticker, 0.0)),
-                position=positions.get(ticker, 0),
-                room=self.risk.room(ticker, t.get("action", "BUY"), positions),
-                ticks_left=snap.ticks_left,
-                refill_factor=self.p.get("refill_factor", 2.0),
-                # In a drawdown, only the best tenders: required margin scales with 1/throttle.
-                min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
-                competitive_margin=self.p.get("competitive_margin", 0.05),
-                drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
-                unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),
-                min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
-                price_vol_per_tick=self.price_vol(ticker, snap),
-                risk_aversion=self.p.get("risk_aversion", 0.0),
-                crowd_cost=self.crowd_cost(int(t.get("quantity", 0))),
-                close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
-            )
+            d = self.decide(t, snap, positions)
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
                      t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline", d.reason)
