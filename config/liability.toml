@@ -76,7 +76,13 @@ decline_explicitly = true     # official rule: trading a ticker while one of its
 #   ...and only when |net after the win| <= auction_max_net (shares; unset = always). Tested 2026-10-12: always
 #   = wins 1% -> 14% but -$4.1k..-7.3k/heat (the 55k block crowds fixed tenders out of the net limit); 45000 =
 #   no loss but no gain (96 fresh seeds -$0.8k, t -1.4). Not adopted.
-liquidity_model = "book"
+liquidity_model = "adaptive"  # ADAPTIVE (default since 2026-10-12): start each heat on "book"; once `adaptive_min_obs` untaken
+                              # tenders are scored and the learned crowd impact is under 1 sd, price with "flow"; back to
+                              # "book" as soon as a crowd shows. Design 501-532: default sim +$3.9k (t 3.1), calibrated
+                              # -$0.2k, Kyle +$0.1k, hostile identical. Holdout 601-632: default +$4.0k (t 2.5, worst
+                              # -$18.5k -> -$9.2k), calibrated +$3.2k (t 2.2, worst $14.6k -> $23.1k), hostile -$0.3k
+                              # (t -1.0) / calibrated hostile identical. "book" = the old default (RESEARCH.md).
+adaptive_min_obs = 2          # 4: default sim +$2.6k (t 2.6), calibrated +$0.4k
 liq_prior = { CRZY = 2600, TAME = 3200, CROC = 1500 }   # shares/tick our resting unwinds got in practice (14 blocks)
 liq_default = 2000            # other tickers
 liq_halflife = 20             # ticks

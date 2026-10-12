@@ -380,7 +380,9 @@ class LiabilityStrategy(Strategy):
             log.info("VOL " + "  ".join(f"{t} ${self.price_vol(t, snap):.4f}/tick" for t in self.tickers))
             if self.liq_model in ("flow", "auctions", "adaptive"):
                 log.info("LIQ " + "  ".join(f"{t} sell {self.flow(t, 'SELL'):,.0f} buy {self.flow(t, 'BUY'):,.0f}/tick"
-                                            for t in self.tickers))
+                                            for t in self.tickers)
+                         + (f"  adaptive -> {'flow' if self.no_crowd_seen() else 'book'}"
+                            if self.liq_model == "adaptive" else ""))
 
     def flow(self, ticker: str, side: str) -> float:
         """Forecast shares/tick that will trade against a resting `side` order in `ticker` (side = our unwind)."""

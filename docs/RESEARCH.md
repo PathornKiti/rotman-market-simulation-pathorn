@@ -431,8 +431,19 @@ check 1 shows a bell fine of $0.45/share or more, run `--set execution.hold_budg
 execution.close_hold_ticks=0 --set strategy.hold_valuation=false` (it dominates the A15 fallback at every fine).
 
 Default check for `python -m ritc run liability --live` (same seeds): `liquidity_model = "flow"` +$1.3k (t 0.4),
-hostile -$0.5k (t -0.2); `"auctions"` +$1.5k (t 1.3), hostile -$1.6k (t -1.7). Neither earns a switch, so
-`"book"` stays the default and the config as committed is the best tested bot.
+hostile -$0.5k (t -0.2); `"auctions"` +$1.5k (t 1.3), hostile -$1.6k (t -1.7). Neither earns a switch on its
+own; the adaptive combination below does.
+
+**Adaptive liquidity model: ADOPTED.** `liquidity_model = "adaptive"`: "book" until `adaptive_min_obs` untaken
+tenders are scored with the crowd posterior under 1 sd, then "flow"; back to "book" once a crowd shows.
+
+| Seeds | default sim | calibrated | Kyle flow | hostile | calibrated + hostile |
+|---|---|---|---|---|---|
+| design 501-532, min_obs 2 / 4 | +$3.9k (t 3.1) / +$2.6k (t 2.6) | -$0.2k / +$0.4k | +$0.1k / -$0.1k | identical | |
+| holdout 601-632, min_obs 2 | +$4.0k (t 2.5), worst -$18.5k -> -$9.2k | +$3.2k (t 2.2), worst $14.6k -> $23.1k | | -$0.3k (t -1.0), worst same | identical |
+
+It keeps flow's upside where no crowd exists and never switches in the hostile market, which is what neither fixed
+model managed. Default with `adaptive_min_obs = 2`.
 
 Not run: candidate 5 (per-slot reserve bracket) waits on practice checks 3-4. Bug found on the way: the first stop
 run sampled once per LOOP (several per tick), so the 10-tick window was never filled and it never fired; fixed

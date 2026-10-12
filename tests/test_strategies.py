@@ -366,3 +366,19 @@ def test_forward_liquidity_values_the_exit_at_our_resting_touch():
     fast = evaluate_tender(t, thin, fee=0.02, min_profit=0.01, flow_rate=5000, price_vol_per_tick=0.04,
                            risk_aversion=0.3)
     assert slow.profit_per_share < fast.profit_per_share
+
+
+def test_adaptive_liquidity_switches_only_without_a_crowd():
+    from ritc.strategies.commodity import BayesImpact
+    from ritc.strategies.liability import LiabilityStrategy
+
+    s = LiabilityStrategy.__new__(LiabilityStrategy)
+    s.p, s.crowd_learn = {"adaptive_min_obs": 2}, True
+    s.crowd = BayesImpact(0.0, 0.10, 0.10)
+    assert not s.no_crowd_seen()                        # nothing scored yet: price with the book walk
+    s.crowd.update(1.0, 0.0)
+    s.crowd.update(1.0, 0.01)
+    assert s.no_crowd_seen()                            # two quiet tenders: forward liquidity
+    for _ in range(3):
+        s.crowd.update(1.0, 0.20)
+    assert not s.no_crowd_seen()                        # a crowd shows: back to the book walk
