@@ -686,7 +686,11 @@ class LiabilityStrategy(Strategy):
                 h = self.unwind_hist.setdefault(t, [])
                 if h and h[0][0] < b.start_tick:          # a new schedule (block restarted): new history
                     h.clear()
-                h.append((now, abs(snap.positions.get(t, 0) - b.target)))
+                rem = abs(snap.positions.get(t, 0) - b.target)
+                if h and h[-1][0] == now:                  # several loops per tick: keep one sample per tick
+                    h[-1] = (now, rem)
+                else:
+                    h.append((now, rem))
                 del h[:-(self.stuck_window + 20)]
         if self.hold_budget and snap.ticks_left <= self.hold_until:
             self.algo.passive = set()              # flat by the bell: the schedule crosses what is left
