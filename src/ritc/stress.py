@@ -47,6 +47,12 @@ SCENARIOS: dict[str, tuple[str, float, bool, int, str]] = {
     "hostile crowd at expiry":   ("anchor=1,crowd_at_expiry=1", 1, False, 4, "gap"),
     "vol regimes (hidden)":      ("vol_regime=2.5", 0, False, 4, "gap"),
     "real-world combined":       ("maker_fee=1,spread=0.02,close_slip=0.03,bell=0.10,flow=0.6", 0, True, 2, "gap"),
+    # ---- the practice server as measured (2026-10-11/13): calibrated market; only the house market maker with a
+    # thin book and volatility spiking to 3x (CRZY $0.10/tick on 2026-10-13); prices that trend with order flow
+    "practice calibrated":       ("real=1,late_award=1", 0, False, 4, "practice"),
+    "practice thin + vol spikes": ("real=1,late_award=1,depth=0.4,flow=0.5,vol=2.5", 0, False, 4, "practice"),
+    "practice trending flow":    ("real=1,late_award=1,kyle=0.3,kyle_phi=0.9", 0, False, 4, "practice"),
+    "practice + rival desks":    ("real=1,late_award=1,anchor=1", 1, False, 4, "practice"),
     "real-world + hostile":      ("maker_fee=1,spread=0.02,close_slip=0.03,bell=0.10,flow=0.6,anchor=1", 1, True, 2,
                                   "gap"),
 }
