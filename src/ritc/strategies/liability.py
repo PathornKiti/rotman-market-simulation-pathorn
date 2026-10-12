@@ -452,7 +452,10 @@ class LiabilityStrategy(Strategy):
                 clip = float(self.p.get("crowd_clip", 2.5)) * s_move
                 if clip > 0:
                     move = max(-clip, min(clip, move))
-                self.crowd.noise_sd = max(float(self.p.get("crowd_noise_sd", 0.10)), s_move)
+                if self.p.get("crowd_robust_mode", "full") == "full":
+                    self.crowd.noise_sd = max(float(self.p.get("crowd_noise_sd", 0.10)), s_move)
+                # "clip": only cap outliers at crowd_clip sd; keep the noise level, so a real crowd in a volatile
+                # market is not explained away (2026-10-13 stress: "full" lost -$30k in "everything at once")
             self.crowd.update(x, move)
             log.info("CROWD %s moved %+.3f against a %.0fk-share unwind -> %.4f $/10k (sd %.4f, n=%d)%s",
                      t, sign * (m - m0), 10 * x, self.crowd.mean, self.crowd.sd, self.crowd.n,

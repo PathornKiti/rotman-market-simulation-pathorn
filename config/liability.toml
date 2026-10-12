@@ -162,6 +162,11 @@ crowd_horizon_ticks = 12      # ...but race the crowd once it is detected (learn
 max_slippage = 0.04           # aggressive catch-up slices: VWAP within this of the touch
 participation = 0.35          # max fraction of visible depth per aggressive slice
 display_qty = 5000            # iceberg: largest passive child shown in the book
+urgent_participation = 0.35   # THIN-BOOK URGENCY (default since 2026-10-13): past the schedule's deadline take at most
+                              # this x the depth within the price limit per loop, instead of up to max_order (25k), which
+                              # swept every re-quote of the house market maker (practice: CRZY $10.12 -> $11.12 while
+                              # buying back 55k). 27-scenario stress, seeds 1201-1216: no scenario significantly worse,
+                              # pooled +$32/heat (t 0.4), hostile worst heat +$8.3k. 0 = old sweep.
 urgent_ticks = 6              # cross for everything left in the final ticks of the schedule
 front_load = 0.3              # 0 = linear schedule; >0 = unwind more early (less drift risk)
 schedule = "almgren_chriss"   # optimal path from GARCH vol, book-implied impact, risk aversion ("front_load" = old curve)
