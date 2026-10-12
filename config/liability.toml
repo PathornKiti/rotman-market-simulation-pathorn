@@ -30,6 +30,8 @@ participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
 decide_late_ticks = 0         # USER CHOICE 2026-10-11 (practice): answer every tender AT ONCE, never wait for the timeout.
                               # The simulator preferred 3 (below); restore with --set strategy.decide_late_ticks=3.
+                              # 2026-10-12 re-test on the current config, fresh 501-532: 3 = -$0.8k..-$7.0k in calibrated,
+                              # Kyle, hostile and generous-reserve markets (RESEARCH.md). The old gains below are stale.
                               # ANSWER LATE: a tender's price is fixed when it arrives but the market moves for its whole
                               # 15-30 s window, so answer 3 ticks before `expires` with the book of THEN (an option on
                               # the tender; a crowd unwinding the same block shows in the price before we commit).
@@ -41,6 +43,8 @@ decide_late_ticks = 0         # USER CHOICE 2026-10-11 (practice): answer every 
 decide_late_end_guard = true  # ...but never wait past the last tick a tender can still be accepted (min_ticks_to_unwind /
                               # wind-down): a real-time test missed 3 of 32 tenders whose windows ran past the bell.
                               # Seeds 1-16 +$3.7k (t 4.1), 301-316 +$2.3k (t 2.6); anchored hostile +-$0.1k.
+reserve_auction_room = true   # count pending auction bids against the net limit. false: -$1.8k..+$0.3k even when the
+                              # server voids awards that no longer fit (sim award_room=1); hostile worst heat worse.
 room_wait = true              # a fixed tender declined ONLY for risk room is re-checked every tick until 2 ticks before
                               # expiry instead of declined at once (answer-at-once still holds for everything else). Real
                               # heats: log2 #103 and the last heat's #403 were declined for room held by an auction bid we
@@ -120,6 +124,12 @@ fresh_unwind = true           # SLOW-LOOP SAFETY: resting orders fill while a lo
                               # open orders THEN positions, cap IOC + resting at what is left (never past zero). Real time,
                               # 1 s loops: seeds 1-10 +$7.6k (t 2.7); 201-210 fines $1,414 -> $48/heat (t -3.7), score +$2.5k
                               # (t 3.1), worst $8.7k -> $12.4k; 101-110 +$1.9k (t 1.1). Lock-step / fast loops: +-$0.1k.
+stuck_window_ticks = 0        # ABSORPTION STOP (0 = off): drop a block from the hold_risk_budget passive set when its own
+stuck_horizon_ticks = 30      # fills over the last `window` ticks need more than `horizon` ticks to finish it. Fresh 501-532:
+                              # -$1.3k..-$2.4k calibrated, -$0.6k..-$1.1k Kyle flow, -$1.9k..-$2.5k hostile (RESEARCH.md).
+hold_budget_min_ticks = 0     # FLAT BY THE BELL: no passive hold this close to the end (use with close_hold_ticks=0,
+                              # hold_valuation=false). 30: -$6.1k with no bell fine, +$7.4k (t 2.5) at $1/share; breaks
+                              # even at ~$0.45/share. Switch on only if practice shows a bell fine.
 order_settle = 1.0            # s an order we sent counts as working although the server shows it in neither the OPEN
                               # list nor the position (real RIT books orders asynchronously; 2026-10-11 practice sent
                               # duplicate unwind orders 40-250 ms apart -> TAME +10,800 past zero). Lock-step tests use 0.

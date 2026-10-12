@@ -89,6 +89,20 @@ def test_hold_risk_budget():
     assert not hold_within_budget(1_000, 0.0, 100, 10_000)             # no vol estimate yet: unwind as usual
 
 
+def test_unwind_stuck():
+    from ritc.strategies.liability import unwind_stuck
+
+    fast = [(t, 55_000 - 3_000 * t) for t in range(11)]               # 3,000 shares/tick: flat in ~8 more
+    slow = [(t, 55_000 - 800 * t) for t in range(11)]                 # 800/tick: 47k left needs ~59 ticks
+    assert not unwind_stuck(fast, 10, 10, 30)
+    assert unwind_stuck(slow, 10, 10, 30)
+    assert not unwind_stuck(slow, 10, 10, 60)
+    assert not unwind_stuck(slow[:5], 4, 10, 30)                       # too young to judge
+    assert unwind_stuck([(t, 20_000) for t in range(11)], 10, 10, 30)  # nothing fills at all
+    assert not unwind_stuck([(0, 5_000), (10, 0)], 10, 10, 30)         # done
+    assert not unwind_stuck(slow, 10, 0, 30)                           # off
+
+
 def test_passive_only_never_crosses():
     from ritc.core.algo import AlgoParams, plan_children
 

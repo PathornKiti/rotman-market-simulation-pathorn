@@ -189,6 +189,9 @@ class Market:
         # reserve_lo / reserve_hi: the auction's hidden reserve sits U(lo, hi) $ through the mid in OUR favour
         # (default 0-0.15, a guess). The two real wins were bids ~0.18 and ~0.35 from mid, which the default
         # can never fill: use these to test bidding rules under more generous reserves (same draws).
+        # award_room=1: an auction bid is taken whatever the room when bid, and the award is checked against the
+        # limits only at expiry: voided if it no longer fits (LUISS RETC 2022 Q&A). award_room=2: delivered anyway,
+        # over the limit (the downside case). Unset: the old check at bid time (LIMIT_EXCEEDED at once).
         # late_award=1: a competitive auction bid is never refused at once; a bid past the reserve books when the
         # window closes, as on the real server (practice: 0 of 18 bids answered success=false).
         # kyle=k (liability): KYLE (1985) PRICE IMPACT OF OTHER TRADERS' FLOW. Each stock carries an order-flow
@@ -486,6 +489,10 @@ class Market:
         for _, t, price in due:
             s = self.secs[t["ticker"]]
             sign = 1 if t["action"] == "BUY" else -1
+            if (self.stress.get("award_room") == 1 and not t["is_fixed_bid"]
+                    and self._over_limit(t["ticker"], sign * t["quantity"])):
+                self.state["voided_awards"] = self.state.get("voided_awards", 0) + 1
+                continue              # award_room=1: an award that no longer fits the limits is voided
             s.position += sign * t["quantity"]
             s.cost += sign * t["quantity"] * price
             self._settle(s.ccy, -sign * t["quantity"] * price)
@@ -1015,7 +1022,8 @@ def route(m: Market, method: str, path: str, q: dict[str, str]) -> tuple[int, ob
                     return 404, {"code": "TENDER_NOT_FOUND"}
                 price = t["price"]
                 sign_t = 1 if t["action"] == "BUY" else -1
-                if m._over_limit(t["ticker"], sign_t * t["quantity"]):
+                if (m._over_limit(t["ticker"], sign_t * t["quantity"])
+                        and not (m.stress.get("award_room") and not t["is_fixed_bid"])):
                     m.state["limit_rejects"] = m.state.get("limit_rejects", 0) + 1
                     return 422, {"code": "LIMIT_EXCEEDED", "message": "tender would exceed the trading limits"}
                 if not t["is_fixed_bid"]:
