@@ -397,6 +397,43 @@ VPIN fires on ordinary lumpy flow and is the worst. **Rejected.** It becomes wor
 shows that kind of trend: `ritc calibrate` now prints "signed trade flow -> next 10-tick move, and variance ratio"
 per stock (needs `ritc record` running during a practice heat; r > 0 with t ≥ 3 and VR well above 1 over 2+ heats).
 
+## Stuck inventory, late answers, bell fine and auction room (2026-10-12, user request): nothing adopted
+
+Candidates 1-4 of `reports/RITC liquidity case improvements.md`, plus an absorption stop for blocks that do not
+unwind within ~30 s. Fresh seeds 501-532 (32), `RITC_STRESS=real=1,late_award=1` (practice-calibrated) unless
+stated; paired differences vs the current config.
+
+Why the absorption stop: at real vol (~$0.035/tick) a fresh 55k block's risk to the bell is
+55,000 x 0.035 x sqrt(300) = $33k, inside `hold_risk_budget` (40k), so it only rests and the 30-tick schedule never
+crosses (a debug heat, seed 501: passive in 693 of 693 checks). The two real slow unwinds (701 / 893 shares/s) were
+the two big adverse moves. `execution.stuck_window_ticks` / `stuck_horizon_ticks`: drop a block from the passive
+set when its own fills over the last `window` ticks need more than `horizon` ticks to finish.
+
+| Change | calibrated | Kyle flow (`kyle=0.3,kyle_phi=0.9`) | hostile | other | Verdict |
+|---|---|---|---|---|---|
+| Absorption stop, window 10, horizon 30 / 45 / 60 | -$2.4k (t -3.1) / -$1.5k (t -2.2) / -$1.3k (t -2.1) | -$1.1k / -$0.9k / -$0.6k (t -2.0 / -2.5 / -1.7), worst $11.2k -> $8.6-10.0k | -$2.5k / -$1.9k / -$2.0k (t -3.6 to -4.0), worst unchanged | default sim -$1.2k to -$2.2k (t -3 to -4) | Rejected: insurance that never pays in the sim, even where slow fills and adverse moves are coupled |
+| `decide_late_ticks = 3` (candidate 1) | -$5.7k (t -1.4) | -$0.8k (t -0.2) | -$2.1k (t -0.7), worst -$19.7k -> -$23.2k | generous reserves (0.15-0.40) -$7.0k (t -1.6) | Rejected: the old +$17-25k does not survive the current config |
+| Reserve no room for pending auction bids, awards voided if they no longer fit (`award_room=1`, candidate 3) | -$1.8k (t -0.9) | | generous reserves: +$0.3k (t 0.1), worst -$19.7k -> -$33.8k | generous reserves -$0.2k (t -0.1); delivered over the limit (`award_room=2`) -$0.1k | Rejected: the room is rarely binding (4-8 of 32 heats differ) |
+
+**Bell fine (candidate 2).** `close_slip` = $ per share against whatever is held at the bell, standing in for an
+uncovered-share fine. (b) = the A15 fallback (`hold_risk_budget=0, close_hold_ticks=0, hold_valuation=false,
+min_ticks_to_unwind=15`); (c) = flat by the bell (`hold_budget_min_ticks=N, close_hold_ticks=0, hold_valuation=false`).
+
+| Fine $/share | (b) A15 fallback | (c) flat by the bell, N = 30 / 60 / 90 |
+|---|---|---|
+| 0 | -$11.6k (t -4.5) | -$6.1k / -$6.2k / -$7.1k (t -3.3 to -3.8) |
+| 0.20 | -$8.8k (t -4.0) | -$3.4k / -$3.5k / -$4.4k (t -2.4 to -3.1) |
+| 0.60 | -$3.4k (t -1.5) | +$2.0k / +$1.9k / +$1.0k (t 1.2 / 1.1 / 0.6) |
+| 1.00 | +$2.0k (t 0.6) | **+$7.4k (t 2.5)** / +$7.3k (t 2.5) / +$6.4k (t 2.1) |
+
+Break-even: (c) N = 30 at ~$0.45/share, (b) at ~$0.85. Keep the hold while the bell fine is unknown; if practice
+check 1 shows a bell fine of $0.45/share or more, run `--set execution.hold_budget_min_ticks=30 --set
+execution.close_hold_ticks=0 --set strategy.hold_valuation=false` (it dominates the A15 fallback at every fine).
+
+Not run: candidate 5 (per-slot reserve bracket) waits on practice checks 3-4. Bug found on the way: the first stop
+run sampled once per LOOP (several per tick), so the 10-tick window was never filled and it never fired; fixed
+(one sample per tick) before the numbers above.
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out
