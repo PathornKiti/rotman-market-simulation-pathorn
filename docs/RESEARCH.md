@@ -532,7 +532,46 @@ Rule for a default: no scenario significantly worse, worst heats not deeper, poo
 - `urgent_participation = 0.35`: passes (neutral almost everywhere, hostile worst +$8.3k). **Adopted.**
 - `crowd_robust` (vol-scaled crowd evidence): better in 19 of 27 (practice thin + vol spikes +$8.2k, hidden vol
   regimes +$7.0k) but "everything at once" -$29.9k (t -2.4), worst heat -$165k: a real crowd hides inside high
-  volatility. Not the default; a "clip" mode (cap outliers, keep the noise level) is being tested.
+  volatility. Not the default.
+- `crowd_robust_mode = "clip"` + `crowd_min_obs = 2` (cap single outlier moves, keep the noise level), vs the new
+  default, same seeds:
+
+```
+scenario                         base     clip     diff     t  worst chg
+base (brief)                   54,359   54,493     +134   1.0     +2,140
+volatility x2                  31,808   31,808       +0   0.0         +0
+thin books x0.5                42,924   42,741     -183  -1.0     -1,330
+worse tenders -10c             11,472   11,500      +28   1.0       +440
+bigger tenders x2              56,193   56,193       +0   0.0         +0
+tenders twice as often        108,377  108,377       +0   0.0         +0
+booking delay 3s               54,416   54,514      +98   1.0     +1,570
+strict front-running           51,340   51,473     +134   1.0     +1,730
+hostile market                 30,794   31,630     +836   0.3     -7,462
+hostile anchored               -1,436   -1,905     -469  -0.4       -222
+everything at once             75,365   52,862  -22,504  -2.4   -104,605
+everything anchored            -5,486   -5,273     +213   1.0         +0
+resting fills pay $0.02        48,953   49,092     +139   1.0     +2,220
+spread 2c + queue              51,203   51,197       -6  -1.0       -100
+spread 1c + queue              50,428   50,456      +29   1.0       +458
+scarce resting fills           42,372   42,157     -215  -1.0     -3,434
+close 5c against holder        53,484   53,618     +134   1.0     +2,140
+desks dump at the bell         52,930   53,064     +134   1.0     +2,140
+very slow bot (1 loop/s)       54,043   54,177     +134   1.0     +2,140
+hostile crowd at expiry        11,165   10,680     -486  -0.5         +0
+vol regimes (hidden)           37,302   37,305       +4   0.0         +0
+real-world combined            43,030   42,927     -103  -1.0     -1,650
+practice calibrated           128,142  128,142       +0   0.0         +0
+practice thin + vol spikes     73,476   79,915   +6,439   0.9    -10,765
+practice trending flow        121,554  121,554       +0   0.0         +0
+practice + rival desks         32,511   30,773   -1,738  -0.5     +1,186
+real-world + hostile           -2,693   -2,460     +233   0.1     -4,873
+
+pooled 432 heats: -630/heat t -1.22;  failing rule: ['hostile market', 'everything at once', 'practice thin + vol spikes']
+```
+
+  Fails the same way ("everything at once" -$22.5k, t -2.4; pooled -$630/heat). Any weakening of the crowd alarm
+  costs when a real crowd meets high volatility, so the gated crowd learner stays the default. On a practice server
+  with no other teams (every "crowd" is noise) run `--profile B_robust_crowd`.
 
 ## Baselines and method results
 

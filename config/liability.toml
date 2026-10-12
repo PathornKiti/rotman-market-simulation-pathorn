@@ -98,6 +98,9 @@ rank_tenders = false          # answer the most valuable open tender first: no e
 drift_symmetric = false       # credit favourable drift too: -$4k..-$13.5k everywhere
 crowd_robust = false          # vol-scaled crowd evidence: fixes 2 real false alarms, but holdout hostile worst heats
                               # -$2.7k -> -$25.8k / -$12.2k -> -$46.2k
+                              # 27-scenario stress 2026-10-13: "full" -$29.9k and "clip" (+crowd_min_obs 2) -$22.5k in
+                              # "everything at once" (real crowd + high vol). Keep false for competition; true (profile
+                              # B) only on a practice server with no other teams.
 liq_default = 2000            # other tickers
 liq_halflife = 20             # ticks
 liq_cap = 6000                # never forecast more than this (a burst of other desks' trades is not our flow)
