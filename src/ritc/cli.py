@@ -76,6 +76,18 @@ def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = 
 
 
 def cmd_run(a: argparse.Namespace) -> int:
+    lock = None
+    if a.live:
+        from .core.single import AlreadyRunning, acquire
+        try:
+            lock = acquire(config.ROOT / "logs" / f"{a.case}-live.lock")    # noqa: F841 - held until exit
+        except AlreadyRunning:
+            print(f"\n!!! Another `ritc run {a.case} --live` is already running on this machine (maybe a --forever "
+                  "window).\n!!! Two bots on one account trade the same positions against each other: fines and "
+                  "losses.\n!!! Use that window, or Ctrl-C it first. Not starting.\n")
+            return 2
+        except Exception as exc:                 # noqa: BLE001 - never refuse to trade because of the guard itself
+            print(f"(single-bot guard unavailable: {exc}; make sure only one bot window runs)")
     heat = 0
     while True:
         heat += 1
@@ -147,6 +159,25 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         except RITError as exc:
             ok = False
             print(f"\n--- {name} --- FAILED: {exc}")
+    if ok:
+        # ROUND TRIP: what one API call costs on this machine. A bot loop is 1 round trip when idle and ~4-5
+        # while unwinding a block (orders must be re-read in sequence so a fill is never missed).
+        times = []
+        for _ in range(10):
+            t0 = time.perf_counter()
+            try:
+                c.case()
+            except RITError:
+                continue
+            times.append(1000 * (time.perf_counter() - t0))
+        if times:
+            rt = sorted(times)[len(times) // 2]
+            print(f"\n--- latency ---\nRIT round trip: median {rt:.0f} ms (min {min(times):.0f}, max {max(times):.0f})."
+                  f"\nExpected bot loop: ~{rt:.0f} ms idle, ~{4.5 * rt:.0f} ms while unwinding.")
+            if rt > 120:
+                print("Slow for a local RIT client: run the bot on the SAME machine as RIT, exclude localhost / the "
+                      "python folder from antivirus web scanning, close other heavy programs, use wired network "
+                      "for a remote (DMA) server.")
     if not ok:
         print("\nSome calls failed. Is the RIT client running and logged in? Is RIT_API_KEY right?"
               "\nOffline? Start the simulator:  python -m ritc sim equity")

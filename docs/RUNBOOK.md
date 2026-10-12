@@ -141,6 +141,13 @@ Each heat's log and journal are named after what it changed, e.g.
 `logs/liability-20261012-171840__C_auctions__crowd_robust=True+liquidity_model=auctions.log` (a plain run has
 no suffix; `--set` overrides are listed the same way).
 
+**Only ONE bot window per account.** With `--forever` the first window keeps trading every heat; starting a
+second `ritc run --live` would put two bots on the same positions (both unwind, positions go through zero,
+speculation fines; a -$45k heat on 2026-10-12 is the suspected case). A second live bot now refuses to start;
+`ritc record`, `ritc practice`, `ritc monitor` and `ritc suggest` are read-only and fine in other windows.
+`python -m ritc doctor` measures the RIT round trip on this machine: a loop is ~1 round trip idle and ~4-5
+while unwinding, so "slow loops" during unwinds are expected above ~120 ms per round trip.
+
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
 far, prints `PROFILE <name>` and records it in the journal. Start it before the heat opens, as always. To force
 one: `--profile C_auctions`. An explicit `--set` still wins over the profile.

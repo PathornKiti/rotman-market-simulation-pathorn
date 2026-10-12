@@ -225,6 +225,8 @@ class Runner:
         self.loops = 0
         self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
         self._tick_ms = 0.0
+        self._slow: list[float] = []          # slow loops since the last summary warning
+        self._slow_t = time.monotonic()
         self.interrupted = False             # Ctrl-C (vs the heat ending): `run --forever` stops on it
 
     def snapshot(self) -> Snapshot:
@@ -361,8 +363,17 @@ class Runner:
                 self._tick_ms = max(self._tick_ms, ms)
                 self.loops += 1
                 if ms > self.slow_loop_ms:
-                    log.warning("slow loop: %.0f ms (market may have moved under you)", ms)
                     self.journal.write("slow_loop", ms=round(ms))
+                    self._slow.append(ms)
+                if self._slow and time.monotonic() - self._slow_t >= 15.0:
+                    # One summary every 15 s instead of a line per loop (practice logs were mostly this warning).
+                    # Each loop is a few RIT round trips; `python -m ritc doctor` measures one on this machine.
+                    log.warning("slow loops: %d in the last %.0f s over %.0f ms (worst %.0f ms) - prices can be a "
+                                "tick old; `ritc doctor` measures the RIT round trip", len(self._slow),
+                                time.monotonic() - self._slow_t, self.slow_loop_ms, max(self._slow))
+                    self._slow, self._slow_t = [], time.monotonic()
+                elif not self._slow and time.monotonic() - self._slow_t >= 15.0:
+                    self._slow_t = time.monotonic()
                 if self.loops % 200 == 0:
                     log.info("%s%s", self.latency, f", feed {feed.latency_ms:.0f} ms" if feed else "")
                 if self.loops % 20 == 0:
