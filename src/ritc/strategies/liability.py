@@ -390,9 +390,19 @@ class LiabilityStrategy(Strategy):
         prior = float(self.liq_prior.get(ticker, self.p.get("liq_default", 2000)))
         return min(self.liq.get((ticker, side), prior), float(self.p.get("liq_cap", 6000)))
 
+    def prefetch(self) -> dict:
+        """Time & sales for the forward-liquidity models, in the snapshot's parallel batch (no extra round trip)."""
+        if self.liq_model not in ("flow", "auctions", "adaptive"):
+            return {}
+        return {f"tas:{t}": (lambda t=t: self.client.tas(t, after=self.tas_after.get(t))) for t in self.tickers}
+
     def _update_liquidity(self, snap: Snapshot) -> None:
         """One time & sales read per stock per tick: buyer- vs seller-initiated volume (price vs the mid)."""
-        res = self.client.parallel([lambda t=t: self.client.tas(t, after=self.tas_after.get(t)) for t in self.tickers])
+        if all(f"tas:{t}" in snap.extra for t in self.tickers):
+            res = [snap.extra[f"tas:{t}"] for t in self.tickers]
+        else:
+            res = self.client.parallel([lambda t=t: self.client.tas(t, after=self.tas_after.get(t))
+                                        for t in self.tickers])
         alpha = 1 - 0.5 ** (1 / max(1.0, float(self.p.get("liq_halflife", 20))))
         for t, rows in zip(self.tickers, res):
             mid = snap.mid(t)

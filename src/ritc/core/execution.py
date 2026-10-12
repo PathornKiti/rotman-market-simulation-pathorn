@@ -26,6 +26,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from .client import RITClient, RITError, slice_qty
@@ -56,6 +57,7 @@ class Executor:
     # TAME +2,100 and +10,800 past zero = speculation fines). Too long only slows the unwind by that much.
     settle: float = 1.0
     _sent: dict[int, tuple[str, str, int, float]] = field(default_factory=dict)   # id -> (ticker, ACTION, qty, t)
+    _batch: list[int] | None = None   # inside `batched_cancels()`: cancels collected here, sent in parallel
 
     def max_size(self, ticker: str) -> int:
         return int(self.max_order_size.get(ticker, self.default_max_order))
@@ -63,13 +65,46 @@ class Executor:
     def _tag(self) -> str:
         return "[DRY]" if self.dry_run else "[LIVE]"
 
-    def sweep(self) -> int:
-        """Cancel the unfilled remainder of every IOC order sent since the last sweep."""
+    def take_ioc(self) -> list[int]:
+        """The IOC leftovers `sweep` would cancel, handed to the caller (the Runner cancels them in the
+        snapshot's parallel batch instead of a round trip of their own)."""
         with self._lock:
             ids, self._ioc = self._ioc, []
-        for oid in ids:
-            self.cancel(oid)
+        return [] if self.dry_run else ids
+
+    def sweep(self) -> int:
+        """Cancel the unfilled remainder of every IOC order sent since the last sweep (in parallel)."""
+        with self._lock:
+            ids, self._ioc = self._ioc, []
+        with self.batched_cancels():
+            for oid in ids:
+                self.cancel(oid)
         return len(ids)
+
+    @contextmanager
+    def batched_cancels(self):
+        """
+        SLOW-LOOP FIX: every cancel is a ~0.2 s round trip to RIT, and one after another they made a loop
+        1.5-2 s long (practice 2026-10-12). Inside this block cancels are collected and sent concurrently
+        when it ends, so N cancels cost one round trip. They are all done before the block returns.
+        """
+        if self._batch is not None:          # nested: the outer block sends them
+            yield
+            return
+        self._batch = []
+        try:
+            yield
+        finally:
+            ids, self._batch = self._batch, None
+            if ids and not self.dry_run:
+                par = getattr(self.client, "parallel", None)
+                if par is None or len(ids) == 1:
+                    for oid in ids:
+                        self.cancel(oid)
+                else:
+                    for oid, r in zip(ids, par([lambda o=o: self.client.cancel(o) for o in ids])):
+                        if isinstance(r, Exception):
+                            log.debug("cancel %s failed (probably already filled): %s", oid, r)
 
     def limit(self, ticker: str, action: str, quantity: int, price: float, ioc: bool = True) -> list[dict]:
         """
@@ -202,6 +237,9 @@ class Executor:
 
     def cancel(self, order_id: int) -> None:
         if self.dry_run:
+            return
+        if self._batch is not None:
+            self._batch.append(order_id)
             return
         try:
             self.client.cancel(order_id)

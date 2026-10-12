@@ -69,9 +69,17 @@ class EventFeed:
             self._stop.wait(max(0.0, self.poll - (time.monotonic() - t0)))
 
     def poll_once(self) -> bool:
-        """One poll of the event endpoints. Returns True if anything new arrived."""
-        with self._poll_lock:
+        """
+        One poll of the event endpoints. Returns True if anything new arrived. If the feed thread's own poll
+        is already in flight, don't queue a second one behind it (that was a whole extra round trip in every
+        loop of the bot, practice 2026-10-12): that poll is at most one round trip older than the prices.
+        """
+        if not self._poll_lock.acquire(blocking=False):
+            return False
+        try:
             return self._poll()
+        finally:
+            self._poll_lock.release()
 
     def _poll(self) -> bool:
         fresh = False
