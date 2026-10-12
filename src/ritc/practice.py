@@ -41,7 +41,10 @@ def pick_profile(case: str, name: str, logs: str = "logs") -> tuple[str, dict]:
         return name, profiles[name]
     used = {k: 0 for k in profiles}
     for j in Path(logs).glob(f"{case}-*.jsonl"):
-        for r in _load(j)[:3]:
+        recs = _load(j)
+        if not any(r.get("k") == "tick" for r in recs):
+            continue                          # started but never traded (Ctrl-C before the heat): not a heat
+        for r in recs[:3]:
             if r.get("k") == "start":
                 prof = ((r.get("cfg") or {}).get("strategy") or {}).get("profile")
                 if prof in used and not r.get("dry_run"):

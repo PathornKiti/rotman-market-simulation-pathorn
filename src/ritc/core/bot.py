@@ -225,6 +225,7 @@ class Runner:
         self.loops = 0
         self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
         self._tick_ms = 0.0
+        self.interrupted = False             # Ctrl-C (vs the heat ending): `run --forever` stops on it
 
     def snapshot(self) -> Snapshot:
         """Case + securities + trader + all prefetch books, in parallel."""
@@ -271,6 +272,7 @@ class Runner:
                     time.sleep(2)
         except KeyboardInterrupt:
             log.info("Ctrl-C before the server answered - nothing was sent")
+            self.interrupted = True
             return
         self.trader_id = str(trader.get("trader_id", ""))
         try:
@@ -292,6 +294,7 @@ class Runner:
                      self.s.wants_news, self.s.wants_tenders, 1000 * self.feed_poll)
 
         started, period, errors, halted = False, None, 0, False
+        last_tick = 0
         try:
             while True:
                 t0 = time.monotonic()
@@ -314,6 +317,12 @@ class Runner:
                             break
                         time.sleep(0.5)
                         continue
+                    if started and snap.period == period and snap.tick < last_tick - 5:
+                        # The clock jumped back without a STOPPED in between: a NEW heat already started. This
+                        # bot's state belongs to the old one, so end here (`run --forever` starts a fresh one).
+                        log.info("new heat detected (tick %d -> %d) - ending this run", last_tick, snap.tick)
+                        break
+                    last_tick = snap.tick
                     if not started:
                         started, period = True, snap.period
                         self.s.on_start(snap)
@@ -369,6 +378,7 @@ class Runner:
                     time.sleep(remaining)
         except KeyboardInterrupt:
             log.info("Ctrl-C received")
+            self.interrupted = True
         except Exception:
             log.exception("strategy crashed")
         finally:

@@ -14,6 +14,8 @@ def setup(name: str, verbose: bool = False) -> str:
     path = logs / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     fmt = logging.Formatter("%(asctime)s.%(msecs)03d %(levelname)-5s %(name)s | %(message)s", "%H:%M:%S")
     root = logging.getLogger()
+    for h in root.handlers:                  # `run --forever`: close the previous heat's log file
+        h.close()
     root.handlers.clear()
     root.setLevel(logging.DEBUG)
     console = logging.StreamHandler()

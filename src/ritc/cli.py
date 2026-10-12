@@ -76,6 +76,19 @@ def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = 
 
 
 def cmd_run(a: argparse.Namespace) -> int:
+    heat = 0
+    while True:
+        heat += 1
+        runner = _run_one_heat(a, heat)
+        if not a.forever or a.once or runner.interrupted:
+            return 0
+        # FOREVER: the heat ended by itself (case STOPPED). Start over with a fresh bot, log and journal (and the
+        # next profile under --profile rotate); the new Runner waits for the next heat to go ACTIVE.
+        print(f"\n=== heat {heat} finished - waiting for the next heat to start (Ctrl-C to quit) ===\n")
+        time.sleep(2)
+
+
+def _run_one_heat(a: argparse.Namespace, heat: int) -> Runner:
     path = setup_logging(a.case, a.verbose)
     from .tune import parse_value
     sets = {k.strip(): parse_value(v.strip()) for k, _, v in (x.partition("=") for x in a.set or [])}
@@ -88,7 +101,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     runner, _ = build(a.case, a.config, a.live, overrides=sets)
     from .core.journal import Journal
     runner.journal = runner.s.ex.journal = Journal(str(path).rsplit(".", 1)[0] + ".jsonl")
-    print(f"log file: {path}" + (f"  overrides: {sets}" if sets else ""))
+    print(f"log file: {path}" + (f"  overrides: {sets}" if sets else "")
+          + (f"  (heat {heat} of this session, --forever)" if a.forever else ""))
     if not runner.s.ex.dry_run:
         print(">>> LIVE TRADING - Ctrl-C cancels all orders and stops <<<")
     try:
@@ -97,7 +111,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     except RITError:
         pass
     runner.run(once=a.once)
-    return 0
+    return runner
 
 
 def cmd_tune(a: argparse.Namespace) -> int:
@@ -111,7 +125,7 @@ def cmd_tune(a: argparse.Namespace) -> int:
 
 def cmd_sim(a: argparse.Namespace) -> int:
     from .sim.server import serve
-    serve(a.case, a.port, a.speed, a.delay, a.seed, hostile=a.hostile, queue=a.queue)
+    serve(a.case, a.port, a.speed, a.delay, a.seed, hostile=a.hostile, queue=a.queue, heats=a.heats, gap=a.gap)
     return 0
 
 
@@ -335,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--profile", metavar="NAME|rotate",
                    help="liability practice: apply a profile from config/<case>_profiles.toml; 'rotate' runs the "
                         "least-tried one (compare them with `ritc practice`)")
+    r.add_argument("--forever", action="store_true",
+                   help="keep going: when a heat ends, wait for the next one and start again (new log + journal; "
+                        "with --profile rotate, the next profile). Ctrl-C quits")
     r.add_argument("--once", action="store_true", help="run a single loop then exit")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(fn=cmd_run)
@@ -363,6 +380,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--seed", type=int)
     s.add_argument("--hostile", type=float, default=0.0, help="manipulative competitors (0 = off, 1 = full)")
     s.add_argument("--queue", action="store_true", help="price-time priority behind the displayed book")
+    s.add_argument("--heats", type=int, default=1,
+                   help="run this many heats back to back (rehearse `run --forever`)")
+    s.add_argument("--gap", type=float, default=10.0, help="seconds the case sits STOPPED between heats")
     s.set_defaults(fn=cmd_sim)
 
     a = ap.parse_args(argv)

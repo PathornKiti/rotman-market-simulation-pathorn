@@ -78,8 +78,12 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     profiles = load_profiles("liability")
     assert list(profiles)[:3] == ["A_default", "B_robust_crowd", "C_auctions"]
     assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
-    (tmp_path / "liability-1.jsonl").write_text(json.dumps(
+    (tmp_path / "liability-0.jsonl").write_text(json.dumps(                              # Ctrl-C before the heat
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n")
+    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"
+    (tmp_path / "liability-1.jsonl").write_text(json.dumps(
+        {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n"
+        + json.dumps({"k": "tick", "tick": 1}) + "\n")
     assert pick_profile("liability", "rotate", str(tmp_path))[0] == "B_robust_crowd"     # least-tried next
     name, prof = pick_profile("liability", "C_auctions", str(tmp_path))
     assert prof["strategy.liquidity_model"] == "auctions"

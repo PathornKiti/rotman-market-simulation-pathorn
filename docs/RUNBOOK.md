@@ -129,8 +129,13 @@ other teams there is no real crowd, so any "crowd" the bot sees there is noise; 
 
 ```bash
 git fetch origin && git checkout claude/ensemble-trend && git pull     # once, before the first heat
-python -m ritc run liability --live -v --profile rotate
+python -m ritc run liability --live -v --profile rotate --forever
 ```
+
+`--forever` keeps the bot running across heats: when a heat ends (case STOPPED, or the clock jumps back to a
+new heat) it closes that heat's log and journal, waits for the next heat to go ACTIVE and starts a fresh bot,
+so you type the command once per session. Ctrl-C quits (and cancels resting orders) as before. Rehearse it
+offline: `python -m ritc sim liability --heats 3 --gap 10` in one terminal, the command above in another.
 
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
 far, prints `PROFILE <name>` and records it in the journal. Start it before the heat opens, as always. To force
