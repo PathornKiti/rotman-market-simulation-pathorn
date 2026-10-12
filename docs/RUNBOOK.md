@@ -137,6 +137,10 @@ new heat) it closes that heat's log and journal, waits for the next heat to go A
 so you type the command once per session. Ctrl-C quits (and cancels resting orders) as before. Rehearse it
 offline: `python -m ritc sim liability --heats 3 --gap 10` in one terminal, the command above in another.
 
+Each heat's log and journal are named after what it changed, e.g.
+`logs/liability-20261012-171840__C_auctions__crowd_robust=True+liquidity_model=auctions.log` (a plain run has
+no suffix; `--set` overrides are listed the same way).
+
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
 far, prints `PROFILE <name>` and records it in the journal. Start it before the heat opens, as always. To force
 one: `--profile C_auctions`. An explicit `--set` still wins over the profile.

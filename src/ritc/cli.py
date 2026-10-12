@@ -89,13 +89,18 @@ def cmd_run(a: argparse.Namespace) -> int:
 
 
 def _run_one_heat(a: argparse.Namespace, heat: int) -> Runner:
-    path = setup_logging(a.case, a.verbose)
+    from .core.logging_setup import file_tag
     from .tune import parse_value
     sets = {k.strip(): parse_value(v.strip()) for k, _, v in (x.partition("=") for x in a.set or [])}
+    name, prof = None, {}
     if a.profile:
         from .practice import pick_profile
         name, prof = pick_profile(a.case, a.profile)
         sets = {**prof, "strategy.profile": name, **sets}          # an explicit --set still wins
+    # The log / journal name says what this run changed, e.g.
+    # logs/liability-20261012-171840__C_auctions__crowd_robust=True+liquidity_model=auctions.log
+    path = setup_logging(a.case, a.verbose, tag=file_tag(name, sets))
+    if a.profile:
         print(f"PROFILE {name}: {prof or '(config defaults)'}")
         logging.getLogger("ritc").info("PROFILE %s %s", name, prof)
     runner, _ = build(a.case, a.config, a.live, overrides=sets)

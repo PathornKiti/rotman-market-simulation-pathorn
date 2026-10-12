@@ -144,7 +144,9 @@ def summarize(path: str | Path) -> dict:
         crowded = sum("CROWDED" in line for line in log.read_text(encoding="utf-8", errors="replace").splitlines())
     bids = [a for a in auctions if a["bid"] is not None]
     name = (cfg.get("strategy") or {}).get("profile") or "-"
-    return {"file": path.name, "name": name, "vr": vr, "profile": profile, "nlv": nlv, "fixed_offered": fixed_offered,
+    heat = path.stem.split("-", 1)[-1]           # date-time__what the run changed
+    return {"file": path.name, "heat": heat, "name": name, "vr": vr, "profile": profile, "nlv": nlv,
+            "fixed_offered": fixed_offered,
             "fixed_taken": fixed_taken, "fixed_edge": fixed_edge, "auctions": auctions, "bids": len(bids),
             "wins": sum(a["won"] for a in bids), "crowded": crowded,
             "loop_p50": statistics.median(loop) if loop else None,
@@ -159,10 +161,11 @@ def report(paths: list[str]) -> str:
     rows = [r for r in (summarize(p) for p in paths) if r["nlv"] is not None]   # skip runs that never traded
     if not rows:
         return "no heats with ticks in these journals"
-    out = [f"{'heat':<34}{'profile':<16}{'NLV':>10}{'fixed':>8}{'edge':>9}{'auct':>7}{'crowd':>7}{'loop':>7}"
+    w = max([len(r["heat"]) for r in rows] + [4]) + 2
+    out = [f"{'heat':<{w}}{'profile':<16}{'NLV':>10}{'fixed':>8}{'edge':>9}{'auct':>7}{'crowd':>7}{'loop':>7}"
            f"  trend VR(10)"]
     for r in rows:
-        out.append(f"{r['file'][:33]:<34}{r['name'][:15]:<16}{(r['nlv'] or 0):>10,.0f}"
+        out.append(f"{r['heat']:<{w}}{r['name'][:15]:<16}{(r['nlv'] or 0):>10,.0f}"
                    f"{r['fixed_taken']:>4}/{r['fixed_offered']:<3}{r['fixed_edge']:>9,.0f}{r['wins']:>4}/{r['bids']:<2}"
                    f"{r['crowded']:>7}{(r['loop_p50'] or 0):>6.0f}ms  "
                    + " ".join(f"{t} {v:.2f}" for t, v in r["vr"].items()))
@@ -183,7 +186,7 @@ def report(paths: list[str]) -> str:
                    f"{statistics.median(allvr):.2f}, {hi} above 1.2 (random walk ~1.0, sd ~0.2 per stock-heat). "
                    + ("Trends look real: try profile D_trend." if statistics.median(allvr) > 1.2 and hi > len(allvr) / 2
                       else "No clear trend: keep trend_unwind_z off."))
-    bids = [(r["file"][:20], a) for r in rows for a in r["auctions"] if a["bid"] is not None]
+    bids = [(r["heat"], a) for r in rows for a in r["auctions"] if a["bid"] is not None]
     if bids:
         out.append("\nauction bids (vs_mid = how far our bid sat from the mid in the client's favour; the real reserve "
                    "is above the lost ones and at or below the won ones):")
