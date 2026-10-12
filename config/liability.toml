@@ -45,6 +45,12 @@ decide_late_end_guard = true  # ...but never wait past the last tick a tender ca
                               # Seeds 1-16 +$3.7k (t 4.1), 301-316 +$2.3k (t 2.6); anchored hostile +-$0.1k.
 reserve_auction_room = true   # count pending auction bids against the net limit. false: -$1.8k..+$0.3k even when the
                               # server voids awards that no longer fit (sim award_room=1); hostile worst heat worse.
+auction_skip_adding = 5000     # AUCTION FREEZE (default since 2026-10-13): decline an auction that would ADD to a block we
+                              # still hold >= this many shares of. An open bid freezes the stock ~30 s (front-running
+                              # rule) and a win only grows the block. Real heats: CROC 2026-10-13 (~-$15k: frozen
+                              # buy-back while CROC rallied) and CRZY 2026-10-12. Fresh seeds 1001-1032: calibrated
+                              # +$0.2k, Kyle +$1.2k (worst -$7.7k -> $0), hostile +$1.1k (worst -$64k -> -$32k),
+                              # generous reserves -$1.1k; |t| <= 1.1 (fires in 2-4 of 32 heats). 0 = old behaviour.
 room_wait = true              # a fixed tender declined ONLY for risk room is re-checked every tick until 2 ticks before
                               # expiry instead of declined at once (answer-at-once still holds for everything else). Real
                               # heats: log2 #103 and the last heat's #403 were declined for room held by an auction bid we

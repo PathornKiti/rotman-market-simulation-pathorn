@@ -473,6 +473,20 @@ batch, stale quotes are cancelled in parallel, 16 I/O workers, the inline feed p
 already polling. Profiled at 0.2 s per RIT call: loop p50 603 -> 206 ms, p95 1810 -> 1212 ms; lock-step results
 identical (seed 501: $157,812 before and after).
 
+## Auction freeze on a block we are unwinding (2026-10-13): adopted (`auction_skip_adding = 5000`)
+
+Real heats: 2026-10-13 00:35:59 the bot bid SELL CROC auction #701 while still buying back a short CROC block; the
+bid froze CROC for its 30 s window and CROC rallied, so ~36k shares were bought back at $20.50-21.15 against the
+$20.45 received (~-$15k). Same pattern on CRZY 2026-10-12 16:08. Rule: decline an auction that would ADD to a
+block of >= 5,000 shares we still hold. Fresh seeds 1001-1032 (5,000 / 20,000 shares):
+
+| calibrated | Kyle flow | hostile | generous reserves (0.15-0.40) |
+|---|---|---|---|
+| +$0.3k / +$0.2k (t 1.0) | +$1.2k (t 1.1), worst -$7.7k -> $0 | +$1.1k (t 1.1), worst -$64.0k -> -$31.9k | -$1.1k / -$1.3k (t -0.5) |
+
+Not significant (it fires in 2-4 of 32 heats), but it removes a loss seen twice on the real server and halves the
+hostile worst heat; the cost is skipping a few winnable same-side auctions when reserves are generous. Adopted.
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out
