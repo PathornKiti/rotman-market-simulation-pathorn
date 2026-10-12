@@ -430,6 +430,10 @@ Break-even: (c) N = 30 at ~$0.45/share, (b) at ~$0.85. Keep the hold while the b
 check 1 shows a bell fine of $0.45/share or more, run `--set execution.hold_budget_min_ticks=30 --set
 execution.close_hold_ticks=0 --set strategy.hold_valuation=false` (it dominates the A15 fallback at every fine).
 
+Default check for `python -m ritc run liability --live` (same seeds): `liquidity_model = "flow"` +$1.3k (t 0.4),
+hostile -$0.5k (t -0.2); `"auctions"` +$1.5k (t 1.3), hostile -$1.6k (t -1.7). Neither earns a switch, so
+`"book"` stays the default and the config as committed is the best tested bot.
+
 Not run: candidate 5 (per-slot reserve bracket) waits on practice checks 3-4. Bug found on the way: the first stop
 run sampled once per LOOP (several per tick), so the 10-tick window was never filled and it never fired; fixed
 (one sample per tick) before the numbers above.
