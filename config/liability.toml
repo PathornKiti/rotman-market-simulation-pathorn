@@ -41,6 +41,11 @@ decide_late_ticks = 0         # USER CHOICE 2026-10-11 (practice): answer every 
 decide_late_end_guard = true  # ...but never wait past the last tick a tender can still be accepted (min_ticks_to_unwind /
                               # wind-down): a real-time test missed 3 of 32 tenders whose windows ran past the bell.
                               # Seeds 1-16 +$3.7k (t 4.1), 301-316 +$2.3k (t 2.6); anchored hostile +-$0.1k.
+room_wait = true              # a fixed tender declined ONLY for risk room is re-checked every tick until 2 ticks before
+                              # expiry instead of declined at once (answer-at-once still holds for everything else). Real
+                              # heats: log2 #103 and the last heat's #403 were declined for room held by an auction bid we
+                              # then lost. Calibrated sim (real=1): 301-332 +$3.1k (t 1.6), 801-864 +$5.9k (t 3.3),
+                              # 401-464 +$4.1k (t 2.5); pooled 160 seeds never worse in a single heat; hostile +$0.5k (t 1.0).
 decide_late_max_window = 30   # safety: answer AT ONCE if `expires` is missing / further than this / unreadable, and never
                               # wait longer than this. Raise it if practice shows windows longer than 30 s.
 respect_windows = true        # 2027 brief: "Any trades executed during this window, before the tender decision is

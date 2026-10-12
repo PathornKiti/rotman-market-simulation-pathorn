@@ -35,6 +35,14 @@ Results so far: [PRACTICE_LOGS.md](PRACTICE_LOGS.md). Open questions: [ASSUMPTIO
 | C | defaults again | journals for the real auction reserve (mid at every bid, won/lost): bidding closer to win more LOST money in the simulator (PRACTICE_LOGS.md section 3) |
 | D | `ritc suggest` in a second terminal during a bot heat (read-only) | rehearse manual takeover |
 
+**Measurements the models need (2026-10-12)**
+- [ ] Auction type: the `caption` of tenders 700-703 in the `.jsonl` journals (is 702 the competitive one?).
+- [ ] Auction reserve: `ritc report` on the journals, each auction's bid vs mid and won/lost.
+- [ ] Once: bid an auction, then POST a second bid on it. Does the second one replace the first?
+- [ ] Flow persistence: run `python -m ritc record` in a third terminal for one heat, then `ritc calibrate` on it:
+      "signed trade flow -> next 10-tick move" r > 0 with t >= 3 and variance ratio well above 1 would justify
+      re-testing the rejected VPIN rule (`docs/rejected/`); r ~ 0 and VR ~ 1 closes it.
+
 **Decision rules for the graded heats**
 - Close-out fine found (question 1) → the A15 fallback flags in ASSUMPTIONS section 1.
 - `CROWD ... DETECTED` in practice, or a heat where auctions we won ran against us → keep `liquidity_model = book`.

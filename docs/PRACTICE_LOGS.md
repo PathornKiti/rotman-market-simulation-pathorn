@@ -36,7 +36,8 @@ so for a moment it is in neither the open-orders list nor the position, and the 
 
 ## 3. Auctions: won 2 of 18, root cause
 
-Wins are read from the positions (a block appears after the window): log2 #702 (CROC) and log4 #702 (CRZY).
+Wins are read from the positions (a block appears after the window): log2 #702 (CROC) and log4 #702 (CRZY). **Both
+wins are id 702** (2 of 3 bids; 700/701/703: 0 of 15): the id likely marks the auction type, see RESEARCH.md.
 
 **Mechanical cause: the bid sits far from the mid because five haircuts are stacked on it.** The bot bids the price
 that leaves `competitive_margin` after its estimated exit: `bid = exit − fee − risk/drift − margin`. On the
@@ -51,7 +52,8 @@ calibrated simulator (129 bids, `auction_rootcause` study):
 | half-spread we earn by resting | −0.025 |
 | **total** | **0.24 from mid** (real heats: 0.18-0.68 where a price was nearby) |
 
-The client's hidden reserve is closer to the mid than that, so the bid is "declined" at once. Our two real wins were
+The client's hidden reserve is closer to the mid than that, so the bid loses at expiry (correction 2026-10-12: no
+bid was rejected at submission; 0 `not filled` lines over 18 bids, see RESEARCH.md "Auction clues"). Our two real wins were
 bids 0.18 and 0.35 from mid: real reserves are sometimes generous, and we only win those.
 
 **But bidding closer does not pay.** Pricing auctions from forward liquidity (`liquidity_model = "auctions"`)

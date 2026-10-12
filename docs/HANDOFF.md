@@ -1,5 +1,20 @@
 # Handoff: state at the end of 2026-10-12 (start the next session here)
 
+**Update 2026-10-12 (review session):** PR #5 (`liability-fresh-unwind`) is merged into `main`; local `main` was
+fast-forwarded. New on top, UNCOMMITTED: `strategy.room_wait = true` (+$4.9k a heat, t 3.6, never worse; RESEARCH.md
+"Auction clues"), sim knobs `reserve_lo` / `reserve_hi`, 160 tests. Auction clues to collect in practice, in order:
+(1) the `caption` of tenders 700-703 in the `.jsonl` journals (is id 702 the competitive auction and the others
+winner-take-all?); (2) `ritc report` on the journals: each auction's bid vs mid and won/lost = the real reserve;
+(3) try re-bidding an auction once (does a second POST change the bid?). Then set the auction bid per type.
+**Models tried after that (same day), all rejected:** auction reserve learner, Kyle-coupled simulator + VPIN unwind
+rule (RESEARCH.md; code in `docs/rejected/`). To revisit VPIN, first run `ritc record` in a practice heat and read
+`ritc calibrate`'s "signed trade flow -> next 10-tick move" lines.
+
+**End of 2026-10-12:** a plain-language brief of the whole liability algorithm (pipeline diagram, valuation formula,
+decision rules, auctions, unwind, risk controls, practice results, models kept/rejected, questions for the professor)
+is in the user's Claude doc "Liquidity Risk Case: Bot Algorithm Brief" (https://claude.ai/artifact/CMcCv8tLH5qMZjSA7H2rFf).
+Still uncommitted on `main`: room_wait, sim options, calibrate flow lines, docs, `docs/rejected/` patch. 162 tests.
+
 Liquidity Risk Case bot (`liability`), graded heats **next week**. Read in this order:
 1. this file
 2. [PRACTICE_LOGS.md](PRACTICE_LOGS.md): what the five real practice heats showed (raw logs in `practice_logs/`)

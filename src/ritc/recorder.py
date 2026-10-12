@@ -203,6 +203,7 @@ def calibrate(path: str) -> dict:
     rep["crowd_raw"] = crowd_event_study(by_tick, ticks, [x for x in ts if x["tender_id"] not in booked])
     rep["crowd"] = summarise_crowd(rep["crowd_raw"])
     rep["fills"] = {tk: fill_model(rows, by_tick, ticks, tk) for tk in tickers}
+    rep["flow"] = {tk: flow_persistence(rows, by_tick, ticks, tk) for tk in tickers}
     rep["crowd_excluded_own"] = sorted(booked)
     fin = rows[-1]["trader"]
     rep["final_nlv"] = fin.get("nlv")
@@ -267,6 +268,46 @@ def imbalance_signal(by_tick: dict, ticks: list[int], tk: str, me=None) -> dict:
                         "obi5_t": round(t5, 1), "micro_r": round(rm, 3), "micro_t": round(tm, 1),
                         "obi1_sign_hit": round(hit, 3)}
     return out
+
+
+def flow_persistence(rows: list[dict], by_tick: dict, ticks: list[int], tk: str, w: int = 10) -> dict:
+    """
+    The two numbers that decide whether a VPIN / order-flow "cross when the flow turns against us" rule can pay
+    (docs/RESEARCH.md, 2026-10-12): over non-overlapping `w`-tick windows, does the signed trade flow (volume
+    above the mid - below it, / total) predict the NEXT window's mid move (r, t), and do prices trend (variance
+    ratio of w-tick to 1-tick moves; 1 = random walk, > 1 = momentum)? Simulator: no coupling r ~ 0, VR ~ 1;
+    persistent Kyle flow (kyle=0.5, kyle_phi=0.9) r ~ +0.2, VR ~ 1.5, and the rule still did not pay there.
+    """
+    mids: dict[int, float] = {}
+    for k in ticks:
+        b = by_tick[k]["books"].get(tk) or {}
+        bids, asks = _levels(b.get("bids", b.get("bid", []))), _levels(b.get("asks", b.get("ask", [])))
+        if bids and asks:
+            mids[k] = (max(p for p, _ in bids) + min(p for p, _ in asks)) / 2
+    signed: dict[int, list[float]] = {}
+    for r in rows:
+        for x in (r.get("tas") or {}).get(tk, []):
+            k = int(x["tick"])
+            m = mids.get(k) or mids.get(k - 1)
+            if m is None:
+                continue
+            q = float(x.get("quantity", 0))
+            v = signed.setdefault(k, [0.0, 0.0])
+            v[0 if float(x["price"]) >= m else 1] += q
+    xs, ys = [], []
+    for k in ticks[::w]:
+        if k in mids and k - w in mids and k + w in mids:
+            b = sum(signed.get(j, [0.0, 0.0])[0] for j in range(k - w + 1, k + 1))
+            s_ = sum(signed.get(j, [0.0, 0.0])[1] for j in range(k - w + 1, k + 1))
+            if b + s_ > 0:
+                xs.append((b - s_) / (b + s_))
+                ys.append(mids[k + w] - mids[k])
+    r, t = _corr(xs, ys)
+    d1 = [mids[k + 1] - mids[k] for k in ticks if k in mids and k + 1 in mids]
+    dw = [mids[k + w] - mids[k] for k in ticks[::w] if k in mids and k + w in mids]
+    vr = (st.pvariance(dw) / (w * st.pvariance(d1))) if len(dw) > 5 and len(d1) > 5 and st.pvariance(d1) else None
+    return {"n": len(xs), "flow_next_r": round(r, 3), "flow_next_t": round(t, 1),
+            "variance_ratio": round(vr, 2) if vr else None}
 
 
 def crowd_event_study(by_tick: dict, ticks: list[int], tenders: list[dict], lag: int = 10) -> dict:
@@ -388,6 +429,11 @@ def print_report(rep: dict) -> None:
               f"kappa sell {f.get('sell_at_kappa')} buy {f.get('buy_at_kappa')}")
         for side in ("sell_at", "buy_at"):
             print(f"      {side:<8} " + "  ".join(f"{d}:{p:.2f}" for d, p in f[side].items()))
+    print("\nsigned trade flow -> next 10-tick move, and variance ratio (decides the VPIN / toxic-flow rule: "
+          "it needs r > 0 with t >= 3 AND VR well above 1 over 2+ heats)")
+    for tk, f in rep.get("flow", {}).items():
+        print(f"  {tk:<6} n {f['n']:>3}  r {f['flow_next_r']:+.3f} (t {f['flow_next_t']:+.1f})  "
+              f"variance ratio {f['variance_ratio']}")
     print("\nbook imbalance -> next mid move (others' orders only; |t| >= 3 on a real recording = a usable signal)")
     for tk, d in rep.get("imbalance", {}).items():
         for h, v in d.items():

@@ -237,3 +237,33 @@ def test_decide_late_waits_for_the_deadline_but_never_risks_missing_a_tender():
     assert not end.wait_to_decide({"tender_id": 6, "expires": 421}, 6, snap(411))  # 9 left: answer now
     off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
     assert not off.wait_to_decide(t, 1, snap(100))         # off by default
+
+
+def test_room_wait_rechecks_a_tender_declined_only_for_room():
+    # room_wait: a fixed tender blocked only by risk room is re-checked until `room_wait_margin` ticks before it
+    # expires (the room is held by a block unwinding elsewhere or an auction bid that may lose), but never when
+    # we hold its own stock (waiting freezes that stock's unwind), never for auctions, never past the last tick.
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy, TenderDecision
+
+    cfg = {"case": {"tickers": ["X", "Y"]}, "run": {"wind_down_ticks": 5},
+           "strategy": {"room_wait": True, "min_ticks_to_unwind": 5}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+
+    def snap(tick: int, x_pos: int = 0) -> Snapshot:
+        return Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                        {"X": {"bid": 9.99, "ask": 10.01, "position": x_pos}, "Y": {"position": 55_000}})
+
+    room = TenderDecision(False, None, 0.0, 0.0, "exceeds risk room (53000 > 44000)")
+    t = {"tender_id": 103, "ticker": "X", "expires": 130, "is_fixed_bid": True}
+    assert s.wait_for_room(t, room, snap(100))                 # Y's block is unwinding: keep the option open
+    assert s.wait_for_room(t, room, snap(127))                 # 3 left
+    assert not s.wait_for_room(t, room, snap(128))             # 2 left: answer now (decline)
+    assert not s.wait_for_room(t, room, snap(100, x_pos=20_000))      # we hold X: waiting would freeze its unwind
+    assert not s.wait_for_room(t, TenderDecision(False, None, -0.2, 0.0, "profit/share -0.2000 < 0.0100"),
+                               snap(100))                      # declined on price: no reason to wait
+    assert not s.wait_for_room({**t, "is_fixed_bid": False}, room, snap(100))   # auctions: bid or not, at once
+    assert not s.wait_for_room({**t, "expires": 425}, room, snap(414))          # 6 left: past the last acceptable tick
+    off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
+    assert not off.wait_for_room(t, room, snap(100))           # off unless configured

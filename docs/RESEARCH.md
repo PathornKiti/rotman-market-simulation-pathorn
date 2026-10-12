@@ -315,6 +315,88 @@ Kyle's lambda, OFI, VPIN, Hasbrouck VAR and Hawkes for this case. Checked agains
 | "$0.40/share past 5,000" | outdated | now **$0.60** (organisers, 2026-10-11) |
 | Log-4 CROC: "aggressive crossing destroyed $2,654" | partly | the larger loss was the $1.76/share move during the slow passive phase before the cross |
 
+## Auction clues and room_wait (2026-10-12 review)
+
+Clues from re-reading the five practice logs (`docs/practice_logs/`), the official RITC 2026 case package and a
+past team's LT3 data (Nathaniel-Coulter, Columbia: private tenders only, so no reserve data there):
+
+1. **No real auction bid was rejected at submission**: 0 `not filled` lines over 18 bids. The award is decided at
+   expiry, so the reserve cannot be probed by re-bidding, and PRACTICE_LOGS' "declined at once" was wrong. Still
+   untested: can a bid be revised inside the window (a second POST)?
+2. **Both wins were tender id 702** (log2 CROC, log4 CRZY): 702 won 2 of 3, ids 700/701/703 lost 0 of 15 (chance
+   of that pattern by luck ~2%, hypergeometric). Every heat has exactly 700-703, and the brief has two non-fixed
+   types, so the id probably encodes the type (competitive vs winner-take-all) or its reserve rule. The bot bids
+   both types the same way. The `tender_seen` journal rows hold the `caption`: read them on Windows to confirm.
+3. **The simulator's reserve is a guess the real wins contradict.** `sim/server.py` draws the reserve U(0, 0.15)
+   $ through the mid. A bid 0.18 or 0.35 from mid (the two real wins) can never fill there. New knobs
+   `reserve_lo` / `reserve_hi` test other worlds (32 seeds 301-332, calibrated market, vs defaults):
+
+   | reserve through the mid | defaults (bid ~0.24 off mid) | bid closer (`liquidity_model=auctions`) | bid closer + `room_wait` |
+   |---|---|---|---|
+   | 0-0.15 (sim default) | $97.5k | +$6.7k (t 1.8) | +$9.8k (t 2.5) |
+   | 0-0.35 | $113.5k | −$4.7k (t −2.0) | +$2.6k (t 0.7) |
+   | 0-0.60 | $121.0k | −$4.8k (t −2.3) | +$0.0k (t 0.0) |
+
+   The more generous the reserve, the more the CURRENT bid already wins and the more bidding closer gives away. On
+   holdout 401-464 (sim reserve), bid closer + `room_wait` vs `room_wait` alone: −$29 (t 0.0); hostile anchored
+   −$3.9k, worst heat −$10.9k → −$56.0k. **Bidding closer stays rejected.** The real reserve distribution, from the
+   journals (`ritc report` → `_live` per-tender bid vs mid and booked/not), is what would change this.
+
+**Adopted: `strategy.room_wait = true`.** A fixed tender declined ONLY for risk room is re-checked every tick until
+2 ticks before expiry (only when we hold none of its stock, so the freeze never stalls that stock's unwind). It
+recovers tenders blocked by an auction bid that then loses (log2 #103, last heat #403) or by a block that unwinds
+in ~20 s. Calibrated market: 301-332 +$3.1k (t 1.6), fresh 801-864 +$5.9k (t 3.3), 401-464 +$4.1k (t 2.5); pooled
+96 seeds +$4.9k (t 3.6), 16 better / 0 worse; hostile anchored +$0.5k (t 1.0), worst heat unchanged.
+
+## Reserve learning, Kyle flow and VPIN (2026-10-12, user request): all rejected
+
+Built behind flags, tested on the calibrated market with **`late_award=1`** (as on the real server: a bid is never
+refused at once, a win books at expiry), 32 design seeds 301-332, then holdout. The rejected code is kept as a patch,
+[rejected/2026-10-12-auction-learner-vpin.patch](rejected/2026-10-12-auction-learner-vpin.patch) (`git apply` it).
+
+**1. Auction reserve learning (`auction_bid = "learn"`).** Each bid is a censored observation of the hidden reserve
+(won: reserve at least `d` through the mid; lost: less). Grid posterior over a normal reserve, then the bid that
+maximises P(win) x (edge − room cost): the inverse-hazard rule of optimal-auction pricing. Paired vs defaults:
+
+| Variant | reserve 0-0.15 | 0-0.35 | 0-0.60 |
+|---|---|---|---|
+| cold start, book exit valuation | −$0.8k (t −1.0) | **−$12.1k (t −2.5)** | +$1.6k (t 0.4) |
+| cold, forward-liquidity valuation (`liquidity_model=auctions`) | −$0.8k | −$7.3k (t −1.7) | +$0.6k |
+| cold, value bias 0.10 / 0.19 | −$0.8k / +$1.8k | −$7.9k (t −2.1) / −$3.4k | +$0.3k / −$0.5k |
+| warm (20 practice-like observations), bias 0 | $0 | **−$12.6k (t −2.9)** | +$1.3k |
+| **warm, bias 0.10** | **+$7.1k (t 2.1)** | −$0.8k (t −0.4) | +$0.7k (t 0.5) |
+| warm, bias 0.10, **holdout 401-464** | −$0.1k (t −0.1) | −$0.8k (t −0.9) | — |
+| warm, bias 0.10, hostile anchored | −$2.9k (t −1.9), 0 better / 5 worse | | |
+
+Why it fails: the bid's break-even comes from the book-walk exit, which is pessimistic (~$0.10/share in the sim,
+~$0.19 on the real server). The margin rule's "$0.05" wins really earn ~$0.15-0.25, so they are worth winning; the
+expected-profit optimiser shades its bid by the inverse hazard (0.2-0.3 through the mid) and gives those wins away
+(one seed: $245k → $126k). Correcting the bias and warming the prior made it competitive on design seeds but not on
+the holdout. With ~4 auctions a heat there is too little data to beat a fixed margin.
+
+**2. Kyle-coupled simulator (`RITC_STRESS` `kyle`, `kyle_phi`, `kyle_sd`; kept).** Other traders' order flow
+moves the price (Kyle's lambda), with a persistent imbalance; total volatility is unchanged (tick sd 1.07x). Checks
+(40 seeds): no coupling, variance ratio(20) 0.96 and corr(past 10-tick flow, next return) +0.00; `kyle=0.5,
+kyle_phi=0` 0.88 / +0.01 (martingale); `kyle=0.5, kyle_phi=0.9` 1.47 / +0.19; `kyle=0.8, kyle_phi=0.95` 1.97 / +0.33.
+
+**3. VPIN toxic-flow unwind (`toxic_cross`; Easley, Lopez de Prado & O'Hara 2012).** Time & sales split into buyer-
+vs seller-initiated volume in volume buckets (5,000 shares, last 10). When the flow runs against our resting side
+(signed net imbalance, or VPIN with the sign against us, past a threshold), cross for the rest of the block. Our own
+crossing orders are taken out of the count. Paired vs defaults, 32 seeds:
+
+| World | net 0.3 | net 0.5 | VPIN 0.3 | VPIN 0.5 |
+|---|---|---|---|---|
+| calibrated (no coupling) | −$1.6k (t −1.5) | −$0.4k | −$5.0k (t −4.3) | −$4.8k (t −4.4) |
+| Kyle, noise flow (phi 0) | −$1.1k | −$0.7k | −$5.0k (t −3.6) | −$4.6k (t −3.2) |
+| Kyle, persistent (0.5, phi 0.9) | −$0.1k | −$0.7k | −$0.7k | −$0.6k |
+| Kyle, strong (0.8, phi 0.95) | +$2.5k (t 1.1) | +$2.2k (t 1.6) | | |
+
+Crossing a 50k block in a thin book costs ~3.6c/share plus the spread that resting earns; the drift it avoids only
+pays when prices trend hard (variance ratio ~2, flow→return corr ~0.3), and even then not significantly. Unsigned
+VPIN fires on ordinary lumpy flow and is the worst. **Rejected.** It becomes worth re-testing only if a real recording
+shows that kind of trend: `ritc calibrate` now prints "signed trade flow -> next 10-tick move, and variance ratio"
+per stock (needs `ritc record` running during a practice heat; r > 0 with t ≥ 3 and VR well above 1 over 2+ heats).
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

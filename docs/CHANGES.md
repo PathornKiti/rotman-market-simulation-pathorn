@@ -8,6 +8,25 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
+## 2026-10-12 (models): reserve learning, Kyle flow, VPIN: all rejected
+
+At the user's request three models were built and tested (RESEARCH.md "Reserve learning, Kyle flow and VPIN"):
+a censored-data reserve learner with inverse-hazard bidding (best variant +$7.1k on design seeds, holdout −$0.1k /
+−$0.8k, hostile −$2.9k), and a VPIN / signed-flow "cross when the flow turns against us" unwind (loses $0.4-5.0k a
+heat in realistic markets; only +$2.2-2.5k, t < 2, when prices trend hard). Bot code removed, kept as
+`docs/rejected/2026-10-12-auction-learner-vpin.patch`. Kept: simulator options `late_award` (real-server auction
+timing), `kyle` / `kyle_phi` / `kyle_sd` (order flow moves the price), and `ritc calibrate`'s new flow-persistence
+lines (the measurement that would justify re-testing VPIN). 162 tests.
+
+## 2026-10-12 (review): auction clues, `room_wait` adopted
+
+**`strategy.room_wait = true`** (new, on): a fixed tender declined only for risk room is re-checked until 2 ticks
+before expiry instead of declined at once. Calibrated sim: pooled 96 seeds +$4.9k a heat (t 3.6, 16 better / 0
+worse), second holdout +$4.1k (t 2.5), hostile +$0.5k. Simulator: `RITC_STRESS` `reserve_lo` / `reserve_hi`
+(auction reserve generosity, default 0 / 0.15 = unchanged). Auction clues (RESEARCH.md): real bids are never
+rejected at submission; both wins were tender id 702 (2/3 vs 0/15); the sim's reserve guess cannot produce the two
+real wins; bidding closer is still rejected (holdout −$29 even with `room_wait`). 160 tests.
+
 ## 2026-10-12 (later): auction root cause, aggressive profile
 
 Auctions lose because the bid stacks ~$0.24/share of haircuts (book walk, risk/drift, margin, fee) while the

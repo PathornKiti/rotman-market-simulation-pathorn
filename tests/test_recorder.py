@@ -1,6 +1,6 @@
 """Practice-server recorder analysis (`ritc calibrate`): fill model, crowd event study, pooling."""
 
-from ritc.recorder import crowd_event_study, fill_model, summarise_crowd
+from ritc.recorder import crowd_event_study, fill_model, flow_persistence, summarise_crowd
 
 
 def _tick(k: int, mid: float, pos: int = 0) -> dict:
@@ -35,3 +35,18 @@ def test_crowd_event_study_signs_moves_against_the_holders_and_pools():
     assert cells["X|expiry"]["mean_per_10k"] == 0.0
     pooled = summarise_crowd({k: raw[k] + raw[k] + raw[k] for k in raw})
     assert pooled["X|arrival"]["n"] == 3
+
+
+def test_flow_persistence_sees_flow_that_leads_a_trending_price():
+    # Regimes of 60 ticks: buyers dominate and the mid rises 1c a tick, then sellers and it falls.
+    ticks = list(range(1, 401))
+    mid, mids = 10.0, {}
+    for k in ticks:
+        up = (k // 60) % 2 == 0
+        mid += 0.01 if up else -0.01
+        mids[k] = round(mid, 2)
+    by_tick = {k: _tick(k, mids[k]) for k in ticks}
+    rows = [{"tas": {"X": [{"tick": k, "price": mids[k] + (0.01 if (k // 60) % 2 == 0 else -0.01),
+                            "quantity": 1000}]}} for k in ticks]
+    f = flow_persistence(rows, by_tick, ticks, "X")
+    assert f["flow_next_r"] > 0.2 and f["variance_ratio"] > 2      # flow leads the move, prices trend

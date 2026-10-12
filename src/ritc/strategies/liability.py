@@ -494,6 +494,25 @@ class LiabilityStrategy(Strategy):
                 return False
         return True
 
+    def wait_for_room(self, t: dict, d: TenderDecision, snap: Snapshot) -> bool:
+        """
+        `room_wait`: a fixed tender declined ONLY for risk room is re-checked every tick until `room_wait_margin`
+        ticks before it expires, instead of declined at once. Practice heats (log2 #103, last heat #403): the room
+        was held by an auction bid we then lost, or by a block that unwinds in ~20 s. Only when we hold none of the
+        tender's stock: waiting freezes that stock (respect_windows), which would stall its own unwind.
+        """
+        if not self.p.get("room_wait", False) or not t.get("is_fixed_bid", True):
+            return False
+        if not d.reason.startswith("exceeds risk room") or snap.positions.get(t.get("ticker"), 0):
+            return False
+        try:
+            left = int(t["expires"]) - snap.tick
+        except (KeyError, TypeError, ValueError):
+            return False
+        last_ok = max(int(self.p.get("min_ticks_to_unwind", 10)),
+                      int(self.cfg.get("run", {}).get("wind_down_ticks", 5))) + 1
+        return left > int(self.p.get("room_wait_margin", 2)) and snap.ticks_left > last_ok + 1
+
     def decide(self, t: dict, snap: Snapshot, positions: dict[str, int]) -> TenderDecision:
         """The bot's answer to tender `t` against the book of now (also used by `ritc suggest`)."""
         ticker = t.get("ticker")
@@ -560,6 +579,8 @@ class LiabilityStrategy(Strategy):
             if self.wait_to_decide(t, tid, snap):
                 continue          # keep the option open: answer `decide_late_ticks` before the window closes
             d = self.decide(t, snap, positions)
+            if not d.accept and self.wait_for_room(t, d, snap):
+                continue          # room frees up as other blocks unwind / pending auction bids resolve: re-check
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
                      t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline", d.reason)

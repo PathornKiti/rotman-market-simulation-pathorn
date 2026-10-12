@@ -186,9 +186,23 @@ class Market:
         # per tick (our 14 real passive unwinds), 2-4x the default flow, while the VISIBLE book stays as thin.
         # vol_regime=K: each stock's volatility follows a hidden 2-state Markov chain, calm (x0.5) or turbulent
         # (xK), switching with probability 1/50 per tick (the world a vol-regime / HMM model is built for).
+        # reserve_lo / reserve_hi: the auction's hidden reserve sits U(lo, hi) $ through the mid in OUR favour
+        # (default 0-0.15, a guess). The two real wins were bids ~0.18 and ~0.35 from mid, which the default
+        # can never fill: use these to test bidding rules under more generous reserves (same draws).
+        # late_award=1: a competitive auction bid is never refused at once; a bid past the reserve books when the
+        # window closes, as on the real server (practice: 0 of 18 bids answered success=false).
+        # kyle=k (liability): KYLE (1985) PRICE IMPACT OF OTHER TRADERS' FLOW. Each stock carries an order-flow
+        # imbalance z (AR(1): z' = kyle_phi z + sqrt(1 - phi^2) kyle_sd e, clipped to +-1) that tilts the passive
+        # flow (buyer-initiated x (1 + z), seller-initiated x (1 - z)), and the mid moves lambda x (buy - sell
+        # flow) with lambda set so the flow explains a fraction k of each tick's variance (the random walk keeps
+        # 1 - k; total vol unchanged). kyle_phi 0: the flow is noise, the price still a martingale. kyle_phi 0.9:
+        # one-sided flow persists, so the price trends while our resting side stops filling (the two slow real
+        # unwinds: 700-900 shares/s, ~3 sigma moves).
         self.stress = {"vol": 1.0, "depth": 1.0, "edge": 0.0, "size": 1.0, "gap": 12.0, "book": 1.0,
                        "strict_fr": 0.0, "flow": 1.0, "anchor": 0.0, "maker_fee": 0.0, "spread": 0.04,
-                       "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0, "real": 0.0}
+                       "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0, "real": 0.0,
+                       "reserve_lo": 0.0, "reserve_hi": 0.15, "late_award": 0.0,
+                       "kyle": 0.0, "kyle_phi": 0.9, "kyle_sd": 0.5}
         for kv in filter(None, (os.environ.get("RITC_STRESS") or "").split(",")):
             k, _, v = kv.partition("=")
             self.stress[k.strip()] = float(v)
@@ -304,11 +318,14 @@ class Market:
                 self.period, self.tick = self.period + 1, 1
             for t, off in self.adv_off.items():      # manipulation sits on top of the true price
                 self.secs[t].mid -= off
+            kyle = self.stress["kyle"] if self.case == "liability" else 0.0
             for s in self.secs.values():
                 if s.sigma:
-                    s.mid = max(0.5, s.mid + self.rng.gauss(0, s.sigma))
+                    s.mid = max(0.5, s.mid + self.rng.gauss(0, s.sigma) * (1 - kyle) ** 0.5)
             self._book_tenders()
             getattr(self, f"_tick_{self.case}")()
+            if kyle:
+                self._kyle_step(kyle)
             if self.hostile:
                 self._adversary()
             for s in self.secs.values():
@@ -520,7 +537,8 @@ class Market:
             fixed = self.rng.random() > (0.36 if real else 0.25)
             # Competitive auctions: the client's hidden reserve is 0-15 cents through the mid, drawn
             # per tender from its own generator (the market path and tender stream are unchanged).
-            off = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:reserve").uniform(0.0, 0.15)
+            off = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:reserve").uniform(
+                self.stress["reserve_lo"], self.stress["reserve_hi"])
             # Non-fixed tenders are competitive auctions or winner-take-all (half each). In a WTA a rival
             # desk bids past the reserve 60% of the time; we must also beat its price to win.
             wr = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:wta")
@@ -788,7 +806,27 @@ class Market:
             # practice heats: our resting orders absorbed ~2,600 / 3,200 / 1,500 shares per tick on average
             target = {"CRZY": 2600, "TAME": 3200, "CROC": 1500}.get(ticker, 2500)
             q = int(q * target / (0.35 * 1.5 * self.state["base_lot"].get(ticker, self.secs[ticker].lot)))
+        if q and self.case == "liability" and self.stress.get("kyle"):
+            z = self.state.get("kyle_z", {}).get(ticker, 0.0)      # "SELL" = buyer-initiated (fills resting sells)
+            q = int(q * max(0.0, 1 + z if action == "SELL" else 1 - z))
         return q
+
+    def _kyle_step(self, k: float) -> None:
+        """Other traders' flow moves the price (Kyle's lambda); its imbalance z persists with kyle_phi."""
+        phi, sd = self.stress["kyle_phi"], self.stress["kyle_sd"]
+        z = self.state.setdefault("kyle_z", {})
+        for t, s in self.secs.items():
+            if not s.sigma or not s.tradeable:
+                continue
+            e = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:kyle").gauss(0, 1)
+            z[t] = max(-1.0, min(1.0, phi * z.get(t, 0.0) + (1 - phi * phi) ** 0.5 * sd * e))
+            # sd of (buy - sell) flow per tick: each side is u x {1, 2} with prob p (mean m, var v), x (1 +- z).
+            p = 0.35 * self.stress.get("flow", 1.0)
+            u = ({"CRZY": 2600, "TAME": 3200, "CROC": 1500}.get(t, 2500) / 0.525 if self.stress["real"]
+                 else self.state["base_lot"].get(t, s.lot))
+            m, v = 1.5 * p * u, 2.5 * p * u * u - (1.5 * p * u) ** 2
+            lam = (k ** 0.5) * s.sigma / max(1.0, (2 * v * (1 + sd * sd) + 4 * m * m * sd * sd) ** 0.5)
+            s.mid = max(0.5, s.mid + lam * (self._flow(t, "SELL") - self._flow(t, "BUY")))
 
     def _print_flow(self) -> None:
         """Time and sales: the passive flow that reached each touch this tick (the same draws as _flow)."""
@@ -992,6 +1030,10 @@ def route(m: Market, method: str, path: str, q: dict[str, str]) -> tuple[int, ob
                         if good and t.get("_rival") is not None:
                             good = price > t["_rival"] if t["action"] == "BUY" else price < t["_rival"]
                         if good:
+                            m.bookings.append((t["expires"], t, price))
+                        return 200, {"success": True}
+                    if m.stress.get("late_award"):
+                        if good:                   # real server: no answer now; a winning bid books at expiry
                             m.bookings.append((t["expires"], t, price))
                         return 200, {"success": True}
                     if not good:
