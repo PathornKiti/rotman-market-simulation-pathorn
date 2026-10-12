@@ -86,6 +86,7 @@ in `evaluate_tender`, and the unwind races it: the schedule shortens to
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from ..core.algo import AlgoParams, BlockExecutor, ac_kappa, book_eta
@@ -132,6 +133,7 @@ def evaluate_tender(
     crowd_cost: float = 0.0,
     close_hold_ticks: int = 0,
     flow_rate: float = 0.0,
+    drift_symmetric: bool = False,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -191,7 +193,8 @@ def evaluate_tender(
 
     # Adverse drift over the time it takes to unwind (only counts against us).
     unwind_ticks = to_unwind / flow_rate if flow_rate > 0 else to_unwind * unwind_ticks_per_lot
-    drift_cost = max(0.0, -sign * drift_per_tick) * unwind_ticks
+    # TREND (legal use): `drift_symmetric` also credits a trend that runs our way while we unwind.
+    drift_cost = (-sign * drift_per_tick if drift_symmetric else max(0.0, -sign * drift_per_tick)) * unwind_ticks
     drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     drift_cost += crowd_cost             # learned: how far the price runs against tenders' unwinds
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
@@ -458,6 +461,19 @@ class LiabilityStrategy(Strategy):
         return (self.crowd_learn and self.crowd.n >= max(1, int(self.p.get("crowd_min_obs", 1)))
                 and self.crowd.mean > 2 * self.crowd.sd)
 
+    def trend_against(self, ticker: str, position: int, snap: Snapshot) -> float:
+        """
+        TREND (legal use, professor 2026-10-12): z-score of the recent drift running AGAINST `position` (falling
+        while we are long). The drift is an EWMA of 1-tick mid changes with half-life `drift_halflife`, which
+        averages ~2.9 x half-life ticks, so its standard error is sigma / sqrt(2.9 h). Used only to unwind
+        faster (cross the schedule's shortfall instead of resting); never to open a position.
+        """
+        d, sig = self.drift.get(ticker), self.price_vol(ticker, snap)
+        if d is None or d.mean is None or sig <= 0 or not position:
+            return 0.0
+        h = float(self.p.get("drift_halflife", 15))
+        return (-1 if position > 0 else 1) * d.mean / (sig / math.sqrt(2.9 * h))
+
     def no_crowd_seen(self) -> bool:
         """
         `liquidity_model = "adaptive"`: price tenders off forward liquidity ("flow", the higher-mean model) only
@@ -575,12 +591,22 @@ class LiabilityStrategy(Strategy):
 
     def decide(self, t: dict, snap: Snapshot, positions: dict[str, int]) -> TenderDecision:
         """The bot's answer to tender `t` against the book of now (also used by `ritc suggest`)."""
+        if self.liq_model == "ensemble":
+            return self.decide_ensemble(t, snap, positions)
+        return self._evaluate(t, snap, positions)
+
+    def _evaluate(self, t: dict, snap: Snapshot, positions: dict[str, int], flow: bool | None = None,
+                  crowd: bool = True, room: int | None = None) -> TenderDecision:
+        """evaluate_tender with the bot's state. `flow`: force the forward-liquidity exit on / off (None = the
+        liquidity_model's choice); `crowd`: include the learned crowd charge; `room`: override the risk room."""
         ticker = t.get("ticker")
+        use_flow = ((self.liq_model == "flow" or (self.liq_model == "auctions" and self.bid_up(t, positions))
+                     or (self.liq_model == "adaptive" and self.no_crowd_seen())) if flow is None else flow)
         return evaluate_tender(
             t, snap.book(ticker),
             fee=float(self.fees.get(ticker, 0.0)),
             position=positions.get(ticker, 0),
-            room=self.risk.room(ticker, t.get("action", "BUY"), positions),
+            room=self.risk.room(ticker, t.get("action", "BUY"), positions) if room is None else room,
             ticks_left=snap.ticks_left,
             refill_factor=self.p.get("refill_factor", 2.0),
             # In a drawdown, only the best tenders: required margin scales with 1/throttle.
@@ -591,13 +617,75 @@ class LiabilityStrategy(Strategy):
             min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
             price_vol_per_tick=self.price_vol(ticker, snap),
             risk_aversion=self.p.get("risk_aversion", 0.0),
-            crowd_cost=self.crowd_cost(int(t.get("quantity", 0))),
+            crowd_cost=self.crowd_cost(int(t.get("quantity", 0))) if crowd else 0.0,
             close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
             flow_rate=(self.flow(ticker, "SELL" if str(t.get("action", "BUY")).upper() == "BUY" else "BUY")
-                       if self.liq_model == "flow" or (self.liq_model == "auctions" and self.bid_up(t, positions))
-                       or (self.liq_model == "adaptive" and self.no_crowd_seen())
-                       else 0.0),
+                       if use_flow else 0.0),
+            drift_symmetric=bool(self.p.get("drift_symmetric", False)),
         )
+
+    def scenario_weights(self) -> dict[str, float]:
+        """
+        ENSEMBLE weights (professor's multi-pricing): how likely each world is right now.
+        crowd: the learned crowd posterior's probability that its impact is above `ensemble_crowd_min`
+        ($/10k), once `crowd_min_obs` tenders are scored (`ensemble_crowd_prior` before that); the rest is
+        split between the cautious book walk and forward liquidity by `ensemble_flow_weight`.
+        """
+        p = float(self.p.get("ensemble_crowd_prior", 0.15))
+        if self.crowd_learn and self.crowd.n >= max(1, int(self.p.get("crowd_min_obs", 1))):
+            z = (self.crowd.mean - float(self.p.get("ensemble_crowd_min", 0.02))) / max(self.crowd.sd, 1e-9)
+            p = 0.5 * (1 + math.erf(z / math.sqrt(2)))
+        p = min(max(p, 0.02), 0.98)
+        wf = float(self.p.get("ensemble_flow_weight", 0.5))
+        return {"book": (1 - p) * (1 - wf), "flow": (1 - p) * wf, "crowd": p}
+
+    def decide_ensemble(self, t: dict, snap: Snapshot, positions: dict[str, int]) -> TenderDecision:
+        """
+        `liquidity_model = "ensemble"`: value the tender in three worlds and decide on the weighted value with
+        a worst-case floor (the professor's multi-pricing, practice 2026-10-12):
+          book   walk the visible book x refill (cautious)
+          flow   rest at the touch, unwind at the forecast trade flow (liquid market)
+          crowd  other desks took the same block: the book must absorb (1 + `ensemble_crowd_extra`) x our size
+                 ("our 50k becomes 70k")
+        Fixed tender: accept iff sum(w x profit) >= min_profit and every world loses at most `ensemble_floor`/share.
+        Auction: bid the weighted break-even less the margin, but never past the price at which the worst world
+        loses more than `ensemble_floor` (profit is linear in the bid, so both bounds are exact).
+        """
+        room = self.risk.room(t.get("ticker"), t.get("action", "BUY"), positions)
+        qty = int(t.get("quantity", 0))
+        if qty > room:
+            return TenderDecision(False, None, 0.0, 0.0, f"exceeds risk room ({qty} > {room})")
+        big = dict(t, quantity=int(qty * (1 + float(self.p.get("ensemble_crowd_extra", 0.4)))))
+        sc = {"book": self._evaluate(t, snap, positions, flow=False, crowd=False, room=10**9),
+              "flow": self._evaluate(t, snap, positions, flow=True, crowd=False, room=10**9),
+              "crowd": self._evaluate(big, snap, positions, flow=False, crowd=False, room=10**9)}
+        if any(d.unwind_vwap == 0.0 for d in sc.values()):        # no market / too late: the cautious answer
+            return sc["book"]
+        w = self.scenario_weights()
+        floor = float(self.p.get("ensemble_floor", 0.15))
+        min_profit = self.p.get("min_profit_per_share", 0.02) * self.edge_mult()
+        sign = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
+        fixed = bool(t.get("is_fixed_bid", True))
+        if fixed:
+            price = sc["book"].price
+        else:
+            margin = self.p.get("competitive_margin", 0.05)
+            # each world's profit at bid b: pps_i + sign x (bid_i - b); EV = margin at b_ev, worst = -floor at b_wc
+            b_ev = sum(w[k] * (sc[k].price + sign * (sc[k].profit_per_share - margin)) for k in sc)
+            b_wc = min(sign * (sc[k].price + sign * (sc[k].profit_per_share + floor)) for k in sc) * sign
+            price = round(min(b_ev, b_wc) if sign > 0 else max(b_ev, b_wc), 2)
+        pps = {k: (d.profit_per_share if fixed else d.profit_per_share + sign * (d.price - price))
+               for k, d in sc.items()}
+        ev = sum(w[k] * pps[k] for k in sc)
+        worst = min(pps.values())
+        ok = ev >= min_profit and worst >= -floor
+        log.info("SCEN %s %s %s %dk: book %+.3f flow %+.3f crowd %+.3f | w %.2f/%.2f/%.2f -> EV %+.3f worst %+.3f %s",
+                 t.get("tender_id"), t.get("action"), t.get("ticker"), qty // 1000, pps["book"], pps["flow"],
+                 pps["crowd"], w["book"], w["flow"], w["crowd"], ev, worst, "ACCEPT" if ok else "decline")
+        vwap = sum(w[k] * sc[k].unwind_vwap for k in sc)
+        why = (f"ensemble EV {ev:+.4f} (worst {worst:+.4f})" if fixed
+               else f"competitive bid {price:.2f}, ensemble EV {ev:+.4f} (worst {worst:+.4f})")
+        return TenderDecision(ok, price, ev, vwap, why)
 
     def bid_up(self, t: dict, positions: dict[str, int]) -> bool:
         """
@@ -616,7 +704,16 @@ class LiabilityStrategy(Strategy):
     def handle_tenders(self, snap: Snapshot) -> None:
         now = snap.abs_tick
         positions = {t: q + self.pending_delta(t, now, room=True) for t, q in snap.positions.items()}
-        for t in self.current_tenders():
+        tenders = list(self.current_tenders())
+        if self.p.get("rank_tenders", False):
+            # RE-RANK: several tenders open at once compete for the same net limit, so answer the most valuable
+            # first ($ value = profit/share x size), not in arrival order.
+            fresh = [t for t in tenders if int(t.get("tender_id", -1)) not in self.seen and t.get("ticker")]
+            if len(fresh) > 1:
+                val = {id(t): self._evaluate(t, snap, positions, room=10**9).profit_per_share
+                       * int(t.get("quantity", 0)) for t in fresh}
+                tenders.sort(key=lambda t: -val.get(id(t), float("inf")))
+        for t in tenders:
             tid = int(t.get("tender_id", -1))
             ticker = t.get("ticker")
             if tid in self.seen or ticker is None:
@@ -728,6 +825,7 @@ class LiabilityStrategy(Strategy):
                 else:
                     h.append((now, rem))
                 del h[:-(self.stuck_window + 20)]
+        trend_z = float(self.cfg.get("execution", {}).get("trend_unwind_z", 0.0))
         if self.hold_budget and snap.ticks_left <= self.hold_until:
             self.algo.passive = set()              # flat by the bell: the schedule crosses what is left
         elif self.hold_budget:
@@ -735,7 +833,8 @@ class LiabilityStrategy(Strategy):
                                  if hold_within_budget(snap.positions.get(t, 0) - self.algo.blocks[t].target,
                                                        self.price_vol(t, snap), snap.ticks_left, self.hold_budget)
                                  and not (self.stuck_window and unwind_stuck(self.unwind_hist.get(t, []), now,
-                                                                             self.stuck_window, self.stuck_horizon))}
+                                                                             self.stuck_window, self.stuck_horizon))
+                                 and not (trend_z and self.trend_against(t, snap.positions.get(t, 0), snap) >= trend_z)}
         if self.algo.active and self.fresh_unwind and not self.ex.dry_run:
             def refresh():
                 orders = self.client.orders("OPEN")         # orders FIRST, then positions (see step_fresh)
