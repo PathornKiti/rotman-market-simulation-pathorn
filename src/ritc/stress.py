@@ -84,6 +84,8 @@ def run_bot(seed: int, name: str, overrides: dict, config_path: str | None = Non
         r, _ = build("liability", config_path, live=True, overrides=overrides)
         r.client.adapter = InProcessAdapter(m)
         r.interval = 0.0
+        r.client.min_interval = 0.0          # in-process: a user's RIT_MIN_INTERVAL only slows the run
+        r.s.ex.settle = 0.0   # lock-step: orders are booked instantly, and wall-clock settle would span many ticks
         if os.environ.get("RITC_ORACLE_VOL"):
             # Value-of-information test: the bot gets the TRUE current $ vol per tick instead of its GARCH
             # estimate. No vol model can beat this, so oracle - GARCH bounds what a better one could add.

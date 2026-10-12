@@ -36,7 +36,8 @@ from contextlib import contextmanager
 from ..sim.server import InProcessAdapter, Market
 
 TICKERS = ("CRZY", "TAME", "CROC")
-FINE1, FINE2, FINE_STEP = 0.20, 0.40, 5000          # brief: $0.20/share for the first 5,000, then $0.40
+# $0.20/share for the first 5,000, then $0.60 (organisers, 2026-10-11; the brief said $0.40)
+FINE1, FINE2, FINE_STEP = 0.20, 0.60, 5000
 LOOPS_PER_TICK = 4
 PARTS = ("edge", "spread_maker", "spread_taker", "fees", "impact", "inventory", "closeout", "fines")
 
@@ -201,6 +202,8 @@ def replay(seed: int, stress: str = "", hostile: float = 0.0, overrides: dict | 
                 runner.s.ex.dry_run = True
             runner.client.adapter = RecordingAdapter(m)
             runner.interval = 0.0
+            runner.client.min_interval = 0.0   # in-process: a user's RIT_MIN_INTERVAL only slows the run
+            runner.s.ex.settle = 0.0   # lock-step: orders are booked instantly
             runner.on_loop = lambda: m.advance() if runner.loops % loops_per_tick == 0 else None
             runner.run()
     finally:

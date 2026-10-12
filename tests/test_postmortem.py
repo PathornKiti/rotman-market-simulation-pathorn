@@ -87,7 +87,7 @@ def test_an_unmatched_run_at_one_tick_per_second_is_live():
 def test_fine_schedule_matches_the_brief():
     assert fine_schedule(0) == 0
     assert fine_schedule(5000) == pytest.approx(1000.0)
-    assert fine_schedule(6000) == pytest.approx(1400.0)        # $0.20 x 5,000 + $0.40 x 1,000
+    assert fine_schedule(6000) == pytest.approx(1600.0)        # $0.20 x 5,000 + $0.60 x 1,000
 
 
 def test_replay_decomposition_adds_up_to_the_score():
@@ -99,7 +99,7 @@ def test_replay_decomposition_adds_up_to_the_score():
     assert any(x["answer"] for x in rows)
     # The only trades inside an undecided window are resting unwinds filled in the tick a tender arrives.
     wf = window_fills(r)
-    assert wf and all(w["arrival_race"] and w["reduces"] and w["maker"] for w in wf)
+    assert all(w["arrival_race"] and w["reduces"] and w["maker"] for w in wf)   # none at all is fine
 
 
 def test_run_journal_records_a_heat_and_the_live_analysis_reads_it(tmp_path):

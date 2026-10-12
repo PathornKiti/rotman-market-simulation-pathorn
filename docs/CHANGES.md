@@ -8,6 +8,46 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
+## 2026-10-12 (later): auction root cause, aggressive profile
+
+Auctions lose because the bid stacks ~$0.24/share of haircuts (book walk, risk/drift, margin, fee) while the
+reserve sits nearer the mid. Bidding at forward-liquidity value (`liquidity_model = "auctions"`) wins 14% instead of
+1% but loses $4-7k a heat: each won block crowds same-direction fixed tenders (~$27k each) out of the net limit
+(replay: fixed booked 113 → 108). Room-aware version (`auction_max_net`): no loss, no gain (96 seeds −$0.8k). Not
+adopted. `liquidity_model = "flow"` on 64 fresh calibrated heats: +$5.7k (t 2.9), hostile tail worse: offered as
+the aggressive profile for the graded heats (PRACTICE_PLAN.md decision rules). Defaults unchanged.
+
+## 2026-10-12: practice logs, liquidity, new fine
+
+Speculation fine past 5,000 shares $0.40 → **$0.60** (organisers) in the simulator and the report. Five practice
+heats summarised in [PRACTICE_LOGS.md](PRACTICE_LOGS.md): 50k blocks are absorbed at the touch at 2,500-3,600
+shares/s, and the static book walk undervalued tenders by ~$0.19/share (auctions won 2 of 18). New: a
+practice-calibrated simulator (`RITC_STRESS=real=1`), a forward liquidity forecast from time & sales and
+`strategy.liquidity_model = "flow"` (tender exit at our resting touch, unwind time = shares / flow): design +$7.1k
+(t 1.9), holdout +$1.1k (t 0.3), hostile worst heat −$11k → −$56k, so **off by default**. On the calibrated market
+answering late is +$4k (t 0.9): `decide_late_ticks = 0` stays. `crowd_noise_sd` 0.2: no gain. 159 tests.
+
+## 2026-10-11 (evening): first real-server heats
+
+Real RIT books a new order asynchronously: for a moment it is in neither the OPEN list nor the position, and the
+fresh unwind re-sent it (duplicate pairs 20-250 ms apart; TAME +2,100 / +10,800 / +2,000 past zero = speculation
+fines). `Executor` now counts its own orders as working for `execution.order_settle = 1.0` s unless the server
+shows them, and cancels its own orders the quote manager lost track of. Lock-step tune / stress / replay use 0
+(orders are instant there) and ignore `RIT_MIN_INTERVAL`. `Runner` waits for `/trader` before starting.
+`decide_late_ticks` 3 → 0 at the user's request (answer every tender at once); simulator fresh seeds 501-516:
+−$15.8k/heat (t 4.7). Real-heat measurements: ASSUMPTIONS.md section 1b.
+
+## 2026-10-11: manual-trading advisor (`python -m ritc suggest`)
+
+`src/ritc/advisor.py`: connects to the live RIT API READ-ONLY (every non-GET call refused at the client) and runs
+the liability bot in dry-run on your own positions. Each refresh shows every open tender's ACCEPT / DECLINE /
+BID <price> with the $ edge and when to answer, each stock's limit orders (REST at the touch / CROSS), and red
+warnings for your resting orders that would be fined (through zero, wrong side, open tender). Tender pricing is
+the bot's own: `LiabilityStrategy.decide()` was split out of `handle_tenders` (no behaviour change, 152 tests).
+No trading logic changed, so there is no A/B number for it.
+Also: DMA API support (`RIT_AUTH` = Authorization header, sent with every request; same `/v1` paths as the client
+API per the DMA swagger), and `suggest` waits for a connection, saying what is missing, re-reading `.env` every 2 s.
+
 ## 2026-10-10: post-trade gap reports (`python -m ritc report`)
 
 `src/ritc/postmortem/` turns each `logs/liability-*.log` into `reports/liability-<date>-<time>_<local|live>.html`
@@ -54,6 +94,23 @@ M3 (all failed on fresh seeds 201–232); net-limit shadow price; live per-ticke
 unwinding; `crowd_score_at = expiry`; fixed crowd charge; other `risk_aversion` / `refill_factor` /
 `competitive_margin` / `min_profit` values. Evaluated, not built: vol forecasting / HMM regimes (an oracle with the
 true volatility adds $0), market making / Avellaneda-Stoikov / RL (fined under this brief).
+
+**Local test day (2026-10-11):** a real-speed `_local` heat (seed 7, 1 tick/s) scored $44.2k vs $49.2k for the
+lock-step replay of the same market: $3,336 of **speculation fines** from unwinds overshooting zero, invisible in
+lock-step. Two causes, both fixed:
+- Simulator: every `slow loop: ~1008 ms` was its HTTP listen queue (5) dropping the bot's ~8 parallel connects;
+  macOS retries after exactly 1 s. Queue now 128 (8-16 parallel requests: 2-7 ms; were ~1,005 ms).
+- Bot: `fresh_unwind = true` (stale positions + resting fills between reads). Real time, slow loops: fines
+  $1,414 -> $48/heat on fresh seeds 201-210, score +$2.5k (t 3.1); neutral in lock-step and with fast loops.
+Stress report (23 scenarios x 16 seeds): 5 losing heats of 368, all in the known crowd/hostile corners. 149 tests.
+
+**Arbitrage review of the brief (2026-10-11 evening):** the only legal arbitrage is tender price vs market;
+cross-stock / pairs / two-sided market making / moving the closing price all open new positions and are fined
+$0.20–0.40/share, and the stocks are independent random walks. The openings the brief does leave are already in
+the bot (book-walk tender pricing, the decision-window option `decide_late_ticks`, the free close-out at last
+price). Tested and removed: tender-vs-tender crossing, i.e. pricing the offsetting part of a tender at the held
+position's exit price (`exit` −$0.3k t −0.3, `mid` −$0.1k t −1.1; hostile −$0.05k). Left open: learning the
+competitive-auction reserve from practice data (PRACTICE_PLAN.md, auction reserve check).
 
 **Final retest** (32 brand-new seeds 401–432, 23 scenarios): base $65.1k (worst +$25.2k, 0 losing); the bot loses
 17 of 736 heats (2.3%), 9 of them in the one known weak spot (a crowd unwinding at tender expiry); the official

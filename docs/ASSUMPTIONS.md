@@ -50,6 +50,33 @@ guessed in the simulator and measured in the practice heats ([PRACTICE_PLAN.md](
   scenarios that vary the unknowns (section 3), it had a positive mean in every scenario on 32 fresh
   seeds (401-432), and lost 17 of 736 heats, 9 of them in one known weak spot (B13).
 
+## 1b. First real-server heats (practice 2026-10-11, `log1.txt` / `log2.txt`)
+
+Bot text logs only; P&L, fines and the close-out are in RIT's Trader Info / Transaction Log, not here.
+
+| ID | Real heat | Verdict |
+|---|---|---|
+| A1 | heat ran 17:14:08 → 17:21:10 (~420 s) | confirmed |
+| A4 | orders and tender answers went through the API | confirmed |
+| A6 | every tender's price identical at `seen` and at the answer | confirmed |
+| A7 | windows 30-31 ticks (31 is past `decide_late_max_window = 30`, so those were answered at once) | confirmed; max_window → 31+ if answering late |
+| A9 / B12 | accept → position ~0.8-1.1 s (4 tenders) | confirmed, `booking_ticks = 3` fine |
+| A12 | auctions won 1 of 7 at `competitive_margin = 0.05`; a bid counts as held until booked, which declined fixed tender #103 for room (53k > 44k) on an auction we then lost | open: when RIT reports the award |
+| A14 | auctions arrive with price `None` (ids 700+), fixed tenders ids 3, 103, …, 603 | confirmed, handled |
+| A18 | no HTTP 429 | confirmed |
+| B1 | VOL lines: CRZY $0.023-0.062/tick, TAME $0.018-0.052, CROC $0.016-0.041 | CRZY ~2× the sim, CROC lower |
+| B7 | 11 tenders per heat, ~one every 30-35 s, rarely overlapping | ~3× fewer than the sim's 34 |
+| B8 | 17k-59k, mostly 51-59k | larger than the sim (10-50k): one block uses half the 100k net limit |
+| B9 | accepted fixed tenders +$0.02 to +$0.78/share (heat 2: ~$67k expected edge at the answer) | wider than the sim's −0.10..+0.25 |
+| B10 | 7 fixed / 4 auctions (heat 2), 6 / 3 (heat 1) | ~35% competitive (sim 25%) |
+| B13 | CROWD n=10, mean ≈ 0 (sd 0.006): no crowd | gate stayed shut, as designed |
+| A11 | speculation fine raised to **$0.60/share past 5,000** (organisers); duplicate unwind orders put TAME / CRZY / CROC 2k-20k past zero in 4 of 5 heats (~$0.6-11k a heat at the new rate) | fixed (next row) |
+| — | liquidity: 50k blocks absorbed at ~2,500-3,600 shares/s at the touch; the two slow unwinds (700-900/s) were the two big losses | [PRACTICE_LOGS.md](PRACTICE_LOGS.md) section 4 |
+| — | **real RIT books orders asynchronously**: duplicate unwind orders 20-250 ms apart took TAME past zero (+2,100 / +10,800 heat 1, +2,000 heat 2) | **fixed**: `execution.order_settle = 1.0` |
+
+Still unanswered by the logs: **A15** (any fine at the close), A8 / A10 / A11 (fines), A17 (passive commission).
+Read them from RIT's Transaction Log, or run `ritc report` on the run journals (`logs/liability-*.jsonl`).
+
 ## 2. Case rules and mechanics (A)
 
 | ID | Assumption | Status (source) | Relies on it | Impact if wrong | Check / fallback |
@@ -151,18 +178,18 @@ Design choices, not facts about the case. Evidence is from the simulator (paired
 
 ## 6. Questions for the organisers
 
-Each answer changes a setting. The bot already takes the safe reading of each.
+Each answer changes a setting. The bot already takes the safe reading of each. Status after the five practice
+heats of 2026-10-11 ([PRACTICE_LOGS.md](PRACTICE_LOGS.md)):
 
-1. **Close-out (A15):** is there any fine or charge on positions still open at the end, other than
-   closing at the last traded price?
-2. **Front-running (A10, A8):** during a tender's decision window, are trades in *other* securities
-   flagged? Are trades that *reduce* an accepted-tender position in the *same* security flagged? Does
-   accepting or declining end the window?
-3. **Auctions (A12):** is a competitive auction fill decided when the bid is submitted or when the
-   window closes? Can a bid be changed?
-4. **Commission (A17):** is the $0.02 charged on passive limit-order fills? Is there a rebate?
-5. **Scoring:** how are heats ranked (P&L per heat, total, or something else)? This decides whether
-   to maximise the mean or protect the worst heat (several settings trade one for the other).
+| # | Question | Status | How to close it before the graded heats |
+|---|---|---|---|
+| 0 | Speculation fine | **ANSWERED** (organisers, 2026-10-11): $0.20/share up to 5,000, **$0.60** past 5,000 (was $0.40). In the simulator and the report | — |
+| 1 | **Close-out (A15):** any fine or charge on positions still open at the end, besides closing at the last traded price? | **OPEN.** The bot logs end at the bell; the heats looked "stable" but nobody read the Transaction Log | Transaction Log after one heat that ends holding shares, or ask. If fined: the A15 fallback flags in section 1 |
+| 2 | **Front-running (A10, A8):** trades in *other* stocks during a window? Reducing trades in the *same* stock? Does answering end the window? | **OPEN** | Transaction Log fines = 0 over a heat answers it for our behaviour |
+| 3 | **Auctions (A12):** decided at submission or at the window's end? Can a bid be changed? | **PARTLY:** a losing bid is "declined" at once; we won 2 of 18; when a win books is not in the text logs | the run journal (`tender_answer` response, per-tick positions) |
+| 4 | **Commission (A17):** is the $0.02 charged on passive fills? Rebate? | **OPEN** | Transaction Log commission column on a resting fill; `/securities` `trading_fee`, `limit_order_rebate` |
+| 5 | **Scoring:** how are heats ranked (per heat, total, risk-adjusted)? | **OPEN, and the most important for next week**: decides mean vs tail (section 7.1) | ask the organisers |
+| 6 | Are private tenders the same for every team? | Brief: they differ in timing, price and size. Explains part of the gap to the leader | — |
 
 ## 7. Open points for discussion
 

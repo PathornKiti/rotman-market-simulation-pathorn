@@ -131,12 +131,16 @@ def evaluate_tender(
     risk_aversion: float = 0.0,
     crowd_cost: float = 0.0,
     close_hold_ticks: int = 0,
+    flow_rate: float = 0.0,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
     BUY means we buy the block from the client (and must later SELL it).
     `drift_per_tick` is the recent mid drift (+ = rising); it is a cost when it
     runs against our unwind direction over the expected unwind time.
+    `flow_rate` > 0 (FORWARD LIQUIDITY, shares/tick the market trades on our unwind side): we unwind by resting
+    at the touch, so the exit is the touch we rest at, and the time it takes is to_unwind / flow_rate (the risk
+    premium and drift grow with it). 0 = the old static model: walk the visible book x `refill_factor`.
     """
     action = str(tender.get("action", "BUY")).upper()
     qty = int(tender.get("quantity", 0))
@@ -169,7 +173,9 @@ def evaluate_tender(
         worst = fill.worst - sign * 0.05 if fill.filled else (book.mid or 0.0)
         return fill.vwap * fill.filled + worst * (n - fill.filled)
 
-    if to_unwind > 0:
+    if to_unwind > 0 and flow_rate > 0:
+        vwap_unwind = (book.best_ask if action == "BUY" else book.best_bid) or 0.0   # where our resting unwind sits
+    elif to_unwind > 0:
         vwap_unwind = unwind_cost(to_unwind) / to_unwind
     else:
         vwap_unwind = (book.best_bid if action == "BUY" else book.best_ask) or (book.mid or 0.0)
@@ -184,7 +190,7 @@ def evaluate_tender(
         return TenderDecision(False, None, 0.0, 0.0, "no market to unwind into")
 
     # Adverse drift over the time it takes to unwind (only counts against us).
-    unwind_ticks = to_unwind * unwind_ticks_per_lot
+    unwind_ticks = to_unwind / flow_rate if flow_rate > 0 else to_unwind * unwind_ticks_per_lot
     drift_cost = max(0.0, -sign * drift_per_tick) * unwind_ticks
     drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     drift_cost += crowd_cost             # learned: how far the price runs against tenders' unwinds
@@ -276,6 +282,7 @@ class LiabilityStrategy(Strategy):
         self.ac_lambda = float(ex_cfg.get("ac_risk_aversion", 3e-7))
         self.close_hold = int(ex_cfg.get("close_hold_ticks", 0))   # passive only this close to the bell
         self.hold_budget = float(ex_cfg.get("hold_risk_budget", 0.0))   # $ 1-sd risk to the bell held passively
+        self.fresh_unwind = bool(ex_cfg.get("fresh_unwind", False))   # re-read positions before sizing orders
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
         # CROWDED TENDERS: other desks get the same block and unwind it into the same book.
@@ -293,6 +300,14 @@ class LiabilityStrategy(Strategy):
         self.bidding: dict[int, tuple[str, int]] = {}    # our open auction bids: id -> (ticker, abs expiry tick)
         self.frozen: set[str] = set()                   # tickers with an undecided tender (respect_windows)
         self.journaled: set[int] = set()                # tenders already written to the run journal
+        # FORWARD LIQUIDITY (docs/PRACTICE_LOGS.md): shares/tick the market trades on each side of each stock, from
+        # time & sales, as an EWMA started at the practice-measured absorption of our resting unwinds. "SELL" =
+        # buyer-initiated volume (it fills a resting sell). Used to price tenders (`liquidity_model = "flow"`).
+        self.liq_model = s.get("liquidity_model", "book")
+        self.liq_prior: dict[str, float] = dict(s.get("liq_prior", {}))
+        self.liq: dict[tuple[str, str], float] = {}
+        self.tas_after: dict[str, int] = {}
+        self.liq_tick: dict[str, int] = {}
 
     @property
     def book_tickers(self) -> list[str]:
@@ -339,8 +354,40 @@ class LiabilityStrategy(Strategy):
             if t in self.last_mid:
                 self.drift[t].update(m - self.last_mid[t])
             self.last_mid[t] = m
+        if self.liq_model in ("flow", "auctions"):
+            self._update_liquidity(snap)
         if snap.tick % 60 == 0:      # practice check: compare with `calibrate`'s measured sigma/tick per stock
             log.info("VOL " + "  ".join(f"{t} ${self.price_vol(t, snap):.4f}/tick" for t in self.tickers))
+            if self.liq_model in ("flow", "auctions"):
+                log.info("LIQ " + "  ".join(f"{t} sell {self.flow(t, 'SELL'):,.0f} buy {self.flow(t, 'BUY'):,.0f}/tick"
+                                            for t in self.tickers))
+
+    def flow(self, ticker: str, side: str) -> float:
+        """Forecast shares/tick that will trade against a resting `side` order in `ticker` (side = our unwind)."""
+        prior = float(self.liq_prior.get(ticker, self.p.get("liq_default", 2000)))
+        return min(self.liq.get((ticker, side), prior), float(self.p.get("liq_cap", 6000)))
+
+    def _update_liquidity(self, snap: Snapshot) -> None:
+        """One time & sales read per stock per tick: buyer- vs seller-initiated volume (price vs the mid)."""
+        res = self.client.parallel([lambda t=t: self.client.tas(t, after=self.tas_after.get(t)) for t in self.tickers])
+        alpha = 1 - 0.5 ** (1 / max(1.0, float(self.p.get("liq_halflife", 20))))
+        for t, rows in zip(self.tickers, res):
+            mid = snap.mid(t)
+            if not isinstance(rows, list) or mid is None:
+                continue
+            new = [r for r in rows if int(r.get("id", 0)) > self.tas_after.get(t, -1)]
+            first = t not in self.tas_after
+            if rows:
+                self.tas_after[t] = max([self.tas_after.get(t, -1)] + [int(r.get("id", 0)) for r in rows])
+            last, self.liq_tick[t] = self.liq_tick.get(t), snap.abs_tick
+            if first or last is None:
+                continue                                    # history before we started: not a rate
+            dt = max(1, snap.abs_tick - last)
+            buys = sum(float(r.get("quantity", 0)) for r in new if float(r.get("price", 0)) >= mid)
+            sells = sum(float(r.get("quantity", 0)) for r in new if float(r.get("price", 0)) < mid)
+            for side, vol in (("SELL", buys), ("BUY", sells)):
+                cur = self.flow(t, side)
+                self.liq[(t, side)] = cur + (1 - (1 - alpha) ** dt) * (vol / dt - cur)
 
     def _learn_crowd(self, snap: Snapshot) -> None:
         lag, keep = int(self.p.get("crowd_ticks", 10)), []
@@ -447,6 +494,45 @@ class LiabilityStrategy(Strategy):
                 return False
         return True
 
+    def decide(self, t: dict, snap: Snapshot, positions: dict[str, int]) -> TenderDecision:
+        """The bot's answer to tender `t` against the book of now (also used by `ritc suggest`)."""
+        ticker = t.get("ticker")
+        return evaluate_tender(
+            t, snap.book(ticker),
+            fee=float(self.fees.get(ticker, 0.0)),
+            position=positions.get(ticker, 0),
+            room=self.risk.room(ticker, t.get("action", "BUY"), positions),
+            ticks_left=snap.ticks_left,
+            refill_factor=self.p.get("refill_factor", 2.0),
+            # In a drawdown, only the best tenders: required margin scales with 1/throttle.
+            min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
+            competitive_margin=self.p.get("competitive_margin", 0.05),
+            drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
+            unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),
+            min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
+            price_vol_per_tick=self.price_vol(ticker, snap),
+            risk_aversion=self.p.get("risk_aversion", 0.0),
+            crowd_cost=self.crowd_cost(int(t.get("quantity", 0))),
+            close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
+            flow_rate=(self.flow(ticker, "SELL" if str(t.get("action", "BUY")).upper() == "BUY" else "BUY")
+                       if self.liq_model == "flow" or (self.liq_model == "auctions" and self.bid_up(t, positions))
+                       else 0.0),
+        )
+
+    def bid_up(self, t: dict, positions: dict[str, int]) -> bool:
+        """
+        `liquidity_model = "auctions"`: bid an auction at its forward-liquidity value (wins far more often) only when
+        winning leaves the net limit free for the next fixed tender. Practice-calibrated simulator: an auction won
+        near the reserve earns ~$6k, but its 55k shares fill half the 100k net limit while held, and the fixed
+        tenders it crowds out are worth ~$27k each (PRACTICE_LOGS.md section 3). So only when |net after the win|
+        <= `auction_max_net`: typically an auction that offsets what we already hold.
+        """
+        if t.get("is_fixed_bid", True):
+            return False
+        sign = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
+        net_after = sum(positions.values()) + sign * int(t.get("quantity", 0))
+        return abs(net_after) <= int(self.p.get("auction_max_net", 10**9))
+
     def handle_tenders(self, snap: Snapshot) -> None:
         now = snap.abs_tick
         positions = {t: q + self.pending_delta(t, now) for t, q in snap.positions.items()}
@@ -473,24 +559,7 @@ class LiabilityStrategy(Strategy):
                                        snap.mid(ticker), tid))
             if self.wait_to_decide(t, tid, snap):
                 continue          # keep the option open: answer `decide_late_ticks` before the window closes
-            d = evaluate_tender(
-                t, book,
-                fee=float(self.fees.get(ticker, 0.0)),
-                position=positions.get(ticker, 0),
-                room=self.risk.room(ticker, t.get("action", "BUY"), positions),
-                ticks_left=snap.ticks_left,
-                refill_factor=self.p.get("refill_factor", 2.0),
-                # In a drawdown, only the best tenders: required margin scales with 1/throttle.
-                min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
-                competitive_margin=self.p.get("competitive_margin", 0.05),
-                drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
-                unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),
-                min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
-                price_vol_per_tick=self.price_vol(ticker, snap),
-                risk_aversion=self.p.get("risk_aversion", 0.0),
-                crowd_cost=self.crowd_cost(int(t.get("quantity", 0))),
-                close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
-            )
+            d = self.decide(t, snap, positions)
             self.seen.add(tid)
             log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
                      t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline", d.reason)
@@ -565,7 +634,13 @@ class LiabilityStrategy(Strategy):
             self.algo.passive = {t for t in self.algo.blocks
                                  if hold_within_budget(snap.positions.get(t, 0) - self.algo.blocks[t].target,
                                                        self.price_vol(t, snap), snap.ticks_left, self.hold_budget)}
-        if self.algo.active:
+        if self.algo.active and self.fresh_unwind and not self.ex.dry_run:
+            def refresh():
+                orders = self.client.orders("OPEN")         # orders FIRST, then positions (see step_fresh)
+                return orders, self.client.positions()
+            self.algo.step_fresh({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, refresh,
+                                 lambda t, pos: self.unwind_target(t, pos, now))
+        elif self.algo.active:
             open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
             self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)
 

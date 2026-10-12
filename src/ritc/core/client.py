@@ -34,12 +34,15 @@ class RITClient:
         self,
         base_url: str | None = None,
         api_key: str | None = None,
+        auth: str | None = None,
         timeout: float = 3.0,
         max_retries: int = 3,
         min_interval: float | None = None,
     ):
         self.base_url = (base_url or config.base_url()).rstrip("/")
         self.api_key = api_key if api_key is not None else config.api_key()
+        # DMA API (straight to the RIT server, no client): an Authorization header, e.g. "Basic <base64 id:pw>".
+        self.auth = auth if auth is not None else config.auth()
         self.timeout = timeout
         self.max_retries = max_retries
         # Client-side throttle. Raise RIT_MIN_INTERVAL if the server answers 429.
@@ -61,6 +64,8 @@ class RITClient:
             s = requests.Session()
             if self.api_key:
                 s.headers["X-API-Key"] = self.api_key
+            if self.auth:
+                s.headers["Authorization"] = self.auth
             self._local.session = s
         if self.adapter is not None and getattr(s, "_ritc_adapter", None) is not self.adapter:
             s.mount(self.base_url, self.adapter)

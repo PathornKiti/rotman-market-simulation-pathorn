@@ -245,19 +245,32 @@ class Runner:
 
     def run(self, once: bool = False) -> None:
         log.info("strategy=%s dry_run=%s", self.s.name, self.s.ex.dry_run)
+        # Wait for the server before anything else: starting without our trader id would read our own resting
+        # orders as market depth once the server does answer (seen on the DMA server before its port opened).
+        waited = 0
         try:
-            trader = self.client.trader()
-            self.trader_id = str(trader.get("trader_id", ""))
-            try:
-                case = self.client.case()
-            except RITError:
-                case = {}
-            self.journal.write("start", strategy=self.s.name, dry_run=self.s.ex.dry_run, trader=self.trader_id,
-                               case=case.get("name"), ticks_per_period=case.get("ticks_per_period"),
-                               periods=case.get("total_periods"),
-                               cfg={k: self.s.cfg.get(k) for k in ("case", "strategy", "execution", "risk")})
-        except RITError as exc:
-            log.warning("could not read trader id (%s); own orders will not be filtered", exc)
+            while True:
+                try:
+                    trader = self.client.trader()
+                    break
+                except RITError as exc:
+                    if waited % 5 == 0:
+                        log.warning("waiting for the RIT API at %s (%s) - Ctrl-C to stop", self.client.base_url,
+                                    str(exc)[:120])
+                    waited += 1
+                    time.sleep(2)
+        except KeyboardInterrupt:
+            log.info("Ctrl-C before the server answered - nothing was sent")
+            return
+        self.trader_id = str(trader.get("trader_id", ""))
+        try:
+            case = self.client.case()
+        except RITError:
+            case = {}
+        self.journal.write("start", strategy=self.s.name, dry_run=self.s.ex.dry_run, trader=self.trader_id,
+                           case=case.get("name"), ticks_per_period=case.get("ticks_per_period"),
+                           periods=case.get("total_periods"),
+                           cfg={k: self.s.cfg.get(k) for k in ("case", "strategy", "execution", "risk")})
 
         feed = None
         if self.use_feed and (self.s.wants_news or self.s.wants_tenders):

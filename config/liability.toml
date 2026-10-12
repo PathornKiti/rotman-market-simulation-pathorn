@@ -28,7 +28,9 @@ risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind t
 max_slippage = 0.04           # unwind slices keep VWAP within this of the touch
 participation = 0.35          # fraction of visible depth taken per loop
 urgent_ticks = 40             # start unwinding harder this many ticks before the end
-decide_late_ticks = 3         # ANSWER LATE: a tender's price is fixed when it arrives but the market moves for its whole
+decide_late_ticks = 0         # USER CHOICE 2026-10-11 (practice): answer every tender AT ONCE, never wait for the timeout.
+                              # The simulator preferred 3 (below); restore with --set strategy.decide_late_ticks=3.
+                              # ANSWER LATE: a tender's price is fixed when it arrives but the market moves for its whole
                               # 15-30 s window, so answer 3 ticks before `expires` with the book of THEN (an option on
                               # the tender; a crowd unwinding the same block shows in the price before we commit).
                               # Fresh seeds 301-316: normal +$25.3k (t 4.5, 15/16); anchored hostile +$10.4k (t 4.2);
@@ -57,6 +59,19 @@ hold_valuation = true         # inside close_hold_ticks, value a tender's exit a
 decline_explicitly = true     # official rule: trading a ticker while one of its tenders is still PENDING is
                               # "front-running" (2026: fined $1/share, $2 past 5,000 shares, in real time).
                               # Declining at once closes the window, so unwinds of earlier tenders stay clean.
+# FORWARD LIQUIDITY (docs/PRACTICE_LOGS.md). "flow": price a tender from the liquidity the market will give us
+# while we unwind: exit = the touch our resting orders sit at, unwind time = shares / forecast flow (shares/tick
+# traded on our side, EWMA of time & sales), risk premium and drift scale with that time. "book" = walk the
+# visible book x refill_factor (the old static model, ~$0.19/share too pessimistic in the practice heats).
+# "auctions": the flow model for competitive / winner-take-all bids only, the book walk for fixed tenders.
+#   ...and only when |net after the win| <= auction_max_net (shares; unset = always). Tested 2026-10-12: always
+#   = wins 1% -> 14% but -$4.1k..-7.3k/heat (the 55k block crowds fixed tenders out of the net limit); 45000 =
+#   no loss but no gain (96 fresh seeds -$0.8k, t -1.4). Not adopted.
+liquidity_model = "book"
+liq_prior = { CRZY = 2600, TAME = 3200, CROC = 1500 }   # shares/tick our resting unwinds got in practice (14 blocks)
+liq_default = 2000            # other tickers
+liq_halflife = 20             # ticks
+liq_cap = 6000                # never forecast more than this (a burst of other desks' trades is not our flow)
 # CROWDED TENDERS (docs/ARCHITECTURE.md): every desk gets the same block and unwinds it into the same book.
 # Learn from every tender we did NOT take how far the mid runs against its unwind over `crowd_ticks`, per 10k
 # shares; once that is significant (> 2 sd) charge it (crowd_weight x $/10k x size/10k per share) and race it.
@@ -95,6 +110,14 @@ hold_risk_budget = 40000      # ...and before that, only REST (never cross) whil
                               # CAVEAT "everything at once" stress (hostile + vol 1.5 + thin + strict): mean same, worst
                               # -$84k -> -$105k (sd ~$95k, not significant). If the practice case looks manipulated or
                               # far more volatile, lower this (20000) or set 0 for the old cross-to-schedule unwind.
+fresh_unwind = true           # SLOW-LOOP SAFETY: resting orders fill while a loop runs, so orders sized from the loop's
+                              # start positions took positions through zero (speculation fine). Cancel stale quotes, re-read
+                              # open orders THEN positions, cap IOC + resting at what is left (never past zero). Real time,
+                              # 1 s loops: seeds 1-10 +$7.6k (t 2.7); 201-210 fines $1,414 -> $48/heat (t -3.7), score +$2.5k
+                              # (t 3.1), worst $8.7k -> $12.4k; 101-110 +$1.9k (t 1.1). Lock-step / fast loops: +-$0.1k.
+order_settle = 1.0            # s an order we sent counts as working although the server shows it in neither the OPEN
+                              # list nor the position (real RIT books orders asynchronously; 2026-10-11 practice sent
+                              # duplicate unwind orders 40-250 ms apart -> TAME +10,800 past zero). Lock-step tests use 0.
 unwind_horizon_ticks = 30     # target: flat within this many ticks of accepting a tender
 crowd_horizon_ticks = 12      # ...but race the crowd once it is detected (learned impact > 2 sd). A FIXED 12 cost
                               #   -$7.6k (t -6.1) in the benign sim; switching only on evidence costs nothing there.
@@ -119,3 +142,5 @@ drawdown_floor = 0.25         # ...to this fraction at the kill (exits/hedges al
 feed_poll = 0.1               # real-time news/tender poll interval, seconds
 interval = 0.25
 wind_down_ticks = 5
+
+# The more looking the right liquidity the better

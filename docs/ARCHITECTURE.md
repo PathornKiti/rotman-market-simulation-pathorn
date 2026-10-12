@@ -103,8 +103,10 @@ market to count.
 ## Fair testing (`ritc tune`, `ritc stress`)
 
 - **Lock-step**: the market advances one tick every 4 bot loops, so a run depends only on seed and settings
-  (wall-clock runs varied by $10k on the same seed). The tuner talks to the market in-process (antivirus can
-  slow loopback HTTP 60x).
+  (wall-clock runs varied by $10k on the same seed). The tuner talks to the market in-process. (The "slow loopback HTTP" seen before
+  2026-10-11 was the simulator's listen queue of 5: the bot's ~8 parallel requests overflowed it and macOS
+  retried each dropped connect after exactly 1 s. Now 128; `RITC_SIM_BACKLOG=5` brings the slow world back
+  for testing. Lock-step `ritc stress` cannot show slow-loop effects: test those with `tune --speed 1`.)
 - **Common random numbers**: passive flow is drawn per (seed, tick, ticker, side), so settings share fill luck
   (paired SE 3.5-6x smaller).
 - **The rule**: adopt only with paired t >= 2 on seeds 1-16 (or 1-32), `p adj` < 0.05 on a grid (Bonferroni),

@@ -335,3 +335,20 @@ def test_auction_ignores_a_zero_or_absurd_reference_price():
     near = evaluate_tender({**base, "price": 9.80}, book, fee=0.02, min_profit=0.0)
     assert none.price == zero.price == silly.price > 9.5          # ignored
     assert near.price == 9.80                                      # a sane reference still caps the bid
+
+
+def test_forward_liquidity_values_the_exit_at_our_resting_touch():
+    """liquidity_model "flow": exit = the touch we rest at, unwind time = shares / forecast flow (practice heats:
+    50k blocks went at ~2,500 shares/s near the touch, while walking the thin visible book priced them far worse)."""
+    from ritc.strategies.liability import evaluate_tender
+    thin = make_book([(9.99, 1000), (9.98, 1000), (9.90, 1000)], [(10.01, 1000), (10.02, 1000), (10.10, 1000)])
+    t = {"action": "BUY", "quantity": 50_000, "price": 9.80, "is_fixed_bid": True}
+    walk = evaluate_tender(t, thin, fee=0.02, min_profit=0.01)
+    flow = evaluate_tender(t, thin, fee=0.02, min_profit=0.01, flow_rate=2500)
+    assert flow.unwind_vwap == 10.01 and flow.accept and flow.profit_per_share > walk.profit_per_share
+    # Less liquidity -> longer unwind -> bigger risk premium for the same tender.
+    slow = evaluate_tender(t, thin, fee=0.02, min_profit=0.01, flow_rate=500, price_vol_per_tick=0.04,
+                           risk_aversion=0.3)
+    fast = evaluate_tender(t, thin, fee=0.02, min_profit=0.01, flow_rate=5000, price_vol_per_tick=0.04,
+                           risk_aversion=0.3)
+    assert slow.profit_per_share < fast.profit_per_share

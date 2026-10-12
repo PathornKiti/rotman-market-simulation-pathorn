@@ -10,6 +10,41 @@ by-product.
 
 Run every command on the **Windows PC running the RIT client**, from the repo folder.
 
+## Judgement week (graded heats next week): what to do, in order
+
+Results so far: [PRACTICE_LOGS.md](PRACTICE_LOGS.md). Open questions: [ASSUMPTIONS.md](ASSUMPTIONS.md) section 6.
+
+**Day 1: get the fixed bot onto Windows**
+- [ ] Mac: commit and `git push -u origin liability-fresh-unwind`. Windows: `git pull`, `pip install -e .`,
+      `python -m pytest -q` all green. The five practice heats ran WITHOUT the duplicate-order fix
+      (~$4-11k of speculation fines a heat at the new $0.60 rate).
+- [ ] Windows `.env`: `RIT_API_KEY`, `RIT_HOST=localhost`, `RIT_PORT=9999`, `RIT_DRY_RUN=true`,
+      `RIT_MIN_INTERVAL=0.0`; no `RIT_URL` / `RIT_AUTH`.
+
+**Every remaining practice heat: collect what the text logs lack**
+- [ ] Keep `logs\liability-*.jsonl` + `.log` of every heat and copy them to the Mac; `ritc report` on them.
+- [ ] Screenshot Trader Info (final NLV) and the Transaction Log (fines, commissions, the close-out).
+- [ ] Answer questions 1, 2 and 4 of ASSUMPTIONS section 6 from the Transaction Log (close-out fine?
+      front-running fines? commission on resting fills?). Ask the organisers question 5 (scoring).
+
+**Heat plan**
+| Heat | Command | Looking for |
+|---|---|---|
+| A | `ritc run liability --live -v` (defaults) | zero "past zero" positions (fix works on the real server), fines = 0 |
+| B | same + `--set strategy.liquidity_model=flow` (experimental: holdout not confirmed) | `LIQ` line rates vs 2,600 / 3,200 / 1,500; P&L vs heat A |
+| C | defaults again | journals for the real auction reserve (mid at every bid, won/lost): bidding closer to win more LOST money in the simulator (PRACTICE_LOGS.md section 3) |
+| D | `ritc suggest` in a second terminal during a bot heat (read-only) | rehearse manual takeover |
+
+**Decision rules for the graded heats**
+- Close-out fine found (question 1) → the A15 fallback flags in ASSUMPTIONS section 1.
+- `CROWD ... DETECTED` in practice, or a heat where auctions we won ran against us → keep `liquidity_model = book`.
+- **Aggressive profile** = `--set strategy.liquidity_model=flow` (calibrated sim, 64 fresh heats: +$5.7k a heat,
+  t 2.9; in a crowded market +$1.2k but worst heat −$52.8k → −$61.1k). Use it when: practice heat B shows no
+  crowd (`CROWD` lines ≈ 0, auctions we won did not run against us) AND scoring rewards P&L rank or the total
+  (against expert bots the mean matters more than the worst heat). Keep the defaults only if scoring punishes
+  losing heats (risk-adjusted / drawdown).
+- Bot misbehaves → Ctrl-C (cancels resting orders), switch to `ritc suggest` and trade by hand.
+
 ## Before the server opens (Saturday)
 
 - [ ] `pip install -e .` then `python -m pytest -q`: all green.
@@ -58,6 +93,16 @@ with no fine. Worth +$11k-15k a heat in the simulator. Confirm on the real serve
       `--set execution.hold_risk_budget=0 --set execution.close_hold_ticks=0 --set strategy.hold_valuation=false`.
 - [ ] Is the real spread at least 3 cents? If it is tighter, the bot rests behind other orders and gets fewer fills.
 - [ ] A bid on an auction: does it return `success=false` at once, or only at expiry? Does the caption say "winner-take-all"?
+- [ ] **Slow loops**: count `slow loop` warnings in the bot log. A few are fine. Many at ~1,000 ms, or a p95 over
+      1 s in the end-of-run `loop p50 ... p95` line, means the RIT API is slow on this machine: tenders may be
+      answered late (`fresh_unwind` already stops the overshoot fines). Report it: the bot-side fix is fewer
+      parallel requests per loop.
+- [ ] **Auction reserve (the one arbitrage left, docs/RESEARCH.md 2026-10-11)**: a competitive auction fills at OUR
+      bid whenever it beats the hidden reserve, so the edge is learning where the reserve sits vs the mid. Run the
+      live heats as usual; the journal (`logs/*.jsonl`) already holds our bid, the mid at answer time, `expires` and
+      positions every tick. After the session, per auction tender: (bid − mid) signed for our side, filled or not
+      (position jump at expiry; cross-check the RIT Transaction Log). If fills cluster well inside our bids,
+      `competitive_margin` (0.05) can widen; if most bids miss, it should narrow. Needs ~10+ auctions across heats.
 - [ ] `/securities`: `trading_fee` and `limit_order_rebate` (is a resting fill charged?).
 
 ### Late-answer check (heat 1, dry run): the biggest setting depends on it

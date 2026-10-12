@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -49,6 +50,12 @@ class Executor:
     _tracked: dict[int, dict] = field(default_factory=dict)  # order_id -> fill-tracking state
     _lock: threading.Lock = field(default_factory=threading.Lock)
     journal: Journal = field(default=NULL_JOURNAL)        # run journal (post-trade report); no-op by default
+    # REAL RIT processes a new order asynchronously: for a moment it is in neither /orders?status=OPEN nor the
+    # position. Treat our orders as working for `settle` s after sending unless the server shows them, or an
+    # unwind re-sends the same order (2026-10-11 practice: duplicate BUY/SELL pairs 40-250 ms apart took
+    # TAME +2,100 and +10,800 past zero = speculation fines). Too long only slows the unwind by that much.
+    settle: float = 1.0
+    _sent: dict[int, tuple[str, str, int, float]] = field(default_factory=dict)   # id -> (ticker, ACTION, qty, t)
 
     def max_size(self, ticker: str) -> int:
         return int(self.max_order_size.get(ticker, self.default_max_order))
@@ -94,6 +101,8 @@ class Executor:
             if not isinstance(resp, dict) or resp.get("order_id") is None:
                 continue
             oid = int(resp["order_id"])
+            with self._lock:
+                self._sent[oid] = (ticker, action.upper(), chunk, time.monotonic())
             filled = int(resp.get("quantity_filled", 0) or 0)
             vwap = resp.get("vwap")
             self.journal.write("order", id=oid, ticker=ticker, action=action.upper(), qty=chunk, px=px, style=style,
@@ -107,6 +116,20 @@ class Executor:
                                           "style": style, "filled": filled,
                                           "cost": filled * float(vwap) if filled and vwap else 0.0}
         return out
+
+    def in_flight(self, ticker: str, open_ids: set) -> dict[int, tuple[str, int]]:
+        """Our orders on `ticker` sent under `settle` s ago that `open_ids` (the OPEN list) does not show:
+        id -> (ACTION, qty). Count them as working; their fills may not be in the position yet either."""
+        now = time.monotonic()
+        with self._lock:
+            return {k: (a, q) for k, (t, a, q, ts) in self._sent.items()
+                    if t == ticker and k not in open_ids and now - ts < self.settle}
+
+    def ours_settled(self, order_id) -> bool:
+        """An order we sent more than `settle` s ago (not a manual one)."""
+        with self._lock:
+            v = self._sent.get(int(order_id)) if order_id is not None else None
+        return v is not None and time.monotonic() - v[3] >= self.settle
 
     def filled(self, responses: list[dict], requested: int) -> int:
         """
@@ -230,6 +253,21 @@ class QuoteManager:
         resp = self.ex.limit(ticker, side, quantity, price, ioc=False)
         oid = resp[0].get("order_id") if resp and isinstance(resp[0], dict) else None
         self.live[key] = Quote(oid, price, quantity)
+
+    def keeps(self, ticker: str, side: str, price: float | None, quantity: int) -> bool:
+        """Would `sync` leave the current quote alone? Cancels it now if not (fresh_unwind phase 1)."""
+        key = (ticker, side.upper())
+        cur = self.live.get(key)
+        if cur is None:
+            return False
+        if (price is not None and quantity > 0 and abs(cur.price - price) < self.tolerance
+                and abs(cur.quantity - quantity) < max(1, quantity // 4)
+                and not (self.never_larger and cur.quantity > quantity)):
+            return True
+        if cur.order_id is not None:
+            self.ex.cancel(cur.order_id)
+        self.live.pop(key, None)
+        return False
 
     def clear(self) -> None:
         for q in self.live.values():

@@ -13,6 +13,7 @@ Command-line entry point.
     python -m ritc record                       # READ-ONLY: record a practice heat to logs/record-*.jsonl
     python -m ritc calibrate logs/record-*.jsonl  # measured vol / depth / tenders / booking delay
     python -m ritc report [logs/liability-*.log]  # liability: gap report per run -> reports/*_local|_live.html/.xlsx
+    python -m ritc suggest                      # liability, READ-ONLY: live tender answers + limit orders to type in
 """
 
 from __future__ import annotations
@@ -59,7 +60,8 @@ def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = 
     case_cfg = cfg.get("case", {})
     ex = Executor(client, dry_run=dry, max_order_size={k: int(v) for k, v in case_cfg.get("max_order", {}).items()},
                   default_max_order=int(case_cfg.get("default_max_order", 5000)),
-                  decimals=int(case_cfg.get("decimals", 2)))
+                  decimals=int(case_cfg.get("decimals", 2)),
+                  settle=float(cfg.get("execution", {}).get("order_settle", 1.0)))
     risk = RiskManager.from_config(cfg)
     strat = REGISTRY[case](Context(client, ex, risk, cfg))
     run = cfg.get("run", {})
@@ -241,6 +243,13 @@ def cmd_report(a: argparse.Namespace) -> int:
     return report_main(args)
 
 
+def cmd_suggest(a: argparse.Namespace) -> int:
+    from .advisor import suggest
+    from .tune import parse_value
+    sets = {k.strip(): parse_value(v.strip()) for k, _, v in (x.partition("=") for x in a.set or [])}
+    return suggest(a.config, sets, a.interval, color=not a.no_color)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ritc", description="RITC trading bots")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -282,6 +291,13 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--first-seed", type=int, default=1)
     rp.add_argument("--only", help="--stress: groups (core / hostile / gap) and/or scenario names")
     rp.set_defaults(fn=cmd_report)
+
+    sg = sub.add_parser("suggest", help="liability, READ-ONLY: connect live, suggest tender answers + limit orders")
+    sg.add_argument("--config", help="path to a TOML config (default config/liability.toml)")
+    sg.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE", help="config override (repeatable)")
+    sg.add_argument("--interval", type=float, default=0.5, help="screen refresh, seconds")
+    sg.add_argument("--no-color", action="store_true", help="plain text (old Windows consoles)")
+    sg.set_defaults(fn=cmd_suggest)
 
     m = sub.add_parser("monitor", help="read-only dashboard")
     m.add_argument("--interval", type=float, default=1.0)

@@ -151,6 +151,7 @@ Stress knobs via `RITC_STRESS`; new knob `flow` scales how often passive flow re
 |---|---|---|---|---|
 | `freeze_rejected_bids` (safety): an auction bid stays in the window until expiry even when the server answers `success=false` at once; the bot traded the stock in that window | +$2.3k (t 2.3) | -$0.1k (t -0.3) | -$0.2k / +$0.6k | Strict front-running reading +$9.6k (t 3.0). Kept as a fine-safety fix (never trade in an undecided window), not for P&L. |
 | Hold to the bell: `close_hold_ticks = 90` (never cross in the last 90 s) + `hold_valuation` (value late tenders at the free close-out) | +$7.0k (t 3.8, 16/16), worst $9.9k -> $13.8k | +$9.5k (t 4.6) | -$0.2k (t -0.2); holdout +$1.3k, worst -$6.5k -> +$2.2k | Scarce passive fills (flow 0.3 / 0.1): hold vs none +$8.6k (t 4.2 / 3.7). Valuation alone: +$3.5k (t 1.9), holdout +$7.2k (t 3.8). |
+| `fresh_unwind` (safety, 2026-10-11): resting orders fill while a slow loop runs, so orders sized from the loop's start positions took positions through zero (speculation fine). Cancel stale quotes, re-read open orders THEN positions, cap IOC + resting at what is left, never past zero | Real time, 1 s loops, seeds 1-10: +$7.6k (t 2.7, p adj 0.048), worst $25.5k -> $36.1k | 101-110 +$1.9k (t 1.1), worst $40.8k -> $56.5k; fresh 201-210: fines $1,414 -> $48/heat (t -3.7, fined heats 8/10 -> 1/10), score +$2.5k (t 3.1), worst $8.7k -> $12.4k | lock-step -$0.1k (t -0.8) | Lock-step normal -$49 (t -0.9) and real time with fast loops -$6: nothing moves between reads there. Found by a real-speed `_local` heat: $3,336 of speculation fines, 0 in the lock-step replay of the same market. Kept as a fine-safety fix. |
 | `hold_risk_budget = 40000`: before the hold window, only rest while \|pos\| x GARCH sigma x sqrt(ticks left) <= $40k; cross only the excess | +$4.3k (t 2.9, p adj 0.044), worst $13.8k -> $24.0k, CVaR $21.3k -> $24.5k | +$5.0k (t 2.2); 2nd holdout 201-216 +$2.4k (t 2.8) | +$1.7k (t 0.9); 201-216 +$6.1k (t 2.1) | Hostile holdout 101-116 -$1.9k (t -0.6), worst $2.2k -> -$7.4k. "Everything at once" stress: worst -$84k -> -$105k (sd ~$95k). 20k: +$3.8k (t 2.9), holdout t 2.0. |
 
 Why it works: the brief says prices are a random walk and the close-out at the last traded price
@@ -173,6 +174,7 @@ volatility; the $ budget crosses more automatically when GARCH sigma is high.
 | `unwind_horizon_ticks` 20 / 45 / 60 | Before the budget: 20 -$1.7k (t -3.5), 45/60 +$1.2k/+$1.4k (t 1.9/1.8). After it: \|change\| < $50 | Unchanged at 30. |
 | `display_qty` 2500 / 10000; `max_slippage` 0.02 / 0.08 | \|t\| < 1.9; max_slippage changes nothing in the normal sim (catch-up size is set by participation) | Unchanged. |
 | `close_hold_ticks` 60 / 150 with the budget | -$0.6k (t -1.0) / +$3.2k (t 1.75), hostile -$0.6k / -$0.7k | Unchanged at 90. |
+| Tender-vs-tender crossing (2026-10-11): value the part of a tender that offsets a held position at the price that position would otherwise exit at (`exit` = opposite touch + fee saved, `mid` = held to the bell) instead of the touch the tender's own unwind would pay | seeds 1-16 normal: exit -$0.3k (t -0.3), mid -$0.1k (t -1.1); hostile: -$0.05k (t -0.8 / -1.4); worst seed unchanged | The extra spread credit only accepts marginal tenders that then go wrong. Removed. |
 | Winner-take-all bid shading learned from wins / losses | Not implemented. Auctions + WTA are ~10 of ~35 tenders and ~$1k of ~$42k edge per heat (sim); ~5 WTA outcomes a heat are too few to learn from inside one heat. The sim's rival bid is independent of the book, so it cannot show the winner's curse either way. | Practice-server item. |
 
 Note: `--queue` gives the same numbers as the normal market here. The sim's 4-cent spread makes the
@@ -293,6 +295,25 @@ code changed):
 The earlier rejection of `refill_factor` 3 was measured in the unanchored hostile market (tenders priced off the
 true mid, the artifact POSTMORTEM.md, risk review describes); in the anchored one it no longer loses. Slow loops
 alone cost -$1.6k (2 ticks per loop), -$9.5k (3), -$22.2k (4), -$37.9k (5) even with every tender answered.
+
+## Microstructure write-up review (2026-10-12)
+
+A research write-up ("Optimizing Execution and Liquidity Risk Management…") proposed AC, Obizhaeva-Wang, Gatheral,
+Kyle's lambda, OFI, VPIN, Hasbrouck VAR and Hawkes for this case. Checked against the bot, the practice logs
+([PRACTICE_LOGS.md](PRACTICE_LOGS.md)) and the calibrated simulator (`RITC_STRESS=real=1`):
+
+| Idea | Status in the bot | Evidence / verdict |
+|---|---|---|
+| Wait for the server to confirm a tender before trading (fines) | done: `booking_ticks`, `track_bookings`, `respect_windows` | 0 front-running in the logs we can see |
+| Almgren-Chriss schedule, κ from live σ and depth | done (`schedule = "almgren_chriss"`; the "AC kappa*T" log lines it quotes are ours) | kept since 2026-10-07 |
+| Obizhaeva-Wang resilience (book refills) | `refill_factor`; and the measured version, `liquidity_model = "flow"` | real books refill fast: 50k blocks absorbed at 2,500-3,600 shares/s. Flow pricing: design +$7.1k (t 1.9), holdout +$1.1k (t 0.3): option, off |
+| Kyle's λ | `book_eta` (impact from visible depth) | λ from a flow regression needs signed volume; `_update_liquidity` now splits time & sales by side, so it can be estimated |
+| OFI / VPIN: cancel resting orders and cross when flow turns toxic | not built | the closest match to the logs: both big losses were unwinds where our side stopped filling while the price ran (701 and 893 shares/s vs ~3,000). **Untestable in our simulator**, whose other flow does not move the price; needs a Kyle-coupled flow → price model first. Best candidate for the next research step |
+| "Low VPIN → bid near the mid to clear the reserve" | tested as `liquidity_model = "auctions"` | wins 1% → 14%, holdout −$4.1k to −$7.3k (t −2.6), hostile worst heat −$56k. **Rejected** |
+| Gatheral propagator, concave impact | — | its slicing example (fifty 1k orders vs five 10k) is not what concavity implies; our unwinds are passive (no impact to propagate). No action |
+| Hasbrouck VAR, Hawkes processes | — | RIT's API gives 1 s ticks and ~11 tenders a heat: too little event data to fit. No action |
+| "$0.40/share past 5,000" | outdated | now **$0.60** (organisers, 2026-10-11) |
+| Log-4 CROC: "aggressive crossing destroyed $2,654" | partly | the larger loss was the $1.76/share move during the slow passive phase before the cross |
 
 ## Baselines and method results
 
