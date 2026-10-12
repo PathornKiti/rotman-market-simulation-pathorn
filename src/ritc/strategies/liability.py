@@ -596,6 +596,15 @@ class LiabilityStrategy(Strategy):
 
     def decide(self, t: dict, snap: Snapshot, positions: dict[str, int]) -> TenderDecision:
         """The bot's answer to tender `t` against the book of now (also used by `ritc suggest`)."""
+        skip = float(self.p.get("auction_skip_adding", 0))
+        if skip and not t.get("is_fixed_bid", True):
+            # AUCTION FREEZE (practice 2026-10-13, -$15k): an open auction bid freezes its stock for the whole
+            # window (front-running rule), so bidding one that would ADD to a block we are still unwinding stops
+            # that unwind for ~30 s while the price can run, and a win only makes the block bigger. Skip it.
+            sign = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
+            pos = positions.get(t.get("ticker"), 0)
+            if sign * pos >= skip:
+                return TenderDecision(False, None, 0.0, 0.0, f"auction would add to our {pos:+d} block")
         if self.liq_model == "ensemble":
             return self.decide_ensemble(t, snap, positions)
         return self._evaluate(t, snap, positions)

@@ -411,3 +411,18 @@ def test_trend_against_is_a_z_score_of_adverse_drift():
     assert abs(z - 0.01 / (0.04 / (2.9 * 15) ** 0.5)) < 1e-9 and z > 1.5
     assert s.trend_against("X", -50_000, None) < 0     # short: the fall is in our favour
     assert s.trend_against("X", 0, None) == 0.0
+
+
+def test_auction_skip_adding_declines_auctions_that_grow_an_unwinding_block():
+    from types import SimpleNamespace
+
+    from ritc.strategies.liability import LiabilityStrategy
+
+    s = LiabilityStrategy.__new__(LiabilityStrategy)
+    s.p, s.liq_model = {"auction_skip_adding": 5000}, "book"
+    s._evaluate = lambda t, snap, positions: SimpleNamespace(accept=True, reason="evaluated")
+    sell_auction = {"ticker": "CROC", "action": "SELL", "quantity": 54000, "is_fixed_bid": False}
+    assert not s.decide(sell_auction, None, {"CROC": -35000}).accept        # short CROC, SELL auction: adds
+    assert s.decide(sell_auction, None, {"CROC": 35000}).accept             # long: it would offset
+    assert s.decide(sell_auction, None, {"CROC": -2000}).accept             # under the threshold
+    assert s.decide(dict(sell_auction, is_fixed_bid=True), None, {"CROC": -35000}).accept   # fixed tenders unaffected
