@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -78,6 +79,12 @@ def cmd_run(a: argparse.Namespace) -> int:
     path = setup_logging(a.case, a.verbose)
     from .tune import parse_value
     sets = {k.strip(): parse_value(v.strip()) for k, _, v in (x.partition("=") for x in a.set or [])}
+    if a.profile:
+        from .practice import pick_profile
+        name, prof = pick_profile(a.case, a.profile)
+        sets = {**prof, "strategy.profile": name, **sets}          # an explicit --set still wins
+        print(f"PROFILE {name}: {prof or '(config defaults)'}")
+        logging.getLogger("ritc").info("PROFILE %s %s", name, prof)
     runner, _ = build(a.case, a.config, a.live, overrides=sets)
     from .core.journal import Journal
     runner.journal = runner.s.ex.journal = Journal(str(path).rsplit(".", 1)[0] + ".jsonl")
@@ -243,6 +250,13 @@ def cmd_report(a: argparse.Namespace) -> int:
     return report_main(args)
 
 
+def cmd_practice(a: argparse.Namespace) -> int:
+    import glob
+
+    from .practice import main as practice_main
+    return practice_main(a.journals or sorted(glob.glob("logs/liability-*.jsonl")))
+
+
 def cmd_suggest(a: argparse.Namespace) -> int:
     from .advisor import suggest
     from .tune import parse_value
@@ -278,6 +292,9 @@ def main(argv: list[str] | None = None) -> int:
     ca.add_argument("--json", help="also write the full report (incl. every tender) to this file")
     ca.set_defaults(fn=cmd_calibrate)
 
+    pr = sub.add_parser("practice", help="liability: scoreboard of real practice heats by profile (+ trend test)")
+    pr.add_argument("journals", nargs="*", help="run journals (default: logs/liability-*.jsonl)")
+    pr.set_defaults(fn=cmd_practice)
     rp = sub.add_parser("report", help="liability: post-trade gap report per bot log (.html + .xlsx in reports/)")
     rp.add_argument("logs", nargs="*", help="bot logs (default: logs/liability-*.log)")
     rp.add_argument("--out", default="reports")
@@ -315,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--config", help="path to a TOML config (default config/<case>.toml)")
     r.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE",
                    help="override one config value for this run, e.g. --set strategy.min_profit_per_share=0.05")
+    r.add_argument("--profile", metavar="NAME|rotate",
+                   help="liability practice: apply a profile from config/<case>_profiles.toml; 'rotate' runs the "
+                        "least-tried one (compare them with `ritc practice`)")
     r.add_argument("--once", action="store_true", help="run a single loop then exit")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(fn=cmd_run)

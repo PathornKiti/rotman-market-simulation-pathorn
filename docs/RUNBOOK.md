@@ -116,3 +116,57 @@ numbers for the next review. What the reports contain: [POSTMORTEM.md](POSTMORTE
 
 The TCA table at the end of each log: a large positive $/unit on `aggressive` = paying too much spread; a low
 `fill%` on `passive` = resting orders not filling.
+
+## 6. Practice-heat A/B testing (liability, real server)
+
+**Why.** The simulator ranks ideas well where it models the mechanism (unwind speed, limits, fees) but it cannot
+know the real auction reserve, whether other desks crowd a block, whether real prices trend, or whether the bell
+is fined (RESEARCH.md, 2026-10-12). Those are settled on the practice server. The practice server works even with
+no other teams logged in: its own bots keep the books liquid and still send private tenders and auctions. With no
+other teams there is no real crowd, so any "crowd" the bot sees there is noise; keep that in mind for profile B.
+
+**What to run, every practice heat.** One command, the same each time:
+
+```bash
+git fetch origin && git checkout claude/ensemble-trend && git pull     # once, before the first heat
+python -m ritc run liability --live -v --profile rotate
+```
+
+`--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
+far, prints `PROFILE <name>` and records it in the journal. Start it before the heat opens, as always. To force
+one: `--profile C_auctions`. An explicit `--set` still wins over the profile.
+
+| Profile | What changes vs the default | The question it answers |
+|---|---|---|
+| `A_default` | nothing (adaptive pricing, gated crowd learner, 90 s hold to the bell) | the baseline |
+| `B_robust_crowd` | `crowd_robust = true`: a price move only counts as crowd evidence relative to the stock's own volatility | do false crowd alarms (3 of 5 heats on 2026-10-12) cost us tenders? |
+| `C_auctions` | B + `liquidity_model = "auctions"`: bid auctions at the forward-liquidity value while the net limit stays free | can we win auctions (0 of 19 so far) without crowding out fixed tenders? |
+
+Optional and harmless: `python -m ritc record` in a second window (a 0.5 s recording of every book for
+`calibrate`). The scoreboard below does not need it; the journal already has every tick's quotes.
+
+**After each heat** (or a batch of heats), in the same folder:
+
+```bash
+python -m ritc practice                # every logs/liability-*.jsonl: one line per heat + by-profile summary
+```
+
+It prints, per heat: profile, final NLV, fixed tenders taken / offered and their estimated edge, auction wins /
+bids, crowd alarms, median loop time and the **trend test** (variance ratio over 10 ticks per stock: ~1.0 =
+random walk, > 1.2 = trends persist). Then every auction bid with how far it sat from the mid, won or lost: the
+real reserve lies between the closest lost bid and the furthest won one. Also read **Total Fines** in the RIT
+client after every heat and note it next to the heat: the journal cannot see fines.
+
+**How to decide** (P&L swings $15-50k between heats, so judge on the steadier numbers first):
+
+| After | If | Then |
+|---|---|---|
+| 3+ heats of each profile | `C_auctions` wins auctions (>= 1 per 2 heats) and takes as many fixed tenders per heat as A | make C the competition default |
+| 3+ heats of each profile | B's crowd column is 0 where A's is not, and B takes more fixed tenders | make B the default (C includes it) |
+| any heat | Total Fines jumped at the bell with an open position | switch the end-game: uncomment `E_flat_bell` in `config/liability_profiles.toml` |
+| 5+ heats | `ritc practice` says "Trends look real" (median variance ratio > 1.2) | uncomment `D_trend` and add it to the rotation |
+| any heat | fines for speculation / front-running, or a crash | stop rotating, run `A_default`, send the `.log` + `.jsonl` |
+
+To make a winner the default for the competition, either run it by name (`--profile C_auctions`) or copy its
+lines into `config/liability.toml`. Upload the `.log` **and** `.jsonl` files of every practice heat: the
+journals let the simulator be recalibrated to the real market, which is what makes its tests worth trusting.

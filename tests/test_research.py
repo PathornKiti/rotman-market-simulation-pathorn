@@ -67,3 +67,29 @@ def test_bayes_impact_recovers_truth_from_wrong_prior():
     assert abs(b.mean - 0.25) < 0.04 and b.sd < 0.03 and b.n == 8
     b.update(0.0, 1.0)                                          # no surprise -> no information
     assert b.n == 8
+
+
+def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
+    import json
+    import random
+
+    from ritc.practice import load_profiles, pick_profile, variance_ratio
+
+    profiles = load_profiles("liability")
+    assert list(profiles)[:3] == ["A_default", "B_robust_crowd", "C_auctions"]
+    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
+    (tmp_path / "liability-1.jsonl").write_text(json.dumps(
+        {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n")
+    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "B_robust_crowd"     # least-tried next
+    name, prof = pick_profile("liability", "C_auctions", str(tmp_path))
+    assert prof["strategy.liquidity_model"] == "auctions"
+    rng = random.Random(1)
+    walk = [0.0]
+    for _ in range(2000):
+        walk.append(walk[-1] + rng.gauss(0, 1))
+    assert 0.8 < variance_ratio(walk) < 1.2                                            # random walk ~ 1
+    trend, step = [0.0], 0.0
+    for _ in range(2000):                      # momentum: each move partly repeats the last one
+        step = 0.5 * step + rng.gauss(0, 1)
+        trend.append(trend[-1] + step)
+    assert variance_ratio(trend) > 1.5

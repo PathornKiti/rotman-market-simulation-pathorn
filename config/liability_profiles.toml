@@ -1,0 +1,25 @@
+# PRACTICE PROFILES for `python -m ritc run liability --live -v --profile rotate` (docs/RUNBOOK.md, section 6).
+# Each profile is a set of --set overrides on top of config/liability.toml. `--profile rotate` runs the profile
+# with the fewest heats in logs/ so far (ties: the order below), and the journal records which one ran, so
+# `python -m ritc practice logs/liability-*.jsonl` can compare them on the REAL server.
+#
+# Why these three: the simulator cannot judge the auction reserve or real crowds (RESEARCH.md, 2026-10-12), and
+# in the five practice heats of 2026-10-12 we won 0 of 19 auctions and raised 3 crowd alarms that were noise.
+
+[A_default]                           # the tested default: adaptive pricing, gated crowd learner
+
+[B_robust_crowd]                      # crowd evidence judged against each stock's own volatility (fewer false
+"strategy.crowd_robust" = true        # alarms; the practice server has no other teams, so any "crowd" is noise)
+
+[C_auctions]                          # B + bid auctions at the forward-liquidity value while the net limit stays
+"strategy.crowd_robust" = true        # free (real heats: the limit bound once in five heats; auctions are the
+"strategy.liquidity_model" = "auctions"   # biggest pool we do not win)
+
+# Only after evidence (RUNBOOK section 6): add them here and they join the rotation.
+# [D_trend]                           # if `ritc practice` shows variance ratio > 1.2 in most heats
+# "strategy.crowd_robust" = true
+# "execution.trend_unwind_z" = 2.0
+# [E_flat_bell]                       # if a heat showed a bell fine of ~$0.45/share or more
+# "execution.hold_budget_min_ticks" = 30
+# "execution.close_hold_ticks" = 0
+# "strategy.hold_valuation" = false
