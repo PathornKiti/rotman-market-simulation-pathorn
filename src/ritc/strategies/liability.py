@@ -374,11 +374,11 @@ class LiabilityStrategy(Strategy):
             if t in self.last_mid:
                 self.drift[t].update(m - self.last_mid[t])
             self.last_mid[t] = m
-        if self.liq_model in ("flow", "auctions"):
+        if self.liq_model in ("flow", "auctions", "adaptive"):
             self._update_liquidity(snap)
         if snap.tick % 60 == 0:      # practice check: compare with `calibrate`'s measured sigma/tick per stock
             log.info("VOL " + "  ".join(f"{t} ${self.price_vol(t, snap):.4f}/tick" for t in self.tickers))
-            if self.liq_model in ("flow", "auctions"):
+            if self.liq_model in ("flow", "auctions", "adaptive"):
                 log.info("LIQ " + "  ".join(f"{t} sell {self.flow(t, 'SELL'):,.0f} buy {self.flow(t, 'BUY'):,.0f}/tick"
                                             for t in self.tickers))
 
@@ -432,6 +432,15 @@ class LiabilityStrategy(Strategy):
     def crowded(self) -> bool:
         """The learned crowd impact is significantly positive (posterior mean > 2 sd)."""
         return self.crowd_learn and self.crowd.n > 0 and self.crowd.mean > 2 * self.crowd.sd
+
+    def no_crowd_seen(self) -> bool:
+        """
+        `liquidity_model = "adaptive"`: price tenders off forward liquidity ("flow", the higher-mean model) only
+        once `adaptive_min_obs` untaken tenders have been scored and the learned crowd impact is under one sd
+        (evidence leaning to no crowd); until then, and whenever a crowd shows, the pessimistic book walk.
+        """
+        n = int(self.p.get("adaptive_min_obs", 3))
+        return self.crowd_learn and self.crowd.n >= n and self.crowd.mean < self.crowd.sd
 
     def unwind_horizon(self) -> int:
         """Race the crowd: once it is known to unwind into our book, finish before it does."""
@@ -561,6 +570,7 @@ class LiabilityStrategy(Strategy):
             close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
             flow_rate=(self.flow(ticker, "SELL" if str(t.get("action", "BUY")).upper() == "BUY" else "BUY")
                        if self.liq_model == "flow" or (self.liq_model == "auctions" and self.bid_up(t, positions))
+                       or (self.liq_model == "adaptive" and self.no_crowd_seen())
                        else 0.0),
         )
 
