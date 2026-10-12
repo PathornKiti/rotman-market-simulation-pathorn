@@ -296,6 +296,25 @@ The earlier rejection of `refill_factor` 3 was measured in the unanchored hostil
 true mid, the artifact POSTMORTEM.md, risk review describes); in the anchored one it no longer loses. Slow loops
 alone cost -$1.6k (2 ticks per loop), -$9.5k (3), -$22.2k (4), -$37.9k (5) even with every tender answered.
 
+## Microstructure write-up review (2026-10-12)
+
+A research write-up ("Optimizing Execution and Liquidity Risk Management…") proposed AC, Obizhaeva-Wang, Gatheral,
+Kyle's lambda, OFI, VPIN, Hasbrouck VAR and Hawkes for this case. Checked against the bot, the practice logs
+([PRACTICE_LOGS.md](PRACTICE_LOGS.md)) and the calibrated simulator (`RITC_STRESS=real=1`):
+
+| Idea | Status in the bot | Evidence / verdict |
+|---|---|---|
+| Wait for the server to confirm a tender before trading (fines) | done: `booking_ticks`, `track_bookings`, `respect_windows` | 0 front-running in the logs we can see |
+| Almgren-Chriss schedule, κ from live σ and depth | done (`schedule = "almgren_chriss"`; the "AC kappa*T" log lines it quotes are ours) | kept since 2026-10-07 |
+| Obizhaeva-Wang resilience (book refills) | `refill_factor`; and the measured version, `liquidity_model = "flow"` | real books refill fast: 50k blocks absorbed at 2,500-3,600 shares/s. Flow pricing: design +$7.1k (t 1.9), holdout +$1.1k (t 0.3): option, off |
+| Kyle's λ | `book_eta` (impact from visible depth) | λ from a flow regression needs signed volume; `_update_liquidity` now splits time & sales by side, so it can be estimated |
+| OFI / VPIN: cancel resting orders and cross when flow turns toxic | not built | the closest match to the logs: both big losses were unwinds where our side stopped filling while the price ran (701 and 893 shares/s vs ~3,000). **Untestable in our simulator**, whose other flow does not move the price; needs a Kyle-coupled flow → price model first. Best candidate for the next research step |
+| "Low VPIN → bid near the mid to clear the reserve" | tested as `liquidity_model = "auctions"` | wins 1% → 14%, holdout −$4.1k to −$7.3k (t −2.6), hostile worst heat −$56k. **Rejected** |
+| Gatheral propagator, concave impact | — | its slicing example (fifty 1k orders vs five 10k) is not what concavity implies; our unwinds are passive (no impact to propagate). No action |
+| Hasbrouck VAR, Hawkes processes | — | RIT's API gives 1 s ticks and ~11 tenders a heat: too little event data to fit. No action |
+| "$0.40/share past 5,000" | outdated | now **$0.60** (organisers, 2026-10-11) |
+| Log-4 CROC: "aggressive crossing destroyed $2,654" | partly | the larger loss was the $1.76/share move during the slow passive phase before the cross |
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

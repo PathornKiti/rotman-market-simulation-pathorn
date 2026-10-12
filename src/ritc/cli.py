@@ -60,7 +60,8 @@ def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = 
     case_cfg = cfg.get("case", {})
     ex = Executor(client, dry_run=dry, max_order_size={k: int(v) for k, v in case_cfg.get("max_order", {}).items()},
                   default_max_order=int(case_cfg.get("default_max_order", 5000)),
-                  decimals=int(case_cfg.get("decimals", 2)))
+                  decimals=int(case_cfg.get("decimals", 2)),
+                  settle=float(cfg.get("execution", {}).get("order_settle", 1.0)))
     risk = RiskManager.from_config(cfg)
     strat = REGISTRY[case](Context(client, ex, risk, cfg))
     run = cfg.get("run", {})

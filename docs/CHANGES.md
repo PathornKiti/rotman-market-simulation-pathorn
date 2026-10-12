@@ -8,6 +8,35 @@ Numbers are mean final NLV across 8 seeds, with the worst seed in brackets, on t
 reproducible lock-step simulator unless noted. Simulator P&L is noise-driven, so read
 them as direction, not as a forecast.
 
+## 2026-10-12 (later): auction root cause, aggressive profile
+
+Auctions lose because the bid stacks ~$0.24/share of haircuts (book walk, risk/drift, margin, fee) while the
+reserve sits nearer the mid. Bidding at forward-liquidity value (`liquidity_model = "auctions"`) wins 14% instead of
+1% but loses $4-7k a heat: each won block crowds same-direction fixed tenders (~$27k each) out of the net limit
+(replay: fixed booked 113 → 108). Room-aware version (`auction_max_net`): no loss, no gain (96 seeds −$0.8k). Not
+adopted. `liquidity_model = "flow"` on 64 fresh calibrated heats: +$5.7k (t 2.9), hostile tail worse: offered as
+the aggressive profile for the graded heats (PRACTICE_PLAN.md decision rules). Defaults unchanged.
+
+## 2026-10-12: practice logs, liquidity, new fine
+
+Speculation fine past 5,000 shares $0.40 → **$0.60** (organisers) in the simulator and the report. Five practice
+heats summarised in [PRACTICE_LOGS.md](PRACTICE_LOGS.md): 50k blocks are absorbed at the touch at 2,500-3,600
+shares/s, and the static book walk undervalued tenders by ~$0.19/share (auctions won 2 of 18). New: a
+practice-calibrated simulator (`RITC_STRESS=real=1`), a forward liquidity forecast from time & sales and
+`strategy.liquidity_model = "flow"` (tender exit at our resting touch, unwind time = shares / flow): design +$7.1k
+(t 1.9), holdout +$1.1k (t 0.3), hostile worst heat −$11k → −$56k, so **off by default**. On the calibrated market
+answering late is +$4k (t 0.9): `decide_late_ticks = 0` stays. `crowd_noise_sd` 0.2: no gain. 159 tests.
+
+## 2026-10-11 (evening): first real-server heats
+
+Real RIT books a new order asynchronously: for a moment it is in neither the OPEN list nor the position, and the
+fresh unwind re-sent it (duplicate pairs 20-250 ms apart; TAME +2,100 / +10,800 / +2,000 past zero = speculation
+fines). `Executor` now counts its own orders as working for `execution.order_settle = 1.0` s unless the server
+shows them, and cancels its own orders the quote manager lost track of. Lock-step tune / stress / replay use 0
+(orders are instant there) and ignore `RIT_MIN_INTERVAL`. `Runner` waits for `/trader` before starting.
+`decide_late_ticks` 3 → 0 at the user's request (answer every tender at once); simulator fresh seeds 501-516:
+−$15.8k/heat (t 4.7). Real-heat measurements: ASSUMPTIONS.md section 1b.
+
 ## 2026-10-11: manual-trading advisor (`python -m ritc suggest`)
 
 `src/ritc/advisor.py`: connects to the live RIT API READ-ONLY (every non-GET call refused at the client) and runs

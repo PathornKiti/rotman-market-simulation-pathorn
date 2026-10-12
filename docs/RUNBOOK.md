@@ -1,5 +1,8 @@
 # Runbook: install, set up a real case, competition day, after the heat
 
+**Step-by-step for the Windows machine (clone, venv, `.env`, run): [WINDOWS_SETUP.md](WINDOWS_SETUP.md).
+Current state and next steps: [HANDOFF.md](HANDOFF.md).**
+
 ## 1. What RIT is
 
 The **Rotman Interactive Trader** client (Windows) connects to the competition server and serves a local REST

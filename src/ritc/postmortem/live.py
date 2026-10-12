@@ -18,7 +18,7 @@ from pathlib import Path
 from ..core.journal import read
 
 GROSS_LIMIT, NET_LIMIT = 250_000, 100_000
-FINE1, FINE2 = 0.20, 0.40
+FINE1, FINE2 = 0.20, 0.60
 
 
 def _mid(t: dict, tk: str) -> float | None:

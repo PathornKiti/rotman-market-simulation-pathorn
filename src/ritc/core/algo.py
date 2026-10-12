@@ -241,8 +241,11 @@ class BlockExecutor:
                 c = passive.get(side)
                 kept[(t, side)] = self.qm.keeps(t, side, c.price if c else None, c.qty if c else 0)
         orders, fresh = refresh()
+        open_ids = {o.get("order_id") for o in orders}
         for t, b in list(self.blocks.items()):
             pos = fresh.get(t, 0)
+            # Sent, but not in the OPEN list yet (real RIT is asynchronous): still working, fills maybe unbooked.
+            flying = self.ex.in_flight(t, open_ids)
             b.target = target_of(t, pos)
             if pos == b.target or (b.target - pos > 0) == (pos > 0) and pos != 0:
                 log.info("BLOCK done %s", b)
@@ -250,6 +253,7 @@ class BlockExecutor:
                 continue
             side = "BUY" if b.target > pos else "SELL"
             left = min(abs(b.target - pos), abs(pos))      # never through zero
+            left -= sum(q for a, q in flying.values() if a == side)
             for o in orders:
                 if o.get("ticker") != t:
                     continue
@@ -258,12 +262,18 @@ class BlockExecutor:
                     q.quantity = int(o.get("quantity", 0)) - int(o.get("quantity_filled", 0) or 0)
                 if str(o.get("action", "")).upper() == side:
                     left -= int(o.get("quantity", 0)) - int(o.get("quantity_filled", 0) or 0)
-            open_ids = {o.get("order_id") for o in orders}
             for s_ in ("BUY", "SELL"):
                 q = self.qm.live.get((t, s_))
-                if q is not None and q.order_id not in open_ids:
+                if q is not None and q.order_id not in open_ids and q.order_id not in flying:
                     self.qm.live.pop((t, s_), None)          # filled or gone: forget it
                     kept[(t, s_)] = False
+            # Our orders the quote manager lost track of (e.g. a cancel that hit an order RIT had not booked
+            # yet, 404) rest unmanaged at a stale price: cancel them. They still count above for this loop.
+            tracked = {q.order_id for q in self.qm.live.values()}
+            for o in orders:
+                oid = o.get("order_id")
+                if o.get("ticker") == t and oid not in tracked and self.ex.ours_settled(oid):
+                    self.ex.cancel(oid)
             for c in self._kids(t, b, books[t], pos, now):
                 if c.action != side or left <= 0:
                     continue

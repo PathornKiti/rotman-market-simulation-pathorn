@@ -1,0 +1,151 @@
+17:14:12.923 INFO  ritc.bot | strategy=liability dry_run=False
+17:14:12.929 INFO  ritc.bot | real-time feed on (news=False tenders=True, every 100 ms)
+17:14:26.456 INFO  ritc.liability | TENDER 3 SELL CRZY x54000.0 @ 10.34 seen at tick 18, expires 49: answering 3 ticks before it
+17:14:26.457 INFO  ritc.liability | TENDER 3 SELL CRZY x54000.0 @ 10.34 -> ACCEPT (profit/share +0.3085 >= 0.0100)
+17:14:27.547 INFO  ritc.algo | BLOCK start CRZY -54000 -> +0 by tick 50 AC kappa*T 0.16
+17:14:27.549 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.89
+17:14:28.312 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.88
+17:14:28.848 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.87
+17:14:29.382 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.86
+17:14:30.121 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.85
+17:14:31.671 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.84
+17:14:33.964 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.83
+17:14:36.287 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.82
+17:14:36.797 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.82
+17:14:37.067 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.82
+17:14:38.619 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.82
+17:14:39.414 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.81
+17:14:42.226 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.82
+17:14:43.469 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.82
+17:14:43.485 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.82
+17:14:43.740 INFO  ritc.exec | [LIVE] BUY CRZY 5000 @ 9.81
+17:14:44.006 INFO  ritc.exec | [LIVE] BUY CRZY 3600 @ 9.81
+17:14:44.544 INFO  ritc.exec | [LIVE] BUY CRZY 3600 @ 9.82
+17:14:46.134 DEBUG ritc.exec | cancel 323 failed (probably already filled): DELETE /orders/323 -> 404: {"code":"ORDER_NOT_FOUND","message":"Could not find order with id 323."}
+17:14:55.667 INFO  ritc.liability | TENDER 701 BUY TAME x54000.0 @ None seen at tick 48, expires 78: answering 3 ticks before it
+17:15:04.458 WARNING ritc.bot | slow loop: 516 ms (market may have moved under you)
+17:15:05.001 INFO  ritc.bot | loop p50 13 ms, p95 60 ms, max 516 ms, feed 8 ms
+17:15:05.777 INFO  ritc.liability | CROWD TAME moved +0.090 against a 54k-share unwind -> 0.0161 $/10k (sd 0.0182, n=1)
+17:15:07.857 INFO  ritc.liability | VOL CRZY $0.0365/tick  TAME $0.0202/tick  CROC $0.0372/tick
+17:15:22.994 INFO  ritc.liability | TENDER 701 BUY TAME x54000.0 @ None -> ACCEPT (competitive bid 24.79, profit/share +0.0500)
+17:15:26.914 INFO  ritc.liability | TENDER 103 BUY TAME x53000.0 @ 24.65 seen at tick 78, expires 109: answering 3 ticks before it
+17:15:26.914 INFO  ritc.liability | TENDER 103 BUY TAME x53000.0 @ 24.65 -> decline (exceeds risk room (53000 > 44000))
+17:15:36.000 INFO  ritc.liability | CROWD TAME moved -0.030 against a 53k-share unwind -> 0.0056 $/10k (sd 0.0131, n=2)
+17:15:47.490 WARNING ritc.bot | slow loop: 733 ms (market may have moved under you)
+17:15:57.139 INFO  ritc.bot | loop p50 12 ms, p95 43 ms, max 733 ms, feed 3 ms
+17:16:06.291 INFO  ritc.liability | TENDER 702 BUY CROC x56000.0 @ None seen at tick 118, expires 148: answering 3 ticks before it
+17:16:08.374 INFO  ritc.liability | VOL CRZY $0.0373/tick  TAME $0.0194/tick  CROC $0.0340/tick
+17:16:16.394 INFO  ritc.liability | CROWD CROC moved -0.160 against a 56k-share unwind -> -0.0063 $/10k (sd 0.0106, n=3)
+17:16:33.508 INFO  ritc.liability | TENDER 203 BUY CROC x51000.0 @ 18.87 seen at tick 145, expires 175: answering 3 ticks before it
+17:16:33.510 INFO  ritc.liability | TENDER 702 BUY CROC x56000.0 @ None -> ACCEPT (competitive bid 19.13, profit/share +0.0500)
+17:16:43.678 INFO  ritc.liability | CROWD CROC moved -0.050 against a 51k-share unwind -> -0.0071 $/10k (sd 0.0093, n=4)
+17:16:49.083 INFO  ritc.bot | loop p50 12 ms, p95 41 ms, max 733 ms, feed 10 ms
+17:17:00.781 INFO  ritc.liability | TENDER 203 BUY CROC x51000.0 @ 18.87 -> decline (exceeds risk room (51000 > 42000))
+17:17:00.785 INFO  ritc.algo | BLOCK start CROC +56000 -> +0 by tick 202 AC kappa*T 0.27
+17:17:00.795 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.50
+17:17:02.799 INFO  ritc.liability | TENDER 703 BUY TAME x55000.0 @ None seen at tick 174, expires 204: answering 3 ticks before it
+17:17:05.882 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.50
+17:17:07.708 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.51
+17:17:08.739 INFO  ritc.liability | VOL CRZY $0.0523/tick  TAME $0.0176/tick  CROC $0.0350/tick
+17:17:12.332 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.52
+17:17:12.847 INFO  ritc.liability | CROWD TAME moved +0.020 against a 55k-share unwind -> -0.0049 $/10k (sd 0.0083, n=5)
+17:17:14.925 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:24.783 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:25.560 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:28.133 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.54
+17:17:28.905 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:29.961 INFO  ritc.liability | TENDER 703 BUY TAME x55000.0 @ None -> ACCEPT (competitive bid 25.23, profit/share +0.0500)
+17:17:30.011 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:30.223 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:31.788 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.54
+17:17:32.052 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:34.162 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.53
+17:17:37.768 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 19.54
+17:17:38.047 INFO  ritc.liability | TENDER 303 BUY TAME x52000.0 @ 25.08 seen at tick 209, expires 239: answering 3 ticks before it
+17:17:40.392 INFO  ritc.exec | [LIVE] SELL CROC 3200 @ 19.54
+17:17:40.657 INFO  ritc.exec | [LIVE] SELL CROC 2200 @ 19.54
+17:17:40.661 INFO  ritc.bot | loop p50 13 ms, p95 36 ms, max 733 ms, feed 2 ms
+17:17:41.158 DEBUG ritc.exec | cancel 1568 failed (probably already filled): DELETE /orders/1568 -> 404: {"code":"ORDER_NOT_FOUND","message":"Could not find order with id 1568."}
+17:17:48.165 INFO  ritc.liability | CROWD TAME moved -0.090 against a 52k-share unwind -> -0.0068 $/10k (sd 0.0076, n=6)
+17:18:05.382 INFO  ritc.liability | TENDER 303 BUY TAME x52000.0 @ 25.08 -> ACCEPT (profit/share +0.7760 >= 0.0100)
+17:18:06.428 INFO  ritc.algo | BLOCK start TAME +52000 -> +0 by tick 267 AC kappa*T 0.35
+17:18:06.429 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.93
+17:18:07.703 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.96
+17:18:09.266 INFO  ritc.liability | VOL CRZY $0.0246/tick  TAME $0.0184/tick  CROC $0.0303/tick
+17:18:15.493 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.96
+17:18:15.741 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.97
+17:18:20.197 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.98
+17:18:20.965 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.97
+17:18:22.752 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.97
+17:18:25.349 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.98
+17:18:25.441 INFO  ritc.liability | TENDER 403 BUY CROC x53000.0 @ 19.73 seen at tick 256, expires 286: answering 3 ticks before it
+17:18:30.892 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.98
+17:18:31.387 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.99
+17:18:32.432 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.99
+17:18:32.438 INFO  ritc.bot | loop p50 13 ms, p95 30 ms, max 420 ms, feed 10 ms
+17:18:32.664 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 26.05
+17:18:35.246 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 26.06
+17:18:35.494 INFO  ritc.liability | CROWD CROC moved -0.045 against a 53k-share unwind -> -0.0071 $/10k (sd 0.0071, n=7)
+17:18:35.762 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 26.07
+17:18:37.849 INFO  ritc.exec | [LIVE] SELL TAME 1300 @ 26.07
+17:18:38.358 DEBUG ritc.exec | cancel 1976 failed (probably already filled): DELETE /orders/1976 -> 404: {"code":"ORDER_NOT_FOUND","message":"Could not find order with id 1976."}
+17:18:52.718 INFO  ritc.liability | TENDER 403 BUY CROC x53000.0 @ 19.73 -> ACCEPT (profit/share +0.1887 >= 0.0100)
+17:18:53.777 INFO  ritc.algo | BLOCK start CROC +53000 -> +0 by tick 314 AC kappa*T 0.26
+17:18:53.779 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.03
+17:18:54.299 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.04
+17:19:00.621 INFO  ritc.liability | TENDER 700 SELL TAME x53000.0 @ None seen at tick 291, expires 321: answering 3 ticks before it
+17:19:09.693 INFO  ritc.liability | VOL CRZY $0.0319/tick  TAME $0.0323/tick  CROC $0.0211/tick
+17:19:10.738 INFO  ritc.liability | CROWD TAME moved +0.200 against a 53k-share unwind -> -0.0016 $/10k (sd 0.0066, n=8)
+17:19:11.756 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.05
+17:19:15.913 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.05
+17:19:24.229 INFO  ritc.bot | loop p50 13 ms, p95 28 ms, max 77 ms, feed 2 ms
+17:19:25.085 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.06
+17:19:25.269 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.06
+17:19:27.851 INFO  ritc.liability | TENDER 700 SELL TAME x53000.0 @ None -> ACCEPT (competitive bid 27.14, profit/share +0.0500)
+17:19:28.113 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.06
+17:19:30.937 INFO  ritc.liability | TENDER 503 BUY TAME x52000.0 @ 26.57 seen at tick 321, expires 351: answering 3 ticks before it
+17:19:31.443 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.09
+17:19:35.589 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.09
+17:19:36.900 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.11
+17:19:41.037 INFO  ritc.liability | CROWD TAME moved +0.020 against a 52k-share unwind -> -0.0010 $/10k (sd 0.0062, n=9)
+17:19:42.588 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.11
+17:19:43.598 INFO  ritc.exec | [LIVE] SELL CROC 5000 @ 20.12
+17:19:48.790 INFO  ritc.exec | [LIVE] SELL CROC 3100 @ 20.13
+17:19:49.816 INFO  ritc.exec | [LIVE] SELL CROC 3000 @ 20.13
+17:19:51.658 DEBUG ritc.exec | cancel 2467 failed (probably already filled): DELETE /orders/2467 -> 404: {"code":"ORDER_NOT_FOUND","message":"Could not find order with id 2467."}
+17:19:58.129 INFO  ritc.liability | TENDER 503 BUY TAME x52000.0 @ 26.57 -> decline (profit/share -0.0134 < 0.0100)
+17:20:10.411 INFO  ritc.liability | VOL CRZY $0.0313/tick  TAME $0.0231/tick  CROC $0.0164/tick
+17:20:16.139 INFO  ritc.bot | loop p50 13 ms, p95 28 ms, max 104 ms, feed 2 ms
+17:20:26.313 INFO  ritc.liability | TENDER 603 SELL TAME x17000.0 @ 26.39 seen at tick 376, expires 406: answering 3 ticks before it
+17:20:34.488 WARNING ritc.bot | slow loop: 888 ms (market may have moved under you)
+17:20:36.582 INFO  ritc.liability | CROWD TAME moved -0.245 against a 17k-share unwind -> -0.0026 $/10k (sd 0.0062, n=10)
+17:20:53.732 INFO  ritc.liability | TENDER 603 SELL TAME x17000.0 @ 26.39 -> ACCEPT (profit/share +0.0213 >= 0.0100)
+17:20:54.549 INFO  ritc.algo | BLOCK start TAME -17000 -> +0 by tick 414 AC kappa*T 0.10
+17:20:54.581 INFO  ritc.exec | [LIVE] BUY TAME 5000 @ 26.24
+17:20:54.780 INFO  ritc.exec | [LIVE] BUY TAME 5000 @ 26.24
+17:20:56.960 INFO  ritc.exec | [LIVE] BUY TAME 5000 @ 26.19
+17:20:56.978 INFO  ritc.exec | [LIVE] BUY TAME 5000 @ 26.19
+17:20:58.303 INFO  ritc.exec | [LIVE] BUY TAME 4000 @ 26.19
+17:21:00.376 INFO  ritc.algo | BLOCK start TAME +1200 -> +0 by tick 414 AC kappa*T 0.20
+17:21:00.380 DEBUG ritc.exec | cancel 2922 failed (probably already filled): DELETE /orders/2922 -> 404: {"code":"ORDER_NOT_FOUND","message":"Could not find order with id 2922."}
+17:21:00.380 INFO  ritc.exec | [LIVE] SELL TAME 1200 @ 26.21
+17:21:00.630 INFO  ritc.algo | BLOCK start TAME +2000 -> +0 by tick 414 AC kappa*T 0.15
+17:21:00.634 INFO  ritc.exec | [LIVE] SELL TAME 2000 @ 26.19
+17:21:00.897 INFO  ritc.exec | [LIVE] SELL TAME 1000 @ 26.21
+17:21:02.196 INFO  ritc.exec | [LIVE] SELL TAME 1000 @ 26.19
+17:21:02.710 INFO  ritc.exec | [LIVE] SELL TAME 1000 @ 26.16
+17:21:04.561 INFO  ritc.exec | [LIVE] SELL TAME 1000 @ 26.09
+17:21:06.318 INFO  ritc.exec | [LIVE] SELL TAME 1000 @ 26.08
+17:21:08.635 INFO  ritc.bot | loop p50 13 ms, p95 31 ms, max 888 ms, feed 12 ms
+17:21:10.197 INFO  ritc.exec | [LIVE] SELL TAME 1000 @ 26.01
+17:21:10.974 INFO  ritc.bot | case stopped - exiting
+17:21:10.975 INFO  ritc.bot | shutting down: cancelling all resting orders
+17:21:10.986 WARNING ritc.exec | cancel failed: POST /commands/cancel -> 401: {"code":"UNAUTHORIZED","message":"Simulation must be running."}
+17:21:10.994 INFO  ritc.bot | loop p50 13 ms, p95 31 ms, max 888 ms over 1607 loops
+17:21:10.995 INFO  ritc.bot | 
+TCA (shortfall vs arrival mid; + = cost, - = earned)
+ticker    style           filled   fill%    $/unit     total $
+CROC      passive         109000     74%   -0.0199   -2,165.00
+CRZY      passive          54000     62%   -0.0119     -640.50
+TAME      passive          72000     69%   -0.0325   -2,338.00
+TOTAL                     235000                     -5,143.50

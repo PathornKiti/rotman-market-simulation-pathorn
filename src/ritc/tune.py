@@ -91,6 +91,8 @@ def run_one(case: str, overrides: dict, seed: int, speed: float, config_path: st
         if speed <= 0:
             runner.client.adapter = InProcessAdapter(market)   # no loopback HTTP: same answers, much faster
             runner.interval = 0.0
+            runner.client.min_interval = 0.0   # in-process: a user's RIT_MIN_INTERVAL only slows the run
+            runner.s.ex.settle = 0.0   # lock-step: orders are booked instantly
             runner.on_loop = lambda: market.advance() if runner.loops % LOOPS_PER_TICK == 0 else None
         else:
             runner.interval = min(runner.interval, 0.25 / max(speed / 4, 1))

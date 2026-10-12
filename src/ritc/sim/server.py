@@ -180,11 +180,15 @@ class Market:
         # price moves in the last 20 s per 50k shares of net tender flow of the previous 90 s, against
         # its holders (other desks dumping the same blocks at the end). crowd_at_expiry=1 (with --hostile):
         # the crowd unwinds when each tender's window CLOSES (other desks answer late too), not on arrival.
+        # real=1: the market MEASURED in the five practice heats of 2026-10-11 (docs/ASSUMPTIONS.md 1b, LIQUIDITY.md):
+        # vol CRZY/TAME/CROC 0.035/0.040/0.035 $/tick; tenders every ~35 s, 50-59k shares, windows 30-31 s, 36%
+        # competitive, edge vs mid -0.45..+0.90 $/share; and resting orders absorbed at 2,600 / 3,200 / 1,500 shares
+        # per tick (our 14 real passive unwinds), 2-4x the default flow, while the VISIBLE book stays as thin.
         # vol_regime=K: each stock's volatility follows a hidden 2-state Markov chain, calm (x0.5) or turbulent
         # (xK), switching with probability 1/50 per tick (the world a vol-regime / HMM model is built for).
         self.stress = {"vol": 1.0, "depth": 1.0, "edge": 0.0, "size": 1.0, "gap": 12.0, "book": 1.0,
                        "strict_fr": 0.0, "flow": 1.0, "anchor": 0.0, "maker_fee": 0.0, "spread": 0.04,
-                       "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0}
+                       "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0, "real": 0.0}
         for kv in filter(None, (os.environ.get("RITC_STRESS") or "").split(",")):
             k, _, v = kv.partition("=")
             self.stress[k.strip()] = float(v)
@@ -204,9 +208,10 @@ class Market:
         # Liquidity Risk Case, 2027 selection brief: CRZY $10 high vol / medium-low liquidity, TAME $25
         # medium vol / medium-high liquidity, CROC $20 high vol / "varied" liquidity; $0.02 fees; max
         # orders 25k/10k/20k; 250k gross / 100k net. Vol and depth numbers are our guesses at "high" etc.
-        for t, px, sigma, lot, impact, mx in (("CRZY", 10.0, 0.02, 1200, 4e-6, 25_000),
-                                              ("TAME", 25.0, 0.025, 3000, 1.5e-6, 10_000),
-                                              ("CROC", 20.0, 0.04, 2000, 2.5e-6, 20_000)):
+        real = bool(self.stress["real"])
+        for t, px, sigma, lot, impact, mx in (("CRZY", 10.0, 0.035 if real else 0.02, 1200, 4e-6, 25_000),
+                                              ("TAME", 25.0, 0.040 if real else 0.025, 3000, 1.5e-6, 10_000),
+                                              ("CROC", 20.0, 0.035 if real else 0.04, 2000, 2.5e-6, 20_000)):
             self.secs[t] = Sec(t, px, spread=self.stress["spread"], lot=int(lot * self.stress["depth"]),
                                sigma=sigma * self.stress["vol"], fee=0.02, impact=impact / self.stress["depth"],
                                max_trade=mx)
@@ -496,17 +501,23 @@ class Market:
                 s.mid = max(0.5, s.mid + self.stress["bell"] * flow / 50_000 / 20)
         # Tenders arrive at random intervals (brief), ~every `gap` ticks, none in the first 5 seconds.
         when = random.Random(f"{self.fill_seed}:{self.abs_tick}:tender-time")
-        if self.abs_tick > 5 and when.random() < 1 / self.stress["gap"]:
+        real = bool(self.stress["real"])
+        gap = 35.0 if real and self.stress["gap"] == 12.0 else self.stress["gap"]
+        if self.abs_tick > 5 and when.random() < 1 / gap:
             t = self.rng.choice(list(self.secs))
             s = self.secs[t]
             action = self.rng.choice(["BUY", "SELL"])
             qty = int(self.rng.choice([10_000, 20_000, 30_000, 50_000]) * self.stress["size"])
             edge = self.rng.uniform(-0.10, 0.25) + self.stress["edge"]
+            if real:          # same draws, rescaled to the practice heats
+                frac = (qty / self.stress["size"] - 10_000) / 40_000
+                qty = int(round(50_000 + 9_000 * frac, -3) * self.stress["size"])
+                edge = -0.45 + (edge - self.stress["edge"] + 0.10) / 0.35 * 1.35 + self.stress["edge"]
             # The tender is priced off the TRUE mid by default. anchor=1: off the VISIBLE mid (true + the current
             # manipulation / crowd offset), as a real server quoting off the current market would. Same draws.
             ref = s.mid + (self.adv_off.get(t, 0.0) if self.stress["anchor"] else 0.0)
             price = round(ref - edge if action == "BUY" else ref + edge, 2)
-            fixed = self.rng.random() > 0.25
+            fixed = self.rng.random() > (0.36 if real else 0.25)
             # Competitive auctions: the client's hidden reserve is 0-15 cents through the mid, drawn
             # per tender from its own generator (the market path and tender stream are unchanged).
             off = random.Random(f"{self.fill_seed}:{self.abs_tick}:{t}:reserve").uniform(0.0, 0.15)
@@ -522,7 +533,7 @@ class Market:
             tid = next(self.ids)
             self.tenders[tid] = {
                 "tender_id": tid, "period": self.period, "tick": self.tick,
-                "expires": self.abs_tick + wr.randint(15, 30),
+                "expires": self.abs_tick + (wr.randint(30, 31) if real else wr.randint(15, 30)),
                 "caption": f"{'Winner-take-all: c' if wta else 'C'}lient wants you to {action} {qty} {t}",
                 "quantity": qty, "action": action,
                 "is_fixed_bid": fixed, "price": price if fixed else None, "ticker": t,
@@ -684,7 +695,8 @@ class Market:
         sign = 1 if action == "BUY" else -1
         if self.case == "liability":
             # Speculation fine (2027 brief): any shares that OPEN a position (grow it, or flip it through
-            # zero) instead of reducing an accepted tender's. $0.20/share for the first 5,000, then $0.40.
+            # zero) instead of reducing an accepted tender's. $0.20/share for the first 5,000, then $0.60
+            # (raised from $0.40 by the organisers, 2026-10-11).
             old, new = s.position, s.position + sign * qty
             spec = abs(new) if old * new <= 0 else max(0, abs(new) - abs(old))
             if self.stress["strict_fr"] and self._undecided(s.ticker):
@@ -693,7 +705,7 @@ class Market:
                 n0 = self.state["spec_shares"]
                 n1 = n0 + spec
                 self.state["spec_shares"] = n1
-                self.penalty += 0.20 * (min(n1, 5000) - min(n0, 5000)) + 0.40 * (max(0, n1 - 5000) - max(0, n0 - 5000))
+                self.penalty += 0.20 * (min(n1, 5000) - min(n0, 5000)) + 0.60 * (max(0, n1 - 5000) - max(0, n0 - 5000))
         s.position += sign * qty
         s.cost += sign * qty * px
         s.volume += qty
@@ -771,7 +783,12 @@ class Market:
         r = random.Random(f"{self.fill_seed}:{self.abs_tick}:{ticker}:{action}")
         # stress `flow` scales how often passive flow arrives (liability only: how good resting orders are).
         p = 0.35 * (self.stress.get("flow", 1.0) if self.case == "liability" else 1.0)
-        return self.secs[ticker].lot * r.randint(1, 2) if r.random() < p else 0
+        q = self.secs[ticker].lot * r.randint(1, 2) if r.random() < p else 0
+        if q and self.case == "liability" and self.stress.get("real"):
+            # practice heats: our resting orders absorbed ~2,600 / 3,200 / 1,500 shares per tick on average
+            target = {"CRZY": 2600, "TAME": 3200, "CROC": 1500}.get(ticker, 2500)
+            q = int(q * target / (0.35 * 1.5 * self.state["base_lot"].get(ticker, self.secs[ticker].lot)))
+        return q
 
     def _print_flow(self) -> None:
         """Time and sales: the passive flow that reached each touch this tick (the same draws as _flow)."""
