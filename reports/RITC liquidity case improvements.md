@@ -8,12 +8,12 @@ Rotman's instructor notes for LT3, the classroom version of this case, describe 
 
 The break-even arithmetic is lopsided. Hold-to-the-bell (`close_hold_ticks = 90`, `hold_risk_budget = 40000`, `hold_valuation`) is worth about $11-15k/heat in our simulator (`docs/ASSUMPTIONS.md`, A15). A $1 fine on 50k open shares costs $50k, so holding pays only if the chance of a fine is below roughly 22-30%. At 125k open shares the break-even falls to 9-12%. At the 2026 rate of $10 it falls to 1-3%. Rank scoring makes this worse: RITC 2026 ranks teams within each sub-heat and was "designed to discourage participants from 'betting the house'" ([RITC 2026 Case Package](https://github.com/RotmanFRTL/RotmanFRTL.github.io/blob/HEAD/RITC%202026%20Case%20Package.pdf)), so one fined heat costs a whole rank, and the next heat's gain does not buy it back. **Until verified, run graded heats with the documented A15 fallback** (`hold_risk_budget=0`, `close_hold_ticks=0`, `hold_valuation=false`, `min_ticks_to_unwind=15`), or with the cheaper flat-by-the-bell variant tested in simulator candidate 2 below. Our earlier practice heats ran this hold, but nobody read their Transaction Logs (`docs/ASSUMPTIONS.md` §6 q1). If RIT's end-of-iteration report or Trader Info "Total Fines" from those heats can still be opened, that may answer the question with no extra heat. Rotman says fines appear in the transaction log, a "Case Fines Summary" and "Total Fines" ([LT3 SOLUTION brief](https://github.com/RotmanFRTL/RotmanFRTL.github.io/blob/HEAD/RIT%20-%20Case%20Brief%20-%20LT3%20-%20Dynamic%20Order%20Arrival%20-%20SOLUTION.pdf)).
 
-## Simulator results, 2026-10-12: nothing passes, one conditional switch
+## Simulator results, 2026-10-12: one adaptive mode adopted, one conditional switch
 
 Candidates 1-4 below, plus an absorption stop for blocks that do not unwind within ~30 s, were run on fresh seeds
 501-532 in the calibrated, Kyle-flow, hostile and default markets (details: `docs/RESEARCH.md`, "Stuck inventory,
-late answers, bell fine and auction room"). None beats the current config, so the defaults are unchanged; the new
-options are in `config/liability.toml`, all off.
+late answers, bell fine and auction room"). None of candidates 1-4 beats the current config; the new options are in `config/liability.toml`, all
+off. One new adaptive mode passed and is now the default (last row).
 
 | Candidate | Result ($/heat vs current) | Verdict |
 |---|---|---|
@@ -21,6 +21,7 @@ options are in `config/liability.toml`, all off.
 | 2. Fine-proof end-game | Flat by the bell (no passive hold in the last 30 s): -$6.1k with no fine, break-even at ~$0.45/share, +$7.4k (t 2.5) at $1. The A15 fallback is worse at every fine level (break-even ~$0.85) | Keep the hold; switch to flat-by-the-bell if check 1 shows a fine of $0.45/share or more |
 | 3. No room reserved for pending auction bids | -$1.8k to +$0.3k (\|t\| < 1); hostile worst heat -$19.7k -> -$33.8k | Rejected |
 | 4. Absorption stop (cross when our own fills cannot finish the block in 30-60 s) | -$0.6k to -$2.5k everywhere, including the Kyle market where slow fills and adverse moves are coupled; worst heat not improved | Rejected |
+| Adaptive liquidity model (new): "book" until untaken tenders show no crowd, then "flow" | Holdout 601-632: +$4.0k (t 2.5) default sim, +$3.2k (t 2.2) calibrated, worst heats better; hostile -$0.3k / identical | **Adopted as the default** |
 
 One fact from this run matters more than any of the numbers. At the real volatility (~$0.035/s), a fresh 55k
 block's 1-sd risk to the bell is about $33k, inside `hold_risk_budget = 40000`, so the bot rests the block and

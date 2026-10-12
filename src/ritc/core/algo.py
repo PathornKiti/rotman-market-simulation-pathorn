@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import math
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 from .book import OrderBook
@@ -234,12 +235,14 @@ class BlockExecutor:
            the kept quotes' unfilled shares, never past zero.
         """
         kept: dict[tuple[str, str], bool] = {}
-        for t, b in self.blocks.items():
-            kids = self._kids(t, b, books[t], positions.get(t, 0), now)
-            passive = {c.action: c for c in kids if c.passive}
-            for side in ("BUY", "SELL"):
-                c = passive.get(side)
-                kept[(t, side)] = self.qm.keeps(t, side, c.price if c else None, c.qty if c else 0)
+        batch = getattr(self.ex, "batched_cancels", None)
+        with batch() if batch else nullcontext():   # all stale quotes in one round trip, done before refresh()
+            for t, b in self.blocks.items():
+                kids = self._kids(t, b, books[t], positions.get(t, 0), now)
+                passive = {c.action: c for c in kids if c.passive}
+                for side in ("BUY", "SELL"):
+                    c = passive.get(side)
+                    kept[(t, side)] = self.qm.keeps(t, side, c.price if c else None, c.qty if c else 0)
         orders, fresh = refresh()
         open_ids = {o.get("order_id") for o in orders}
         for t, b in list(self.blocks.items()):

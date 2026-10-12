@@ -1126,7 +1126,8 @@ class _Server(ThreadingHTTPServer):
 
 
 def serve(case: str, port: int = 9999, speed: float = 4.0, delay: float = 2.0, seed: int | None = None,
-          block: bool = True, hostile: float = 0.0, queue: bool = False) -> tuple[ThreadingHTTPServer, Market]:
+          block: bool = True, hostile: float = 0.0, queue: bool = False, heats: int = 1,
+          gap: float = 10.0) -> tuple[ThreadingHTTPServer, Market]:
     tpp, periods = CASE_SHAPE[case]
     m = Market(case, tpp, periods, seed, hostile, queue)
     srv = _Server(("127.0.0.1", port), make_handler(m))
@@ -1141,16 +1142,23 @@ def serve(case: str, port: int = 9999, speed: float = 4.0, delay: float = 2.0, s
         return srv, m
 
     def clock():
-        time.sleep(delay)
-        m.status = "ACTIVE"
-        while m.status == "ACTIVE":
-            time.sleep(1.0 / speed)
-            m.advance()
-            if m.tick % 25 == 0 and block:
-                print(f"[sim] period {m.period} tick {m.tick:3d}  NLV {m.nlv():12,.2f}  "
-                      f"pos {{{', '.join(f'{t}:{s.position}' for t, s in m.secs.items() if s.position)}}}")
-        fine = f"  penalties {m.penalty:,.2f}  score {m.score():,.2f}" if m.penalty else ""
-        print(f"[sim] case finished. Final NLV {m.nlv():,.2f}{fine}")
+        for h in range(heats):
+            if h:
+                # HEATS: like a practice session, the case sits STOPPED between heats, then a fresh one starts
+                # (same server, new market: rehearses `ritc run --forever`).
+                time.sleep(gap)
+                m.__init__(case, tpp, periods, None if seed is None else seed + h, hostile, queue)
+                print(f"[sim] heat {h + 1} of {heats} starting in {delay:g} s")
+            time.sleep(delay)
+            m.status = "ACTIVE"
+            while m.status == "ACTIVE":
+                time.sleep(1.0 / speed)
+                m.advance()
+                if m.tick % 25 == 0 and block:
+                    print(f"[sim] period {m.period} tick {m.tick:3d}  NLV {m.nlv():12,.2f}  "
+                          f"pos {{{', '.join(f'{t}:{s.position}' for t, s in m.secs.items() if s.position)}}}")
+            fine = f"  penalties {m.penalty:,.2f}  score {m.score():,.2f}" if m.penalty else ""
+            print(f"[sim] case finished. Final NLV {m.nlv():,.2f}{fine}")
 
     th = threading.Thread(target=clock, daemon=True)
     th.start()
@@ -1176,8 +1184,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--hostile", type=float, default=0.0,
                     help="0 = noise traders only; 1 = manipulators (see Market._adversary)")
     ap.add_argument("--queue", action="store_true", help="price-time priority behind the displayed book")
+    ap.add_argument("--heats", type=int, default=1, help="heats in a row, STOPPED --gap s in between")
+    ap.add_argument("--gap", type=float, default=10.0)
     a = ap.parse_args(argv)
-    serve(a.case, a.port, a.speed, a.delay, a.seed, hostile=a.hostile, queue=a.queue)
+    serve(a.case, a.port, a.speed, a.delay, a.seed, hostile=a.hostile, queue=a.queue, heats=a.heats, gap=a.gap)
 
 
 if __name__ == "__main__":

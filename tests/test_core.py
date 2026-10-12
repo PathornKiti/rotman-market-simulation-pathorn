@@ -61,3 +61,12 @@ def test_risk_pattern_and_cap():
     assert r.room("X", "BUY", {"X": 60}) == 40
     r.halted = True
     assert r.room("X", "BUY", {}) == 0
+
+
+def test_log_file_tag_names_what_the_run_changed():
+    from ritc.core.logging_setup import file_tag
+    assert file_tag(None, {"strategy.liquidity_model": "auctions"}) == "liquidity_model=auctions"
+    assert (file_tag("C_auctions", {"strategy.crowd_robust": True, "strategy.profile": "C_auctions"})
+            == "C_auctions__crowd_robust=True")
+    assert file_tag(None, {}) == ""
+    assert "/" not in file_tag(None, {"case.x": "a/b:c"}) and len(file_tag(None, {"k": "v" * 300})) == 100

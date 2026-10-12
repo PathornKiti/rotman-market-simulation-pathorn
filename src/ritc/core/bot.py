@@ -48,6 +48,7 @@ class Snapshot:
     _books: dict[str, OrderBook] = field(default_factory=dict, repr=False)
     trader_id: str = ""
     nlv: float | None = None
+    extra: dict[str, Any] = field(default_factory=dict, repr=False)   # Strategy.prefetch() results
 
     @property
     def tick(self) -> int:
@@ -122,6 +123,10 @@ class Strategy(ABC):
     def book_tickers(self) -> list[str]:
         """Tickers whose books the Runner prefetches in parallel each loop."""
         return []
+
+    def prefetch(self) -> dict[str, Callable[[], Any]]:
+        """Extra API reads the Runner fetches in the same parallel batch as the snapshot (-> snap.extra)."""
+        return {}
 
     def new_news(self) -> list[dict]:
         """New news items, oldest first - from the real-time feed when running."""
@@ -220,12 +225,17 @@ class Runner:
         self.loops = 0
         self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
         self._tick_ms = 0.0
+        self.interrupted = False             # Ctrl-C (vs the heat ending): `run --forever` stops on it
 
     def snapshot(self) -> Snapshot:
         """Case + securities + trader + all prefetch books, in parallel."""
         books = list(dict.fromkeys(self.s.book_tickers))
         calls = [self.client.case, self.client.security_map, self.client.trader]
         calls += [lambda t=t: self.client.book(t, 20) for t in books]
+        extra = self.s.prefetch()
+        calls += list(extra.values())
+        # Last loop's IOC leftovers: cancelled in the same round trip as the reads (was its own wave).
+        calls += [lambda o=o: self.client.cancel(o) for o in self.s.ex.take_ioc()]
         if self.feed is not None and self.feed.running:
             # News must be at least as fresh as the prices: otherwise the bot can trade a
             # repriced market against a stale forecast in the gap before the feed thread polls.
@@ -241,6 +251,7 @@ class Runner:
         for t, payload in zip(books, res[3:3 + len(books)]):
             if isinstance(payload, dict):
                 snap._books[t] = OrderBook.from_api(payload, t, self.trader_id or None)
+        snap.extra = dict(zip(extra, res[3 + len(books):3 + len(books) + len(extra)]))
         return snap
 
     def run(self, once: bool = False) -> None:
@@ -261,6 +272,7 @@ class Runner:
                     time.sleep(2)
         except KeyboardInterrupt:
             log.info("Ctrl-C before the server answered - nothing was sent")
+            self.interrupted = True
             return
         self.trader_id = str(trader.get("trader_id", ""))
         try:
@@ -282,12 +294,12 @@ class Runner:
                      self.s.wants_news, self.s.wants_tenders, 1000 * self.feed_poll)
 
         started, period, errors, halted = False, None, 0, False
+        last_tick = 0
         try:
             while True:
                 t0 = time.monotonic()
                 try:
-                    self.s.ex.sweep()          # kill leftovers of last loop's aggressive orders
-                    snap = self.snapshot()
+                    snap = self.snapshot()     # also kills the leftovers of last loop's aggressive orders
                     self.s.ex.arrival = snap.mid
                     status = snap.case.get("status")
                     if snap.tick != self.journal.tick and status == "ACTIVE":
@@ -305,6 +317,12 @@ class Runner:
                             break
                         time.sleep(0.5)
                         continue
+                    if started and snap.period == period and snap.tick < last_tick - 5:
+                        # The clock jumped back without a STOPPED in between: a NEW heat already started. This
+                        # bot's state belongs to the old one, so end here (`run --forever` starts a fresh one).
+                        log.info("new heat detected (tick %d -> %d) - ending this run", last_tick, snap.tick)
+                        break
+                    last_tick = snap.tick
                     if not started:
                         started, period = True, snap.period
                         self.s.on_start(snap)
@@ -360,6 +378,7 @@ class Runner:
                     time.sleep(remaining)
         except KeyboardInterrupt:
             log.info("Ctrl-C received")
+            self.interrupted = True
         except Exception:
             log.exception("strategy crashed")
         finally:

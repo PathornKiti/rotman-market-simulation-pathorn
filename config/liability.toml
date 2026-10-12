@@ -76,8 +76,22 @@ decline_explicitly = true     # official rule: trading a ticker while one of its
 #   ...and only when |net after the win| <= auction_max_net (shares; unset = always). Tested 2026-10-12: always
 #   = wins 1% -> 14% but -$4.1k..-7.3k/heat (the 55k block crowds fixed tenders out of the net limit); 45000 =
 #   no loss but no gain (96 fresh seeds -$0.8k, t -1.4). Not adopted.
-liquidity_model = "book"
+liquidity_model = "adaptive"  # ADAPTIVE (default since 2026-10-12): start each heat on "book"; once `adaptive_min_obs` untaken
+                              # tenders are scored and the learned crowd impact is under 1 sd, price with "flow"; back to
+                              # "book" as soon as a crowd shows. Design 501-532: default sim +$3.9k (t 3.1), calibrated
+                              # -$0.2k, Kyle +$0.1k, hostile identical. Holdout 601-632: default +$4.0k (t 2.5, worst
+                              # -$18.5k -> -$9.2k), calibrated +$3.2k (t 2.2, worst $14.6k -> $23.1k), hostile -$0.3k
+                              # (t -1.0) / calibrated hostile identical. "book" = the old default (RESEARCH.md).
+adaptive_min_obs = 2          # 4: default sim +$2.6k (t 2.6), calibrated +$0.4k
 liq_prior = { CRZY = 2600, TAME = 3200, CROC = 1500 }   # shares/tick our resting unwinds got in practice (14 blocks)
+# PROFESSOR'S IDEAS (2026-10-12, RESEARCH.md): all tested on fresh seeds 901-932, none adopted.
+#   liquidity_model = "ensemble": weighted book / flow / crowd(1.4x size) worlds with a worst-case floor
+#     (ensemble_crowd_prior, ensemble_crowd_min, ensemble_crowd_extra, ensemble_flow_weight, ensemble_floor):
+#     hostile -$7.7k (t -2.2), worst heat doubles. Logs a SCEN line per tender when on.
+rank_tenders = false          # answer the most valuable open tender first: no effect in the sim
+drift_symmetric = false       # credit favourable drift too: -$4k..-$13.5k everywhere
+crowd_robust = false          # vol-scaled crowd evidence: fixes 2 real false alarms, but holdout hostile worst heats
+                              # -$2.7k -> -$25.8k / -$12.2k -> -$46.2k
 liq_default = 2000            # other tickers
 liq_halflife = 20             # ticks
 liq_cap = 6000                # never forecast more than this (a burst of other desks' trades is not our flow)
@@ -127,6 +141,9 @@ fresh_unwind = true           # SLOW-LOOP SAFETY: resting orders fill while a lo
 stuck_window_ticks = 0        # ABSORPTION STOP (0 = off): drop a block from the hold_risk_budget passive set when its own
 stuck_horizon_ticks = 30      # fills over the last `window` ticks need more than `horizon` ticks to finish it. Fresh 501-532:
                               # -$1.3k..-$2.4k calibrated, -$0.6k..-$1.1k Kyle flow, -$1.9k..-$2.5k hostile (RESEARCH.md).
+trend_unwind_z = 0            # TREND: cross instead of resting when the drift runs this many sd against the block.
+                              # 2: trending (Kyle) market +$1.1k (t 1.7), calibrated -$0.4k, hostile -$2.3k. Turn on only
+                              # if `ritc calibrate` shows a variance ratio clearly above 1 on real recordings.
 hold_budget_min_ticks = 0     # FLAT BY THE BELL: no passive hold this close to the end (use with close_hold_ticks=0,
                               # hold_valuation=false). 30: -$6.1k with no bell fine, +$7.4k (t 2.5) at $1/share; breaks
                               # even at ~$0.45/share. Switch on only if practice shows a bell fine.

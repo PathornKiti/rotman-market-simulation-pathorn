@@ -431,12 +431,47 @@ check 1 shows a bell fine of $0.45/share or more, run `--set execution.hold_budg
 execution.close_hold_ticks=0 --set strategy.hold_valuation=false` (it dominates the A15 fallback at every fine).
 
 Default check for `python -m ritc run liability --live` (same seeds): `liquidity_model = "flow"` +$1.3k (t 0.4),
-hostile -$0.5k (t -0.2); `"auctions"` +$1.5k (t 1.3), hostile -$1.6k (t -1.7). Neither earns a switch, so
-`"book"` stays the default and the config as committed is the best tested bot.
+hostile -$0.5k (t -0.2); `"auctions"` +$1.5k (t 1.3), hostile -$1.6k (t -1.7). Neither earns a switch on its
+own; the adaptive combination below does.
+
+**Adaptive liquidity model: ADOPTED.** `liquidity_model = "adaptive"`: "book" until `adaptive_min_obs` untaken
+tenders are scored with the crowd posterior under 1 sd, then "flow"; back to "book" once a crowd shows.
+
+| Seeds | default sim | calibrated | Kyle flow | hostile | calibrated + hostile |
+|---|---|---|---|---|---|
+| design 501-532, min_obs 2 / 4 | +$3.9k (t 3.1) / +$2.6k (t 2.6) | -$0.2k / +$0.4k | +$0.1k / -$0.1k | identical | |
+| holdout 601-632, min_obs 2 | +$4.0k (t 2.5), worst -$18.5k -> -$9.2k | +$3.2k (t 2.2), worst $14.6k -> $23.1k | | -$0.3k (t -1.0), worst same | identical |
+
+It keeps flow's upside where no crowd exists and never switches in the hostile market, which is what neither fixed
+model managed. Default with `adaptive_min_obs = 2`.
 
 Not run: candidate 5 (per-slot reserve bracket) waits on practice checks 3-4. Bug found on the way: the first stop
 run sampled once per LOOP (several per tick), so the 10-tick window was never filled and it never fired; fixed
 (one sample per tick) before the numbers above.
+
+## Professor's ideas: ensemble valuation, trend, re-ranking, end-of-heat window (2026-10-12): none adopted
+
+Branch `claude/ensemble-trend`. Fresh seeds 901-932, paired vs the current default (adaptive), four markets:
+calibrated (`real=1,late_award=1`), Kyle trending flow (`kyle=0.3,kyle_phi=0.9`), calibrated hostile, default.
+
+| Arm | calibrated | Kyle (trends) | hostile | default | Verdict |
+|---|---|---|---|---|---|
+| `liquidity_model = "ensemble"` (book / flow / crowd = 1.4x size, crowd prior 0.15, floor $0.15) | -$4.2k (t -1.4) | -$4.2k (t -1.3) | **-$7.7k (t -2.2), worst -$44.6k -> -$98.3k** | +$1.6k (t 0.8) | Rejected |
+| ensemble, flow weight 0.7 | -$1.5k | -$2.8k | -$8.4k (t -2.4) | +$3.0k (t 1.7) | Rejected |
+| ensemble, floor $0.30 | -$2.4k | -$2.8k | -$8.8k (t -2.6) | +$1.6k | Rejected |
+| `rank_tenders` (answer the most valuable open tender first) | 0 | 0 | 0 | 0 | No effect: two untaken tenders are never open together in the sim |
+| `trend_unwind_z = 2` (cross when the drift runs > 2 sd against the block) | -$0.4k (t -2.2) | +$1.1k (t 1.7) | -$2.3k (t -1.6) | -$0.3k | Only helps where trends exist; needs real evidence (variance ratio from `ritc record`) |
+| `drift_symmetric` (credit favourable drift in tender value) | -$4.2k | -$6.6k | -$13.5k (t -3.2) | -$5.6k | Rejected: the drift estimate is mostly noise |
+| `close_hold_ticks` 60 / 120 / 150 (vs 90) | -$0.8k / 0 / +$1.2k | +$0.1k / 0 / +$1.2k | 0 / -$0.1k / -$0.3k | -$1.2k / +$0.4k / +$0.5k | 90 stays; 150 not significant and a worse hostile worst heat |
+
+Why the ensemble fails: weighting the crowd world softly (prior 15%, posterior probability after) charges less
+than the gated learned crowd cost when a crowd is real (hostile worst heat doubles), and mixing in the flow world
+costs in the calibrated market. The gated crowd + adaptive switch already is the better "multi-pricing".
+
+**Loop speed (adopted, no decision change):** time & sales and IOC-leftover cancels ride the snapshot's parallel
+batch, stale quotes are cancelled in parallel, 16 I/O workers, the inline feed poll skips when the feed thread is
+already polling. Profiled at 0.2 s per RIT call: loop p50 603 -> 206 ms, p95 1810 -> 1212 ms; lock-step results
+identical (seed 501: $157,812 before and after).
 
 ## Baselines and method results
 

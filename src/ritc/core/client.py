@@ -72,7 +72,7 @@ class RITClient:
             s._ritc_adapter = self.adapter
         return s
 
-    def parallel(self, calls: list[Callable[[], Any]], workers: int = 8) -> list[Any]:
+    def parallel(self, calls: list[Callable[[], Any]], workers: int = 16) -> list[Any]:
         """
         Run independent API calls concurrently and return results in order.
         Exceptions are returned in place of results so one failure doesn't lose the rest.

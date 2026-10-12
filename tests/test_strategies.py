@@ -366,3 +366,48 @@ def test_forward_liquidity_values_the_exit_at_our_resting_touch():
     fast = evaluate_tender(t, thin, fee=0.02, min_profit=0.01, flow_rate=5000, price_vol_per_tick=0.04,
                            risk_aversion=0.3)
     assert slow.profit_per_share < fast.profit_per_share
+
+
+def test_adaptive_liquidity_switches_only_without_a_crowd():
+    from ritc.strategies.commodity import BayesImpact
+    from ritc.strategies.liability import LiabilityStrategy
+
+    s = LiabilityStrategy.__new__(LiabilityStrategy)
+    s.p, s.crowd_learn = {"adaptive_min_obs": 2}, True
+    s.crowd = BayesImpact(0.0, 0.10, 0.10)
+    assert not s.no_crowd_seen()                        # nothing scored yet: price with the book walk
+    s.crowd.update(1.0, 0.0)
+    s.crowd.update(1.0, 0.01)
+    assert s.no_crowd_seen()                            # two quiet tenders: forward liquidity
+    for _ in range(3):
+        s.crowd.update(1.0, 0.20)
+    assert not s.no_crowd_seen()                        # a crowd shows: back to the book walk
+
+
+def test_ensemble_weights_follow_the_crowd_posterior():
+    from ritc.strategies.commodity import BayesImpact
+    from ritc.strategies.liability import LiabilityStrategy
+
+    s = LiabilityStrategy.__new__(LiabilityStrategy)
+    s.p, s.crowd_learn = {"ensemble_crowd_prior": 0.15, "ensemble_flow_weight": 0.5}, True
+    s.crowd = BayesImpact(0.0, 0.10, 0.10)
+    w = s.scenario_weights()
+    assert abs(sum(w.values()) - 1) < 1e-9 and abs(w["crowd"] - 0.15) < 1e-9 and w["book"] == w["flow"]
+    for _ in range(4):
+        s.crowd.update(5.0, 0.5)                       # a clear crowd: 0.10 $/10k
+    assert s.scenario_weights()["crowd"] > 0.9
+
+
+def test_trend_against_is_a_z_score_of_adverse_drift():
+    from types import SimpleNamespace
+
+    from ritc.strategies.liability import LiabilityStrategy
+
+    s = LiabilityStrategy.__new__(LiabilityStrategy)
+    s.p = {"drift_halflife": 15}
+    s.drift = {"X": SimpleNamespace(mean=-0.01)}       # falling 1 cent a tick
+    s.price_vol = lambda t, snap: 0.04
+    z = s.trend_against("X", 50_000, None)             # long into a falling market: against us
+    assert abs(z - 0.01 / (0.04 / (2.9 * 15) ** 0.5)) < 1e-9 and z > 1.5
+    assert s.trend_against("X", -50_000, None) < 0     # short: the fall is in our favour
+    assert s.trend_against("X", 0, None) == 0.0
