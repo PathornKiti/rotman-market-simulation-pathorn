@@ -313,6 +313,7 @@ class LiabilityStrategy(Strategy):
         self.crowd = BayesImpact(float(s.get("crowd_prior_mean", 0.0)), float(s.get("crowd_prior_sd", 0.10)),
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
+        self.crowd_sigma: dict[int, float] = {}  # tender id -> GARCH $ vol/tick when it appeared (crowd_robust)
         self.taken: set[int] = set()             # tenders we hold: our own unwind moves their price
         # Accepted tenders the server may not have booked yet: id -> (ticker, signed qty, abs tick by which
         # it is surely booked). RIT books ~1 s after the accept (winner-take-all only at the window's end).
@@ -420,9 +421,20 @@ class LiabilityStrategy(Strategy):
                 continue
             if tid in self.taken and self.p.get("crowd_untaken_only", False):
                 continue          # our own unwind's impact is already priced by walking the book
-            self.crowd.update(x, sign * (m - m0))       # + = the price ran against the unwind
-            log.info("CROWD %s moved %+.3f against a %.0fk-share unwind -> %.4f $/10k (sd %.4f, n=%d)",
-                     t, sign * (m - m0), 10 * x, self.crowd.mean, self.crowd.sd, self.crowd.n)
+            move = sign * (m - m0)                      # + = the price ran against the unwind
+            if self.p.get("crowd_robust", False):
+                # ROBUST CROWD: a move is evidence only relative to the stock's own volatility over the window.
+                # Practice 2026-10-12: one CROC move of +0.64 (vol spiking to $0.07/tick) read as a 6-sd crowd
+                # under the fixed 0.10 noise and charged ~$0.6/share on every later tender of the heat.
+                s_move = self.crowd_sigma.pop(tid, 0.0) * lag ** 0.5
+                clip = float(self.p.get("crowd_clip", 2.5)) * s_move
+                if clip > 0:
+                    move = max(-clip, min(clip, move))
+                self.crowd.noise_sd = max(float(self.p.get("crowd_noise_sd", 0.10)), s_move)
+            self.crowd.update(x, move)
+            log.info("CROWD %s moved %+.3f against a %.0fk-share unwind -> %.4f $/10k (sd %.4f, n=%d)%s",
+                     t, sign * (m - m0), 10 * x, self.crowd.mean, self.crowd.sd, self.crowd.n,
+                     " CROWDED" if self.crowded() else "")
         self.crowd_obs = keep
 
     def crowd_cost(self, qty: int) -> float:
@@ -433,7 +445,8 @@ class LiabilityStrategy(Strategy):
 
     def crowded(self) -> bool:
         """The learned crowd impact is significantly positive (posterior mean > 2 sd)."""
-        return self.crowd_learn and self.crowd.n > 0 and self.crowd.mean > 2 * self.crowd.sd
+        return (self.crowd_learn and self.crowd.n >= max(1, int(self.p.get("crowd_min_obs", 1)))
+                and self.crowd.mean > 2 * self.crowd.sd)
 
     def no_crowd_seen(self) -> bool:
         """
@@ -614,6 +627,7 @@ class LiabilityStrategy(Strategy):
                 sign = -1 if str(t.get("action", "BUY")).upper() == "BUY" else 1
                 self.crowd_obs.append((snap.abs_tick, ticker, sign, int(t.get("quantity", 0)) / 10_000,
                                        snap.mid(ticker), tid))
+                self.crowd_sigma[tid] = self.price_vol(ticker, snap)
             if self.wait_to_decide(t, tid, snap):
                 continue          # keep the option open: answer `decide_late_ticks` before the window closes
             d = self.decide(t, snap, positions)
