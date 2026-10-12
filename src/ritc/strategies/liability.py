@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass
 
 from ..core.algo import AlgoParams, BlockExecutor, ac_kappa, book_eta
@@ -316,6 +317,7 @@ class LiabilityStrategy(Strategy):
         self.crowd = BayesImpact(float(s.get("crowd_prior_mean", 0.0)), float(s.get("crowd_prior_sd", 0.10)),
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
+        self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
         self.crowd_sigma: dict[int, float] = {}  # tender id -> GARCH $ vol/tick when it appeared (crowd_robust)
         self.taken: set[int] = set()             # tenders we hold: our own unwind moves their price
         # Accepted tenders the server may not have booked yet: id -> (ticker, signed qty, abs tick by which
@@ -397,6 +399,9 @@ class LiabilityStrategy(Strategy):
         """Time & sales for the forward-liquidity models, in the snapshot's parallel batch (no extra round trip)."""
         if self.liq_model not in ("flow", "auctions", "adaptive"):
             return {}
+        if time.monotonic() - self._tas_t < 0.9:          # trade flow is read once per tick: skip in between
+            return {}
+        self._tas_t = time.monotonic()
         return {f"tas:{t}": (lambda t=t: self.client.tas(t, after=self.tas_after.get(t))) for t in self.tickers}
 
     def _update_liquidity(self, snap: Snapshot) -> None:

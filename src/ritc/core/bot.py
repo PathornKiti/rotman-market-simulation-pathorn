@@ -225,6 +225,7 @@ class Runner:
         self.loops = 0
         self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
         self._tick_ms = 0.0
+        self._trader_t, self._trader_last = 0.0, None
         self._slow: list[float] = []          # slow loops since the last summary warning
         self._slow_t = time.monotonic()
         self.interrupted = False             # Ctrl-C (vs the heat ending): `run --forever` stops on it
@@ -232,7 +233,11 @@ class Runner:
     def snapshot(self) -> Snapshot:
         """Case + securities + trader + all prefetch books, in parallel."""
         books = list(dict.fromkeys(self.s.book_tickers))
-        calls = [self.client.case, self.client.security_map, self.client.trader]
+        # NLV (/trader) only feeds the journal and the drawdown guard: once a second is plenty. Every call costs
+        # when the client is throttled (RIT_MIN_INTERVAL, or a server that answers 429), practice 2026-10-13.
+        want_trader = time.monotonic() - self._trader_t >= 1.0
+        calls = [self.client.case, self.client.security_map,
+                 self.client.trader if want_trader else (lambda: self._trader_last)]
         calls += [lambda t=t: self.client.book(t, 20) for t in books]
         extra = self.s.prefetch()
         calls += list(extra.values())
@@ -247,6 +252,8 @@ class Runner:
             if isinstance(r, Exception):
                 raise r if isinstance(r, RITError) else RITError(str(r))
         case, secs, trader = res[0], res[1], res[2]
+        if want_trader and isinstance(trader, dict):
+            self._trader_t, self._trader_last = time.monotonic(), trader
         snap = Snapshot(case=case, securities=secs, _client=self.client, trader_id=self.trader_id,
                         nlv=float(trader.get("nlv")) if isinstance(trader, dict) and trader.get("nlv") is not None
                         else None)
@@ -288,6 +295,10 @@ class Runner:
 
         feed = None
         if self.use_feed and (self.s.wants_news or self.s.wants_tenders):
+            if self.client.min_interval:
+                # A throttled client serialises every call: a 0.1 s feed poll would take half the budget, and the
+                # loop's own snapshot already polls tenders. Poll at most every 5 throttle slots.
+                self.feed_poll = max(self.feed_poll, 5 * self.client.min_interval)
             feed = EventFeed(self.client, self.feed_poll, news=self.s.wants_news,
                              tenders=self.s.wants_tenders).start()
             self.s.feed = feed
@@ -407,6 +418,8 @@ class Runner:
                 nlv = self.client.trader().get("nlv")
             except RITError:
                 nlv = None
+            if nlv is not None:
+                log.info("HEAT RESULT: NLV %s", f"{float(nlv):,.0f}")
             self.journal.write("end", nlv=nlv, loops=self.loops, p50=self.latency.pct(0.5),
                                p95=self.latency.pct(0.95), max=self.latency.pct(1.0),
                                tca=[{"ticker": t, "style": st_, "qty": a.qty, "cost": a.cost}

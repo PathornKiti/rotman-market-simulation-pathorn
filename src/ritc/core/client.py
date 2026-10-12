@@ -9,6 +9,7 @@ competition machine and check field names before trusting a bot with them:
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -46,6 +47,7 @@ class RITClient:
         self.timeout = timeout
         self.max_retries = max_retries
         # Client-side throttle. Raise RIT_MIN_INTERVAL if the server answers 429.
+        self.throttled, self._throttle_log = 0, -1e9          # 429 answers seen (logged at most every 30 s)
         self.min_interval = (config.env_float("RIT_MIN_INTERVAL", 0.0)
                              if min_interval is None else min_interval)
         self._last_call = 0.0
@@ -115,6 +117,11 @@ class RITClient:
                 time.sleep(0.2 * (attempt + 1))
                 continue
             if r.status_code == 429:
+                self.throttled += 1
+                if time.monotonic() - self._throttle_log >= 30:
+                    self._throttle_log = time.monotonic()
+                    logging.getLogger("ritc.client").warning(
+                        "RIT is rate limiting the API (429, %d so far): each one waits before retrying", self.throttled)
                 wait = 0.5
                 try:
                     wait = float(r.json().get("wait", wait))
