@@ -235,6 +235,22 @@ def hold_within_budget(qty: int, price_vol_per_tick: float, ticks_left: int, bud
     return abs(qty) * price_vol_per_tick * max(ticks_left, 0) ** 0.5 <= budget
 
 
+def unwind_stuck(hist: list[tuple[int, int]], now: int, window: int, horizon: float) -> bool:
+    """
+    Absorption stop for the passive hold. `hist` = (abs tick, shares still to unwind) of the current block.
+    The market absorbed (remaining `window` ticks ago - remaining now) / window shares per tick into our
+    resting orders; if that rate needs more than `horizon` ticks to finish, the block is stuck. In the
+    practice heats the only two slow unwinds (701 / 893 shares/s) were the two big adverse moves: when
+    nobody trades on our side the price is running away, so holding is no longer free (docs/RESEARCH.md).
+    """
+    if window <= 0 or not hist or now - hist[0][0] < window:
+        return False
+    rem = hist[-1][1]
+    past = next((r for k, r in reversed(hist) if now - k >= window), hist[0][1])
+    rate = max(past - rem, 0) / window
+    return rem > 0 and (rate <= 0 or rem / rate > horizon)
+
+
 def unwind_slice(book: OrderBook, position: int, max_slippage: float, participation: float,
                  max_order: int) -> tuple[str, int, float] | None:
     """
@@ -283,6 +299,10 @@ class LiabilityStrategy(Strategy):
         self.close_hold = int(ex_cfg.get("close_hold_ticks", 0))   # passive only this close to the bell
         self.hold_budget = float(ex_cfg.get("hold_risk_budget", 0.0))   # $ 1-sd risk to the bell held passively
         self.fresh_unwind = bool(ex_cfg.get("fresh_unwind", False))   # re-read positions before sizing orders
+        self.hold_until = int(ex_cfg.get("hold_budget_min_ticks", 0))   # flat by the bell: no hold this close
+        self.stuck_window = int(ex_cfg.get("stuck_window_ticks", 0))   # absorption stop (0 = off)
+        self.stuck_horizon = float(ex_cfg.get("stuck_horizon_ticks", 30))
+        self.unwind_hist: dict[str, list[tuple[int, int]]] = {}   # ticker -> (tick, shares left) of its block
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
         # CROWDED TENDERS: other desks get the same block and unwind it into the same book.
@@ -445,10 +465,16 @@ class LiabilityStrategy(Strategy):
         g, mid = self.garch.get(ticker), snap.mid(ticker)
         return g.vol() * mid if g is not None and g.ready and mid else 0.0
 
-    def pending_delta(self, ticker: str, now: int) -> int:
-        """Signed shares of accepted tenders on `ticker` that may still be unbooked."""
+    def pending_delta(self, ticker: str, now: int, room: bool = False) -> int:
+        """
+        Signed shares of accepted tenders on `ticker` that may still be unbooked. `room`: for the risk-room
+        check, where `reserve_auction_room = false` leaves out auction bids still in their window (if the
+        server voids an award that no longer fits, an open bid uses no room until it actually fills).
+        """
         self.pending = {k: v for k, v in self.pending.items() if v[2] > now}
-        return sum(q for t, q, _ in self.pending.values() if t == ticker)
+        skip = room and not self.p.get("reserve_auction_room", True)
+        return sum(q for k, (t, q, _) in self.pending.items()
+                   if t == ticker and not (skip and k in self.bidding and self.bidding[k][1] > now))
 
     def unwind_target(self, ticker: str, pos: int, now: int) -> int:
         """
@@ -554,7 +580,7 @@ class LiabilityStrategy(Strategy):
 
     def handle_tenders(self, snap: Snapshot) -> None:
         now = snap.abs_tick
-        positions = {t: q + self.pending_delta(t, now) for t, q in snap.positions.items()}
+        positions = {t: q + self.pending_delta(t, now, room=True) for t, q in snap.positions.items()}
         for t in self.current_tenders():
             tid = int(t.get("tender_id", -1))
             ticker = t.get("ticker")
@@ -603,7 +629,8 @@ class LiabilityStrategy(Strategy):
                         continue          # we hold nothing: don't spend risk room on it
                     self.taken.add(tid)
                     sign = 1 if str(t.get("action")).upper() == "BUY" else -1
-                    positions[ticker] = positions.get(ticker, 0) + sign * int(t["quantity"])
+                    if t.get("is_fixed_bid", True) or self.p.get("reserve_auction_room", True):
+                        positions[ticker] = positions.get(ticker, 0) + sign * int(t["quantity"])
                     wait = int(self.p.get("booking_ticks", 2))
                     if not t.get("is_fixed_bid", True):    # auctions may only be awarded at the window's end
                         wait += max(0, int(t.get("expires", snap.tick)) - snap.tick)
@@ -651,10 +678,24 @@ class LiabilityStrategy(Strategy):
                     kappa = ac_kappa(self.price_vol(t, snap), book_eta(snap.book(t), "bid" if pos > 0 else "ask"),
                                      self.ac_lambda)
                 self.algo.work(t, pos, target, now, min(now + self.unwind_horizon(), period_end), kappa=kappa)
-        if self.hold_budget:
+        if self.stuck_window:
+            for t in list(self.unwind_hist):
+                if t not in self.algo.blocks:
+                    del self.unwind_hist[t]
+            for t, b in self.algo.blocks.items():
+                h = self.unwind_hist.setdefault(t, [])
+                if h and h[0][0] < b.start_tick:          # a new schedule (block restarted): new history
+                    h.clear()
+                h.append((now, abs(snap.positions.get(t, 0) - b.target)))
+                del h[:-(self.stuck_window + 20)]
+        if self.hold_budget and snap.ticks_left <= self.hold_until:
+            self.algo.passive = set()              # flat by the bell: the schedule crosses what is left
+        elif self.hold_budget:
             self.algo.passive = {t for t in self.algo.blocks
                                  if hold_within_budget(snap.positions.get(t, 0) - self.algo.blocks[t].target,
-                                                       self.price_vol(t, snap), snap.ticks_left, self.hold_budget)}
+                                                       self.price_vol(t, snap), snap.ticks_left, self.hold_budget)
+                                 and not (self.stuck_window and unwind_stuck(self.unwind_hist.get(t, []), now,
+                                                                             self.stuck_window, self.stuck_horizon))}
         if self.algo.active and self.fresh_unwind and not self.ex.dry_run:
             def refresh():
                 orders = self.client.orders("OPEN")         # orders FIRST, then positions (see step_fresh)
