@@ -318,6 +318,7 @@ class LiabilityStrategy(Strategy):
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
         self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
+        self.pnl_base: dict[str, tuple[float, int]] = {}   # ticker -> (stock P&L when its tender was taken, tender id)
         self.crowd_sigma: dict[int, float] = {}  # tender id -> GARCH $ vol/tick when it appeared (crowd_robust)
         self.taken: set[int] = set()             # tenders we hold: our own unwind moves their price
         # Accepted tenders the server may not have booked yet: id -> (ticker, signed qty, abs tick by which
@@ -755,8 +756,11 @@ class LiabilityStrategy(Strategy):
             if not d.accept and self.wait_for_room(t, d, snap):
                 continue          # room frees up as other blocks unwind / pending auction bids resolve: re-check
             self.seen.add(tid)
-            log.info("TENDER %s %s %s x%s @ %s -> %s (%s)", tid, t.get("action"), ticker,
-                     t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline", d.reason)
+            log.info("TENDER %s %s %s x%s @ %s -> %s (%s)%s", tid, t.get("action"), ticker,
+                     t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline", d.reason,
+                     f" ~ ${d.profit_per_share * float(t.get('quantity') or 0):,.0f} expected" if d.accept else "")
+            if d.accept and ticker not in self.pnl_base:
+                self.pnl_base[ticker] = (snap.stock_pnl(ticker), tid)     # BLOCK P&L is measured from here
             self.ex.journal.write("tender_decision", tid=tid, accept=d.accept, price=d.price, pps=d.profit_per_share,
                                   exit_vwap=d.unwind_vwap, reason=d.reason, mid=book.mid, bid=book.best_bid,
                                   ask=book.best_ask, ticks_left=snap.ticks_left, expires=t.get("expires"),
@@ -815,6 +819,10 @@ class LiabilityStrategy(Strategy):
             if pos == target:
                 if b:
                     self.algo.cancel(t)
+                if b and pos == 0 and t in self.pnl_base and t in snap.securities:
+                    base, tid = self.pnl_base.pop(t)
+                    log.info("BLOCK P&L %s: %s since tender #%s was accepted (flat now)", t,
+                             f"{snap.stock_pnl(t) - base:+,.0f}", tid)
                 continue
             # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
             if (b is None or b.target != target or (pos > 0) != (b.start_pos > 0)

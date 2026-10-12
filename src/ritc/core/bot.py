@@ -74,6 +74,11 @@ class Snapshot:
     def positions(self) -> dict[str, int]:
         return {t: int(s.get("position", 0)) for t, s in self.securities.items()}
 
+    def stock_pnl(self, ticker: str) -> float:
+        """This stock's P&L so far, as the server reports it: realized + unrealized (RIT /securities)."""
+        s = self.securities.get(ticker) or {}
+        return float(s.get("realized") or 0.0) + float(s.get("unrealized") or 0.0)
+
     def book(self, ticker: str, depth: int = 20) -> OrderBook:
         """Prefetched in parallel by the Runner; fetched lazily if not. Own orders excluded."""
         if ticker not in self._books:
@@ -225,7 +230,9 @@ class Runner:
         self.loops = 0
         self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
         self._tick_ms = 0.0
-        self._trader_t, self._trader_last = 0.0, None
+        self._trader_t, self._trader_last, self._trader_n = 0.0, None, 0
+        self.pnl_every = 30                  # ticks between PNL log lines
+        self._pnl_tick, self._pnl_last, self._last_snap = -1, None, None
         self._slow: list[float] = []          # slow loops since the last summary warning
         self._slow_t = time.monotonic()
         self.interrupted = False             # Ctrl-C (vs the heat ending): `run --forever` stops on it
@@ -235,7 +242,8 @@ class Runner:
         books = list(dict.fromkeys(self.s.book_tickers))
         # NLV (/trader) only feeds the journal and the drawdown guard: once a second is plenty. Every call costs
         # when the client is throttled (RIT_MIN_INTERVAL, or a server that answers 429), practice 2026-10-13.
-        want_trader = time.monotonic() - self._trader_t >= 1.0
+        self._trader_n += 1
+        want_trader = time.monotonic() - self._trader_t >= 1.0 or self._trader_n >= 4    # 1 s, or 4 loops (lock-step)
         calls = [self.client.case, self.client.security_map,
                  self.client.trader if want_trader else (lambda: self._trader_last)]
         calls += [lambda t=t: self.client.book(t, 20) for t in books]
@@ -253,7 +261,7 @@ class Runner:
                 raise r if isinstance(r, RITError) else RITError(str(r))
         case, secs, trader = res[0], res[1], res[2]
         if want_trader and isinstance(trader, dict):
-            self._trader_t, self._trader_last = time.monotonic(), trader
+            self._trader_t, self._trader_last, self._trader_n = time.monotonic(), trader, 0
         snap = Snapshot(case=case, securities=secs, _client=self.client, trader_id=self.trader_id,
                         nlv=float(trader.get("nlv")) if isinstance(trader, dict) and trader.get("nlv") is not None
                         else None)
@@ -262,6 +270,19 @@ class Runner:
                 snap._books[t] = OrderBook.from_api(payload, t, self.trader_id or None)
         snap.extra = dict(zip(extra, res[3 + len(books):3 + len(books) + len(extra)]))
         return snap
+
+    def _log_pnl(self, snap: Snapshot) -> None:
+        """PNL line every `pnl_every` ticks: NLV, the change since the last line, and each stock's position / P&L."""
+        self._pnl_tick = snap.tick
+        if snap.nlv is None:
+            return
+        d = snap.nlv - self._pnl_last if self._pnl_last is not None else snap.nlv
+        self._pnl_last = snap.nlv
+        per = "  ".join(f"{t} {snap.positions.get(t, 0):+,d} sh {snap.stock_pnl(t):+,.0f}"
+                        for t in snap.securities if snap.positions.get(t) or snap.stock_pnl(t))
+        log.info("PNL t=%d  NLV %s (%s in %d s)%s", snap.tick, f"{snap.nlv:,.0f}", f"{d:+,.0f}", self.pnl_every,
+                 f"  |  {per}" if per else "")
+        self.journal.write("pnl", nlv=snap.nlv, per={t: round(snap.stock_pnl(t), 2) for t in snap.securities})
 
     def run(self, once: bool = False) -> None:
         log.info("strategy=%s dry_run=%s", self.s.name, self.s.ex.dry_run)
@@ -315,6 +336,10 @@ class Runner:
                     snap = self.snapshot()     # also kills the leftovers of last loop's aggressive orders
                     self.s.ex.arrival = snap.mid
                     status = snap.case.get("status")
+                    if status == "ACTIVE" and snap.tick != self._pnl_tick and snap.tick % self.pnl_every == 0:
+                        self._log_pnl(snap)
+                    if status == "ACTIVE":
+                        self._last_snap = snap
                     if snap.tick != self.journal.tick and status == "ACTIVE":
                         self.journal.tick = snap.tick
                         self.journal.write(
@@ -419,7 +444,10 @@ class Runner:
             except RITError:
                 nlv = None
             if nlv is not None:
-                log.info("HEAT RESULT: NLV %s", f"{float(nlv):,.0f}")
+                last = self._last_snap
+                per = ("  |  " + "  ".join(f"{t} {last.stock_pnl(t):+,.0f}" for t in last.securities
+                                            if last.stock_pnl(t) or last.positions.get(t))) if last else ""
+                log.info("HEAT RESULT: NLV %s%s", f"{float(nlv):,.0f}", per)
             self.journal.write("end", nlv=nlv, loops=self.loops, p50=self.latency.pct(0.5),
                                p95=self.latency.pct(0.95), max=self.latency.pct(1.0),
                                tca=[{"ticker": t, "style": st_, "qty": a.qty, "cost": a.cost}
