@@ -161,6 +161,12 @@ one: `--profile C_auctions`. An explicit `--set` still wins over the profile.
 Optional and harmless: `python -m ritc record` in a second window (a 0.5 s recording of every book for
 `calibrate`). The scoreboard below does not need it; the journal already has every tick's quotes.
 
+**Reading a heat's log** (liability): `TENDER ... ACCEPT (...) ~ $X expected` per tender answered;
+`PNL t=210  NLV ... (+... in 30 s) | CROC -62,306 sh +27,564` every 30 s (RIT's realized + unrealized per stock);
+`AUCTION #702 BUY CRZY 53k at 9.34: WON / lost` a few seconds after each auction closes; `BLOCK P&L CROC: +35,081
+since tender #5 + #14 ... (expected +20,589)` when a block is flat again; at the end a `HEAT SUMMARY` table (every
+tender: expected vs made, auctions won of bid) and `HEAT RESULT: NLV ... | per stock`.
+
 **After each heat** (or a batch of heats), in the same folder:
 
 ```bash

@@ -318,6 +318,9 @@ class LiabilityStrategy(Strategy):
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
         self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
+        self.ledger: dict[int, dict] = {}        # tender id -> what we took, expected $, realized $, auction won
+        self.block_tids: dict[str, list[int]] = {}   # ticker -> tenders in its current block
+        self.auction_watch: dict[int, list] = {}  # auction id -> [ticker, sign, qty, expiry tick, position before]
         self.pnl_base: dict[str, tuple[float, int]] = {}   # ticker -> (stock P&L when its tender was taken, tender id)
         self.crowd_sigma: dict[int, float] = {}  # tender id -> GARCH $ vol/tick when it appeared (crowd_robust)
         self.taken: set[int] = set()             # tenders we hold: our own unwind moves their price
@@ -497,6 +500,7 @@ class LiabilityStrategy(Strategy):
     def step(self, snap: Snapshot) -> None:
         self.sync_tickers(snap)
         self._update_drift(snap)
+        self._watch_auctions(snap)
         self.handle_tenders(snap)
         self.frozen = self.undecided(snap) if self.p.get("respect_windows", False) else set()
         for t in self.frozen:
@@ -716,6 +720,47 @@ class LiabilityStrategy(Strategy):
         net_after = sum(positions.values()) + sign * int(t.get("quantity", 0))
         return abs(net_after) <= int(self.p.get("auction_max_net", 10**9))
 
+    def _watch_auctions(self, snap: Snapshot) -> None:
+        """
+        AUCTION RESULT in the log: RIT books an award at the window's close and says nothing else, so compare the
+        stock's position just before expiry with a few ticks after (the stock is frozen meanwhile, so nothing else
+        moves it). Won = it moved by >= 80% of the auction's size in the bid's direction.
+        """
+        now = snap.abs_tick
+        for tid, w in list(self.auction_watch.items()):
+            ticker, sign, qty, expiry, before = w
+            if before is None and now >= expiry - 1:
+                w[4] = before = snap.positions.get(ticker, 0)
+            if before is not None and now >= expiry + 3:
+                after = snap.positions.get(ticker, 0)
+                won = sign * (after - before) >= 0.8 * qty
+                e = self.ledger.get(tid)
+                if e is not None:
+                    e["won"] = won
+                log.info("AUCTION #%s %s %s %dk at %s: %s", tid, "BUY" if sign > 0 else "SELL", ticker, qty // 1000,
+                         e["price"] if e else "?", "WON" if won else "lost")
+                del self.auction_watch[tid]
+
+    def on_stop(self) -> None:
+        """HEAT SUMMARY: every tender taken, what it was expected to make and what its block made."""
+        if not self.ledger:
+            return
+        log.info("HEAT SUMMARY (expected = the bot's estimate when it answered; made = its block's P&L when flat)")
+        for tid, e in self.ledger.items():
+            state = ("lost auction" if e["won"] is False else "won auction" if e["kind"] == "auction" and e["won"]
+                     else "auction pending" if e["kind"] == "auction" else "")
+            made = f"{e['realized']:+,.0f}" if e["realized"] is not None else (
+                "-" if e["won"] is False else "open at the bell")
+            log.info("  #%-4s %-4s %-4s %3dk %-7s expected %+8s  made %s %s", tid, e["side"], e["ticker"],
+                     e["qty"] // 1000, e["kind"], f"{e['expected']:,.0f}" if e["won"] is not False else "-", made,
+                     state)
+        live = [e for e in self.ledger.values() if e["won"] is not False]
+        auctions = [e for e in self.ledger.values() if e["kind"] == "auction"]
+        log.info("  total expected %s, made %s on %d closed blocks; auctions won %d of %d bids",
+                 f"{sum(e['expected'] for e in live):+,.0f}",
+                 f"{sum(e['realized'] for e in live if e['realized'] is not None):+,.0f}",
+                 sum(e["realized"] is not None for e in live), sum(bool(e["won"]) for e in auctions), len(auctions))
+
     def handle_tenders(self, snap: Snapshot) -> None:
         now = snap.abs_tick
         positions = {t: q + self.pending_delta(t, now, room=True) for t, q in snap.positions.items()}
@@ -780,6 +825,15 @@ class LiabilityStrategy(Strategy):
                         continue          # we hold nothing: don't spend risk room on it
                     self.taken.add(tid)
                     sign = 1 if str(t.get("action")).upper() == "BUY" else -1
+                    fixed = bool(t.get("is_fixed_bid", True))
+                    self.ledger[tid] = {"ticker": ticker, "side": t.get("action"), "qty": int(t["quantity"]),
+                                        "kind": "fixed" if fixed else "auction", "price": d.price,
+                                        "expected": d.profit_per_share * int(t["quantity"]), "realized": None,
+                                        "won": None if not fixed else True}
+                    self.block_tids.setdefault(ticker, []).append(tid)
+                    if not fixed:
+                        self.auction_watch[tid] = [ticker, sign, int(t["quantity"]),
+                                                   now + max(0, int(t.get("expires", snap.tick)) - snap.tick), None]
                     if t.get("is_fixed_bid", True) or self.p.get("reserve_auction_room", True):
                         positions[ticker] = positions.get(ticker, 0) + sign * int(t["quantity"])
                     wait = int(self.p.get("booking_ticks", 2))
@@ -821,8 +875,15 @@ class LiabilityStrategy(Strategy):
                     self.algo.cancel(t)
                 if b and pos == 0 and t in self.pnl_base and t in snap.securities:
                     base, tid = self.pnl_base.pop(t)
-                    log.info("BLOCK P&L %s: %s since tender #%s was accepted (flat now)", t,
-                             f"{snap.stock_pnl(t) - base:+,.0f}", tid)
+                    made = snap.stock_pnl(t) - base
+                    tids = [x for x in self.block_tids.pop(t, [tid]) if self.ledger.get(x, {}).get("won") is not False]
+                    exp = sum(self.ledger[x]["expected"] for x in tids if x in self.ledger)
+                    for x in tids:                   # one block can carry several tenders: split by expected $
+                        if x in self.ledger:
+                            e = self.ledger[x]["expected"]
+                            self.ledger[x]["realized"] = made * (e / exp if exp else 1 / len(tids))
+                    log.info("BLOCK P&L %s: %s since tender %s was accepted (flat now; expected %s)", t,
+                             f"{made:+,.0f}", " + ".join(f"#{x}" for x in tids), f"{exp:+,.0f}")
                 continue
             # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
             if (b is None or b.target != target or (pos > 0) != (b.start_pos > 0)
