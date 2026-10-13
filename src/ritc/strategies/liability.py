@@ -743,6 +743,14 @@ class LiabilityStrategy(Strategy):
                 log.info("AUCTION #%s %s %s %dk at %s: %s", tid, "BUY" if sign > 0 else "SELL", ticker, qty // 1000,
                          e["price"] if e else "?", "WON" if won else "lost")
                 del self.auction_watch[tid]
+                if (not won and self.crowd_learn and self.p.get("crowd_learn_lost_auctions", False)
+                        and snap.mid(ticker) is not None):
+                    # RIVAL WINNER: a lost auction is a block another desk now holds and must unwind, starting at the
+                    # award. Score the price from NOW, in the direction the winner unwinds (-sign: they bought what we
+                    # bid to buy, so they sell). A fresh id keeps it out of `taken` (crowd_untaken_only).
+                    oid = -int(tid)
+                    self.crowd_obs.append((snap.abs_tick, ticker, -sign, qty / 10_000, snap.mid(ticker), oid))
+                    self.crowd_sigma[oid] = self.price_vol(ticker, snap)
 
     def on_stop(self) -> None:
         """HEAT SUMMARY: every tender taken, what it was expected to make and what its block made."""
