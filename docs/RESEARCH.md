@@ -573,6 +573,45 @@ pooled 432 heats: -630/heat t -1.22;  failing rule: ['hostile market', 'everythi
   costs when a real crowd meets high volatility, so the gated crowd learner stays the default. On a practice server
   with no other teams (every "crowd" is noise) run `--profile B_robust_crowd`.
 
+## Rival desks that win auctions at any price (2026-10-13): adopted (`crowd_learn_lost_auctions`)
+
+A lost auction is a block another desk holds and must unwind from the award on; the crowd learner used to skip it
+(it only scored tenders we did not bid on, and only in the first 10 s). Now a lost auction starts a crowd observation
+at the award, in the winner's unwind direction. 27 scenarios, seeds 1301-1316, paired vs the default of the day:
+
+```
+scenario                         base      new     diff     t  worst chg
+base (brief)                   60,193   60,686     +493   1.2       +613
+volatility x2                  39,606   39,166     -440  -0.8     -5,037
+thin books x0.5                52,000   52,369     +369   0.8         +0
+worse tenders -10c             23,171   22,621     -549  -1.0       -967
+bigger tenders x2              77,462   77,462       +0   0.0         +0
+tenders twice as often         95,694   96,799   +1,105   1.1     +1,500
+booking delay 3s               59,955   60,442     +487   1.2         +0
+strict front-running           57,042   57,520     +478   1.2       +133
+hostile market                 71,835   72,082     +247   0.4       -300
+hostile anchored                1,663    1,977     +314   2.2         +0
+everything at once            158,437  160,864   +2,427   1.5       -900
+everything anchored            -4,059   -4,059       +0   0.0         +0
+resting fills pay $0.02        54,921   55,297     +376   1.0         +0
+spread 2c + queue              52,385   52,735     +350   1.0         +0
+spread 1c + queue              53,093   53,417     +325   1.0         +0
+scarce resting fills           49,903   50,098     +195   0.2         +0
+close 5c against holder        59,380   59,873     +493   1.2     +2,113
+desks dump at the bell         59,526   60,019     +493   1.2         +0
+very slow bot (1 loop/s)       59,944   60,437     +493   1.2       +613
+hostile crowd at expiry        24,730   25,424     +694   0.4         +0
+vol regimes (hidden)           50,257   50,338      +81   1.0         +0
+real-world combined            44,025   44,303     +278   1.0         +0
+practice calibrated           125,259  123,610   -1,649  -1.0         +0
+practice thin + vol spikes     84,879   87,515   +2,636   1.6         +0
+practice trending flow        122,617  124,237   +1,620   1.4     +4,174
+practice + rival desks         26,866   28,894   +2,029   0.5       +948
+real-world + hostile             -311      -71     +240   1.4         +0
+
+pooled 432 heats: +503/heat t 2.45;  failing rule: ['volatility x2']
+```
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

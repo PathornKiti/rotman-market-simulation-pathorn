@@ -111,6 +111,10 @@ liq_cap = 6000                # never forecast more than this (a burst of other 
 # (t 3.0), benign +$0 (the gate never fires without a crowd). Ungated / learning from our own tenders cost
 # $2.8k-$4.9k in the benign market (our own unwind impact looked like a crowd).
 crowd_learn = true
+crowd_learn_lost_auctions = true   # RIVAL WINNERS (default since 2026-10-13): an auction we lost is a block another desk
+                              # now holds and must unwind, starting at the award: score the price from then. 27-scenario
+                              # stress, seeds 1301-1316: pooled +$503/heat (t 2.45), better in 22 of 27 (practice thin +
+                              # vol +$2.6k, everything at once +$2.4k, rival desks +$2.0k); vol x2 worst heat -$5.0k.
 crowd_untaken_only = true     # skip tenders we hold: walking the book already prices our own impact
 crowd_gate = true             # charge nothing until the crowd is statistically there
 crowd_prior_mean = 0.0        # $/10k shares before anything is learned
