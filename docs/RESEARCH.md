@@ -654,6 +654,44 @@ Fails: the prior absorption rates give 15-18 s horizons (shorter than 30), so ov
 lower risk premium takes more marginal tenders; practice-market worst heats -$11k to -$28k. Next: lengthen-only
 (horizon_min_ticks = 30), no valuation change.
 
+## Lengthen-only adaptive horizon (2026-10-13): adopted
+
+`horizon_mode = "absorption"`, `horizon_min_ticks = 30`, `horizon_max_ticks = 90` (valuation unchanged), seeds
+1401-1416:
+
+```
+scenario                         base      new     diff     t  worst chg
+base (brief)                   53,103   53,114      +11   1.4         +0
+volatility x2                  33,652   33,669      +16   0.9         +0
+thin books x0.5                48,589   48,436     -152  -1.0         +0
+worse tenders -10c             20,345   20,345       +0   0.0         +0
+bigger tenders x2              72,278   73,260     +981   1.9         +0
+tenders twice as often        100,395  100,398       +4   1.0         +0
+booking delay 3s               53,318   53,326       +8   1.0         +0
+strict front-running           50,430   50,440      +11   1.4         +0
+hostile market                 39,996   40,005       +9   1.0       +143
+hostile anchored                3,308    3,304       -4  -1.0        -57
+everything at once             99,627   99,627       +0   0.0         +0
+everything anchored            -1,465   -1,465       +0   0.0         +0
+resting fills pay $0.02        47,959   47,969      +10   1.4         +0
+spread 2c + queue              50,574   50,583       +9   1.4         +0
+spread 1c + queue              52,349   52,379      +31   1.0         +0
+scarce resting fills           42,224   42,276      +52   1.3         +0
+close 5c against holder        52,136   52,147      +11   1.4         +0
+desks dump at the bell         48,665   48,678      +14   1.4         +0
+very slow bot (1 loop/s)       53,393   53,403      +11   1.4         +0
+hostile crowd at expiry        16,388   16,433      +45   1.0         +0
+vol regimes (hidden)           40,818   40,857      +39   1.0       +626
+real-world combined            40,882   40,977      +95   1.0         +0
+practice calibrated            94,508   94,518      +10   1.0         +0
+practice thin + vol spikes     56,501   56,531      +30   1.4       +159
+practice trending flow         88,447   88,444       -3  -1.0         +0
+practice + rival desks         22,804   22,727      -76  -1.0         +0
+real-world + hostile            1,597    1,537      -60  -1.0       -959
+
+pooled 432 heats: +41/heat t 1.81;  failing rule: []
+```
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

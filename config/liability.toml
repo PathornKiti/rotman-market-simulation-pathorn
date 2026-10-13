@@ -164,6 +164,11 @@ order_settle = 1.0            # s an order we sent counts as working although th
                               # list nor the position (real RIT books orders asynchronously; 2026-10-11 practice sent
                               # duplicate unwind orders 40-250 ms apart -> TAME +10,800 past zero). Lock-step tests use 0.
 unwind_horizon_ticks = 30     # target: flat within this many ticks of accepting a tender
+horizon_mode = "absorption"   # ADAPTIVE HORIZON (default since 2026-10-13): target = block / the absorption this stock has
+horizon_min_ticks = 30        # shown (learned from our own finished blocks), never shorter than 30 s, at most 90 s: a thin
+horizon_max_ticks = 90        # book gets the time it needs instead of being swept. 27-scenario stress, seeds 1401-1416: no
+                              # scenario worse, pooled +$41/heat (t 1.8). A 15 s floor (shorter horizons) + liquidity-
+                              # aware valuation failed (practice worst heats -$11k..-$28k).
 crowd_horizon_ticks = 12      # ...but race the crowd once it is detected (learned impact > 2 sd). A FIXED 12 cost
                               #   -$7.6k (t -6.1) in the benign sim; switching only on evidence costs nothing there.
 max_slippage = 0.04           # aggressive catch-up slices: VWAP within this of the touch
