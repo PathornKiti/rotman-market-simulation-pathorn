@@ -94,6 +94,25 @@ liq_prior = { CRZY = 2600, TAME = 3200, CROC = 1500 }   # shares/tick our restin
 #   liquidity_model = "ensemble": weighted book / flow / crowd(1.4x size) worlds with a worst-case floor
 #     (ensemble_crowd_prior, ensemble_crowd_min, ensemble_crowd_extra, ensemble_flow_weight, ensemble_floor):
 #     hostile -$7.7k (t -2.2), worst heat doubles. Logs a SCEN line per tender when on.
+trend_learn = true            # DEFAULT since 2026-10-13 (user's choice). TREND = the root cause (10-tick momentum r 0.46,
+                              # t 8.5, 3 recorded heats; RESEARCH.md). Learn r live
+trend_prior_r = 0.46          # from this heat's prices (non-overlapping 10-tick pairs, all stocks), shrunk to the prior
+trend_prior_n = 20            # with weight trend_prior_n pairs.
+trend_window = 10
+trend_exec = true             # SPRINT: cross (urgent_participation x depth per loop) while r x the run against the block over
+trend_cross_cost = 0.05       # the last trend_window ticks >= this $; rest again under half of it. Profile G_trend.
+book_signal = true            # THIN-SIDE SIGNAL (default since 2026-10-13, passes the testing rule). Predict the next 10 ticks as
+book_gate_t = 2.0             # a x last 10-tick run + b x depth asymmetry (cost to cross book_signal_shares on the ask minus
+book_signal_shares = 25000    # the bid side: the price moves toward the thin side). a, b learned live from the heat's own
+book_prior_a = 0.40           # windows, shrunk to the real fit (3 recorded heats: 0.40 / 0.67, R2 0.37 vs 0.24 momentum
+book_prior_b = 0.67           # alone); used only once this heat's own t of b >= book_gate_t (real heats: from tick 50-110),
+book_models = "ofi"           # DEFAULT "ofi" since 2026-10-13 (user's choice): try OFI + depth asymmetry first (real backtest
+                              # best; the sim can only show no harm, -$74/heat t -1.2); "asym" = run + asymmetry only.
+book_prior_n = 20             # momentum alone before. Design 1-24 pooled +$1.3k (t 2.9), holdout 101-124 +$0.6k (t 2.1);
+                              # thin-side markets +$1.1k..+$8.3k, random walk / plain trend / hostile ~$0. Ungated: random
+                              # walk -$5.2k (t -4.0).
+trend_value = false           # charge / credit tenders r x the run against their unwind: no gain on top of trend_exec.
+trend_value_cap = 0.15
 netting_credit = false        # NETTING (2026-10-13, off): credit the part of a tender that OFFSETS our open block with the
 netting_gate = "crowded"      # learned $/share our unwinds cost (prior netting_prior, learn netting_learn, cap netting_cap);
 netting_prior = 0.15          # gate "crowded" = off once a crowd shows, true = on only after no-crowd evidence. Solo sim
@@ -164,6 +183,13 @@ stuck_horizon_ticks = 30      # fills over the last `window` ticks need more tha
 trend_unwind_z = 0            # TREND: cross instead of resting when the drift runs this many sd against the block.
                               # 2: trending (Kyle) market +$1.1k (t 1.7), calibrated -$0.4k, hostile -$2.3k. Turn on only
                               # if `ritc calibrate` shows a variance ratio clearly above 1 on real recordings.
+initial_sprint_ticks = 3      # RACE THE CROWD (default since 2026-10-13, passes the testing rule): once the crowd learner has
+initial_sprint_gate = "crowded"   # detected other desks dumping the same blocks (crowded(): impact > 2 sd), cross the first
+                              # 3 ticks of every new block (Obizhaeva-Wang-style initial trade), then the usual unwind.
+                              # Ungated it lost $13-23k/heat in solo markets. Gated, design 1-24 pooled +$3.6k (t 5.7),
+                              # holdout 101-124 +$2.2k (t 4.8): rival markets +$1.2k..+$16.9k, solo markets exactly $0.
+live_cross_cost = false       # cross only when the predicted move beats the cost of crossing live_cross_shares in the book now
+live_cross_shares = 10000     # + fee (instead of trend_cross_cost): pooled -$0.4k (t -1.2), rejected 2026-10-13.
 stall_and_trend = false       # cross only when a block is BOTH stuck (stuck_window_ticks) and trending against us
                               # (trend_unwind_z). 2026-10-13: neutral (+$0, t 0.0); solo worst heat -$76k -> -$62k.
 hold_budget_min_ticks = 0     # FLAT BY THE BELL: no passive hold this close to the end (use with close_hold_ticks=0,

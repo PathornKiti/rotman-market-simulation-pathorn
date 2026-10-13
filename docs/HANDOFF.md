@@ -1,3 +1,38 @@
+# Handoff: state at the end of 2026-10-13 (START HERE; older notes below are history)
+
+**Nothing committed.** All work is uncommitted on `main` (ask before commit/push); Windows needs it pulled.
+177 tests pass (`PYTHONPATH=src .venv/bin/python -m pytest -q`). Details + every A/B table: docs/RESEARCH.md
+(sections dated 2026-10-13 evening/night, newest first).
+
+**Root cause of losing unwinds = TREND (confirmed).** 3 practice heats with profile F_root_cause + `ritc record`
+(logs/record-20261013-*.jsonl): 10-tick momentum r 0.46 (t 8.5), variance ratio 1.5-2.4; hold tests (no trading
+30 s) moved our way 5/6 -> not "holder drift", not our impact. Resting unwind gets stuck when a run goes against
+the block. Book also predicts: depth asymmetry (cost to cross 25k ask - bid) t 7.6, OFI t 4.2 beyond it.
+
+**New defaults (config/liability.toml), each tested design 1-24 + holdout 101-124 (scratchpad ab.py harness):**
+- `trend_learn/trend_exec`, `trend_cross_cost 0.05`: learn r live (prior 0.46), SPRINT = cross when expected run
+  against block > cost. Measured-trend sim +$16k design / +$9.8k holdout (pooled holdout only t 1.2; user chose on).
+- `book_signal`, `book_gate_t 2`: predictor uses depth asymmetry (+ OFI, `book_models="ofi"`, user chose on) once
+  the heat's own t >= 2 (real heats: tick 50-110). Pooled +$1.3k (t 2.9) / +$0.6k (t 2.1).
+- `initial_sprint_ticks 3`, `initial_sprint_gate "crowded"`: race the crowd at block start only when rivals are
+  detected. +$3.6k (t 5.7) / +$2.2k (t 4.8); rival markets +$1-17k, solo $0. Fixes the weak rival case.
+Rejected/off: crossing more (hold_risk_budget), liquidity_aware valuation, reduce_in_windows (strict-fine risk
+-$18k), auction_skip_side=any, netting_credit (profile D only), live_cross_cost, trend_value, ungated OW start,
+holder_drift_learn, stall_and_trend.
+
+**Tooling added:** sim knobs mm_inv, edge_sd/edge_mu, hold_drift, kyle_fill_tilt, book_tilt; stress groups
+`real2`, `trend` (scenario names have no commas); `ritc calibrate` ROOT-CAUSE TEST; `execution.hold_test_ticks`
+experiment (profile F_root_cause); SPRINT log lines explain each cross. Profiles: D_solo_netting, F_root_cause.
+
+**Next:** (1) commit + push after user OK, pull on Windows; (2) practice heats with the DEFAULT bot (no
+--profile; `rotate` would pick D/F) + `python -m ritc record`; check SPRINT lines fire on real adverse runs and the
+crowd race fires only with other teams; (3) `ritc calibrate logs/record-*.jsonl` pooled to keep the trend/book
+evidence growing. User goal: >= $50k every heat in solo and competitor markets (solo practice heats made $42-57k).
+Unresolved: docs/practice_logs/*.txt show as deleted in git (not by Claude); `ritc record` time & sales came back
+empty (trades/tick 0).
+
+---
+
 # Handoff: state at the end of 2026-10-12 (start the next session here)
 
 **Update 2026-10-12 (review session):** PR #5 (`liability-fresh-unwind`) is merged into `main`; local `main` was

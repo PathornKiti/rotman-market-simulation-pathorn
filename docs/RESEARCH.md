@@ -692,6 +692,69 @@ real-world + hostile            1,597    1,537      -60  -1.0       -959
 pooled 432 heats: +41/heat t 1.81;  failing rule: []
 ```
 
+## The pasted "quant optimisation" passage, tested (2026-10-13 night): OFI kept as an option, race-the-crowd adopted
+
+Claims checked on the 3 recordings / simulator. Wrong for this case: "strict random walk" (momentum r 0.46, t 8.5),
+"forbidden to hold / flat at 420 s" (the brief closes open positions at the last price), blocks "up to 25k" (tenders
+50-60k; 25k is the max order), Stoikov micro-price (< half a tick, ~$0.005, vs $0.20-0.55 tender edges).
+
+| idea | evidence | verdict |
+|---|---|---|
+| Order Flow Imbalance (Cont-Kukanov-Stoikov, from top-of-book snapshots) | real: beyond run + asymmetry r +0.21 (t 4.2; every heat t 2.3-2.5); R2 0.32 -> 0.40. Leave-one-heat-out sprint backtest $/heat: momentum 8.5k, + asym 15.4k, + OFI 20.7k, OFI + asym 23.1k. Sim OFI has no extra information (r -0.05), so the sim can only show no harm: `book_models = "ofi"` vs "asym" -$74/heat (t -1.2) | option `book_models = "ofi"` (live gate t >= 2; replayed on the recordings the OFI model opens at tick 60-110) |
+| exponentially weighted multi-level imbalance | real: beyond run + asymmetry t 0.6-1.9 | not added (the asymmetry already is it) |
+| Obizhaeva-Wang initial trade (`initial_sprint_ticks`, cross the first ticks of a block) | always on: rival markets +$8k..+$23k (t 2.4-5.4), solo -$13k..-$28k (t -2.5..-6.7). Gated on the crowd learner (`initial_sprint_gate = "crowded"`): design 1-24 +$3.6k (t 5.7), holdout 101-124 +$2.2k (t 4.8), rival markets +$1.2k..+$16.9k, solo exactly $0 | **adopted** (3 ticks, crowded) |
+| Hawkes processes, VAR-FNN, Stoikov Markov micro-price | ~120 ten-second windows a heat | not tried (would overfit) |
+
+## Liquidity measures and the thin-side signal (2026-10-13 night): book_signal adopted
+
+Which measurement predicts what hurts the unwind, beyond momentum (3 recordings, 360 non-overlapping 10-tick windows,
+others' orders only)? Direction of the next 10 ticks after momentum: depth asymmetry = cost to cross 25k on the ask
+minus the bid side r +0.37 (t 7.6; every heat t 3.2-5.4, every stock t 2.7-5.6), depth imbalance within 10c +0.33,
+top-of-book imbalance +0.18; total depth / spread ~0. Size of the next move: total depth r -0.32 (t -6.3; thin third
+5.1 sigma vs deep 2.0), book slope +0.26. Absorption (our blocks' shares/s) is a symptom of the trend, known only after
+a block. Joint fit in $: next = 0.40 x last 10-tick run + 0.67 x asymmetry (t 8.5 / 8.5), R2 0.37 vs 0.24.
+
+Simulator: `book_tilt` (market makers thin the side the price moves through, with kyle z) + depth 2.5: stress
+scenarios "trend + thin side" (+ strong, + rivals).
+
+| variant (vs default momentum sprint) | design 1-24 pooled | thin-side markets | random walk | holdout 101-124 pooled |
+|---|---|---|---|---|
+| `book_signal` (prior 0.40/0.67, n 20) | +$0.5k (t 0.7) | +$3.2k..+$7.8k | -$5.2k (t -4.0) | - |
+| `live_cross_cost` | -$0.4k (t -1.2) | -$1.2k..-$2.2k | +$0.2k | - |
+| `book_signal` + `book_gate_t` 2 | +$1.3k (t 2.9) | +$3.2k..+$8.3k | $0 | +$0.6k (t 2.1), +$1.1k..+$5.5k |
+| `book_gate_t` 3 | +$0.6k (t 1.7) | | | |
+
+Adopted: `book_signal = true`, `book_gate_t = 2.0`. Replayed on the 3 real recordings the gate opens at tick 90 / 110 / 50.
+
+## Root cause confirmed: TREND (2026-10-13 evening) and the trend fix (profile G_trend, not default yet)
+
+Three practice heats with profile F_root_cause and `ritc record` (NLV $42k / $53k / $57k):
+
+| | heat 1 | heat 2 | heat 3 | pooled |
+|---|---|---|---|---|
+| momentum while flat, r (10 ticks -> next 10) | 0.46 (t 5.0) | 0.48 (t 5.5) | 0.38 (t 3.6) | 0.46 (t 8.5) |
+| variance ratio, all stocks | 1.5-2.2 | 1.5-2.4 | 1.6-2.0 | > 1.4 in 9/9 |
+| move against a block at 0-10 / 30+ ticks | -0.07 / +0.13 | -0.03 / +0.02 | -0.08 / +0.12 | -0.07 / +0.10 (t 3.6) |
+| hold tests (30 s, no trading) | -0.04, -0.11 | -0.14, +0.05 | -0.09, -0.15 | 5 of 6 moved our way |
+
+HOLDER is ruled out, INVENTORY unsupported: the price runs in 10-30 s trends whoever holds what, and a resting
+unwind is stuck exactly when a run goes against it.
+
+**Simulator**: stress group `trend`; "trend (measured)" = kyle 0.97 / phi 0.985 / sd 0.7, vol 0.6 (r 0.46, VR 1.91,
+sigma $0.023) with `kyle_fill_tilt = 3` (nobody trades on our side against the run; tilt 1 left the bot unharmed).
+
+**Fix** (`trend_learn`, `trend_exec`, `trend_cross_cost`): learn r live (prior 0.46, weight 20 pairs) and cross while
+r x the last 10-tick run against the block >= the cost of crossing. Paired, 24 seeds:
+
+| variant | design 1-24 pooled | measured trend | random walk | holdout 101-124 pooled | measured trend | rivals |
+|---|---|---|---|---|---|---|
+| cross $0.03 | +$6.9k (t 3.9) | +$16.6k (t 3.1) | -$2.9k (t -3.3) | +$0.6k (t 0.5) | +$8.7k (t 2.0) | -$1.3k |
+| cross $0.05 | +$5.8k (t 3.9) | +$16.3k (t 3.2) | -$0.6k (t -1.5) | +$1.2k (t 1.2) | +$9.8k (t 2.5) | -$3.1k |
+| + `trend_value` | +$6.1k (t 3.3) | +$18.7k | -$3.5k | - | - | - |
+
+Passes the testing rule in the market the real server is (measured trend: design and holdout, worst heat -$50k ->
+$0 on the holdout), fails it pooled over all markets on the holdout. Profile G_trend; default pending real heats.
+
 ## Root cause of the losing unwinds (2026-10-13 late): not settled yet; a test that settles it
 
 Three explanations fit the solo logs' block summaries and need different fixes:

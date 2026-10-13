@@ -59,23 +59,45 @@ SCENARIOS: dict[str, tuple[str, float, bool, int, str]] = {
     # max 1.65, median block 74 s, made/raw 0.43. "rivals + trends" = the same tenders with other desks.
     "solo market maker":         ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99,"
                                   "mm_inv=5e-6", 0, False, 4, "real2"),
-    "solo MM, strict windows":   ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99,"
+    "solo MM strict windows":   ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99,"
                                   "mm_inv=5e-6,strict_fr=1", 0, False, 4, "real2"),
     # The mechanism the regressions on the solo logs point to (2026-10-13): the mid drifts against whoever HOLDS
     # a block (+$0.15 / 30 s, t 3.2; 0.000 with no holder), not against what we trade. 0.007 alone: $27k/heat,
     # adverse +0.30, made/raw 0.35 (real $23k, +0.29, 0.33).
-    "solo, drift vs holder":     ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,hold_drift=0.007", 0,
+    "solo drift vs holder":     ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,hold_drift=0.007", 0,
                                   False, 4, "real2"),
-    "solo, holder drift+trends": ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,hold_drift=0.005,"
+    "solo holder drift+trends": ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,hold_drift=0.005,"
                                   "kyle=0.5,kyle_phi=0.97", 0, False, 4, "real2"),
     "rivals + holder drift":     ("real=1,late_award=1,edge_sd=0.24,anchor=1,hold_drift=0.005", 1, False, 4, "real2"),
-    "solo MM, trends only":      ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99",
+    "solo MM trends only":      ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99",
                                   0, False, 4, "real2"),
-    "solo MM, inventory only":   ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,mm_inv=6e-6", 0, False, 4,
+    "solo MM inventory only":   ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,mm_inv=6e-6", 0, False, 4,
                                   "real2"),
     "rivals + trends":           ("real=1,late_award=1,edge_sd=0.24,anchor=1,kyle=0.5,kyle_phi=0.97", 1, False, 4,
                                   "real2"),
-    "rivals, calm":              ("real=1,late_award=1,edge_sd=0.24,anchor=1", 1, False, 4, "real2"),
+    "rivals calm":              ("real=1,late_award=1,edge_sd=0.24,anchor=1", 1, False, 4, "real2"),
+    # ---- ROOT CAUSE (2026-10-13 18:37, F_root_cause heat + recorder): the price TRENDS on its own (10-tick momentum
+    # r +0.46, t 5.0, variance ratio 1.5-2.2 while we held nothing); holding untouched did not cost. Calibrated
+    # (trend_calib): r 0.46, VR 1.91, sigma $0.023/tick. kyle_fill_tilt: nobody trades on our side against the run.
+    "trend (measured)":          ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.7,kyle_fill_tilt=3", 0, False, 4, "trend"),
+    "trend strong + thin":       ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.9,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.9,kyle_fill_tilt=5,flow=0.4", 0, False, 4, "trend"),
+    "trend half strength":       ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.6,kyle_phi=0.97,"
+                                  "kyle_fill_tilt=3", 0, False, 4, "trend"),
+    "trend + rivals":            ("real=1,late_award=1,edge_sd=0.24,anchor=1,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.7,kyle_fill_tilt=3", 1, False, 4, "trend"),
+    # Thin-side signal (same recordings): the cost to cross 25k on the ask minus the bid side predicts the next 10
+    # ticks beyond momentum (0.40 x run + 0.67 x asymmetry, R2 0.37 vs 0.24). book_tilt 1.2 with depth 2.5 (real
+    # books are ~3x deeper than the old sim) gives the same gain over momentum.
+    "trend + thin side":         ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.7,kyle_fill_tilt=3,depth=2.5,book_tilt=1.2", 0, False, 4, "trend"),
+    "trend + thin side strong": ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.9,kyle=0.97,"
+                                  "kyle_phi=0.985,kyle_sd=0.9,kyle_fill_tilt=5,flow=0.4,depth=1.5,book_tilt=1.2", 0,
+                                  False, 4, "trend"),
+    "trend + thin side + rivals": ("real=1,late_award=1,edge_sd=0.24,anchor=1,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                   "kyle_sd=0.7,kyle_fill_tilt=3,depth=2.5,book_tilt=1.2", 1, False, 4, "trend"),
+    "no trend (random walk)":    ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6", 0, False, 4, "trend"),
     "real-world + hostile":      ("maker_fee=1,spread=0.02,close_slip=0.03,bell=0.10,flow=0.6,anchor=1", 1, True, 2,
                                   "gap"),
 }

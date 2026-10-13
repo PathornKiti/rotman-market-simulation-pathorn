@@ -24,6 +24,8 @@
                                       # `python -m ritc record` next to it. Drift with zero fills = holding moves the
                                       # price; ~0 = our fills or trends did (RESEARCH.md "Root cause").
 
+# [G_trend] trend_learn + trend_exec (cross $0.05): DEFAULT since 2026-10-13, so A_default runs it.
+
 # Only after evidence (RUNBOOK section 6): add them here and they join the rotation.
 # [D_trend]                           # if `ritc practice` shows variance ratio > 1.2 in most heats
 # "strategy.crowd_robust" = true

@@ -206,6 +206,13 @@ class Market:
         # mm_inv=L (liability): SOLO MARKET (practice 2026-10-13, only us + the house market maker): every share
         # we trade, resting or crossing, lands in the market maker's inventory and it skews its quotes, so the
         # mid moves L $ per share against us, permanently (a 50k block at 6e-6 = $0.30).
+        # kyle_fill_tilt=F (with kyle): OUR resting orders get the touch's flow x max(0, 1 + F z) (F=1: the same tilt
+        # as everyone's). Root-cause heat 2026-10-13: when the run is against a block nobody trades on our side
+        # (CROC sold 5k of 54k in 60 s while falling), which F=1 does not reproduce; the price process is unchanged.
+        # book_tilt=B (with kyle): the market makers thin the side the price is about to move through: bids x
+        # max(0.15, 1 + B z), asks x max(0.15, 1 - B z), z = the persistent flow imbalance. Root-cause recordings
+        # 2026-10-13: the cost to cross 25k on the ask minus the bid side predicts the next 10 ticks beyond
+        # momentum (next = 0.40 x last 10 + 0.67 x asymmetry, t 8.5 / 8.5, R2 0.37 vs 0.24).
         # hold_drift=D (liability): the price drifts D $/tick AGAINST whoever holds a position (ours), scaled by
         # min(1, |position| / hold_drift_size). Solo practice 2026-10-13: while we held a block the mid moved $0.15 per
         # 30 s against us (t 3.2) whatever we traded; when nobody held (48 lost auctions) it moved 0.000.
@@ -216,7 +223,8 @@ class Market:
                        "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0, "real": 0.0,
                        "reserve_lo": 0.0, "reserve_hi": 0.15, "late_award": 0.0,
                        "kyle": 0.0, "kyle_phi": 0.9, "kyle_sd": 0.5, "mm_inv": 0.0,
-                       "edge_mu": 0.21, "edge_sd": 0.0, "hold_drift": 0.0, "hold_drift_size": 30000.0}
+                       "edge_mu": 0.21, "edge_sd": 0.0, "hold_drift": 0.0, "hold_drift_size": 30000.0,
+                       "kyle_fill_tilt": 1.0, "book_tilt": 0.0}
         for kv in filter(None, (os.environ.get("RITC_STRESS") or "").split(",")):
             k, _, v = kv.partition("=")
             self.stress[k.strip()] = float(v)
@@ -347,9 +355,16 @@ class Market:
                 self._kyle_step(kyle)
             if self.hostile:
                 self._adversary()
+            tilt = self.stress["book_tilt"] if self.case == "liability" and kyle else 0.0
             for s in self.secs.values():
                 s.last = s.mid
                 s.rebuild(self.rng)
+                if tilt:
+                    z = self.state.get("kyle_z", {}).get(s.ticker, 0.0)
+                    for lv in s.bids:
+                        lv[1] = max(1, int(lv[1] * max(0.15, 1 + tilt * z)))
+                    for lv in s.asks:
+                        lv[1] = max(1, int(lv[1] * max(0.15, 1 - tilt * z)))
                 s.hist.append({"period": self.period, "tick": self.tick, "open": s.mid, "high": s.mid,
                                "low": s.mid, "close": round(s.mid, 4)})
             if self.hostile:
@@ -898,6 +913,11 @@ class Market:
                 key = (o["ticker"], o["action"])
                 if key not in flow:
                     flow[key] = self._flow(*key)
+                    f = self.stress["kyle_fill_tilt"]
+                    if f != 1.0 and self.case == "liability" and self.stress["kyle"]:
+                        z = self.state.get("kyle_z", {}).get(o["ticker"], 0.0)
+                        z = z if o["action"] == "SELL" else -z       # + = the run is toward our resting order
+                        flow[key] = int(flow[key] * max(0.0, 1 + f * z) / max(1e-9, 1 + z))
                 if self.ahead.get(oid):            # queue mode: the shares in front trade first
                     eat = min(flow[key], self.ahead[oid])
                     self.ahead[oid] -= eat

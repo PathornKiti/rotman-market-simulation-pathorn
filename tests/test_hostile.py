@@ -316,3 +316,91 @@ def test_hold_test_freezes_a_fresh_block_then_logs_the_move_against_it():
     assert s.hold_test_log[0]["against"] == 0.2 and s.hold_test_log[0]["ticks"] == 30
     s.maybe_hold_test("X", 1, 50_000, True, book, snap(50, 25.0, 0), 50)
     assert not s.hold_tests                                         # at most hold_test_max per heat
+
+
+def test_trend_learner_starts_at_the_prior_and_learns_this_heats_momentum():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]},
+           "strategy": {"trend_learn": True, "trend_value": True, "trend_prior_r": 0.46, "trend_prior_n": 20}}
+
+    def run(moves: list[float]) -> LiabilityStrategy:
+        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        mid = 25.0
+        for k, dm in enumerate(moves):
+            mid += dm
+            s._update_drift(Snapshot({"tick": k + 1, "period": 1, "ticks_per_period": 2000},
+                                     {"X": {"bid": mid - 0.01, "ask": mid + 0.01}}))
+        return s
+
+    assert abs(run([]).trend_r() - 0.46) < 1e-9               # nothing seen yet: the measured prior
+    # 10-tick runs that alternate direction: momentum is negative, so the learned r falls toward 0
+    zigzag = run([0.01 if (k // 10) % 2 else -0.01 for k in range(1200)])
+    assert zigzag.trend_r() < 0.05
+    # persistent runs of 40 ticks: positive momentum, stays high
+    runs = run([0.01 if (k // 40) % 2 else -0.01 for k in range(1200)])
+    assert runs.trend_r() > 0.4
+    # the last 10 ticks rose: against a short (+), for a long (-); the valuation charges / credits it
+    assert runs.run_against("X", -1) > 0 > runs.run_against("X", 1)
+    assert runs.trend_cost("X", -1) > 0 and runs.trend_cost("X", 1) == -runs.trend_cost("X", -1)
+
+
+def test_sprint_crosses_the_whole_block_at_once_within_participation():
+    from conftest import make_book
+    from ritc.core.algo import AlgoParams, BlockExecutor
+
+    book = make_book([(24.99, 20000), (24.98, 20000)], [(25.01, 20000), (25.02, 20000)])
+    algo = BlockExecutor(Executor(None), AlgoParams(urgent_participation=0.35))
+    algo.work("X", 50_000, 0, now=0, deadline=60)
+    algo.passive = {"X"}
+    assert all(c.passive for c in algo._kids("X", algo.blocks["X"], book, 50_000, 1))
+    algo.sprint = {"X"}
+    kids = algo._kids("X", algo.blocks["X"], book, 50_000, 1)
+    assert any(not c.passive and c.action == "SELL" and 0 < c.qty <= 0.35 * 40_000 for c in kids)
+
+
+def test_book_signal_reads_the_thin_side_and_learns_its_weight():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy, cross_cost
+
+    thin_asks = OrderBook("X", [Level(24.99, 30000)], [Level(25.01, 5000), Level(25.10, 30000)])
+    assert abs(cross_cost(thin_asks, "SELL", 25000) - 0.01) < 1e-9          # bids absorb 25k at the touch
+    assert cross_cost(thin_asks, "BUY", 25000) > 0.07                       # asks: 5k at the touch, the rest 9c out
+    assert cross_cost(thin_asks, "BUY", 100000) == 0.30                     # cannot fill: capped
+
+    cfg = {"case": {"tickers": ["X"]}, "strategy": {"book_signal": True, "book_prior_n": 20}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    a, b = s.book_beta()
+    assert abs(a - 0.40) < 1e-9 and abs(b - 0.67) < 1e-9                    # the real fit until data arrives
+    snap = Snapshot({"tick": 1, "period": 1, "ticks_per_period": 420}, {"X": {"bid": 24.99, "ask": 25.01}})
+    snap._books["X"] = thin_asks
+    s.mid_hist["X"] = [25.0] * 11
+    # asks thin -> the price should rise: against a short, for a long
+    assert s.predicted_against("X", -50_000, snap) > 0 > s.predicted_against("X", 50_000, snap)
+    # windows where the asymmetry never predicted anything: its weight shrinks toward 0
+    s.sig_xx[1][1], s.sig_n = 400 * 0.00631, 400
+    assert s.book_beta()[1] < 0.05
+
+
+def test_start_sprint_races_only_when_a_crowd_is_detected():
+    from conftest import make_book
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]}, "strategy": {"trend_exec": True, "crowd_learn": True},
+           "execution": {"initial_sprint_ticks": 3, "initial_sprint_gate": "crowded", "hold_risk_budget": 0}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    s.tickers = ["X"]
+    s.ex.dry_run = True
+    snap = Snapshot({"tick": 5, "period": 1, "ticks_per_period": 420},
+                    {"X": {"bid": 24.99, "ask": 25.01, "position": 50_000}})
+    snap._books["X"] = make_book([(24.99, 20000)], [(25.01, 20000)])
+    s.unwind_block(snap)
+    assert "X" in s.algo.blocks and "X" not in s.algo.sprint          # no crowd seen: rest as usual
+    s.crowded = lambda: True
+    s.unwind_block(snap)
+    assert "X" in s.algo.sprint                                       # crowd: cross the block's first ticks

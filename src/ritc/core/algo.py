@@ -194,6 +194,7 @@ class BlockExecutor:
         self.blocks: dict[str, Block] = {}
         self.passive_from: int | None = None     # abs tick from which nothing crosses (hold to the bell)
         self.passive: set[str] = set()           # tickers that only rest this loop (risk within budget)
+        self.sprint: set[str] = set()            # tickers to cross now (a trend runs against the block)
 
     def work(self, ticker: str, position: int, target: int, now: int, deadline: int,
              limit_price: float | None = None, kappa: float = 0.0) -> Block:
@@ -215,12 +216,7 @@ class BlockExecutor:
                 log.info("BLOCK done %s", b)
                 self.cancel(t)
                 continue
-            sched = schedule_position(b.start_pos, b.target, b.start_tick, b.deadline, now, self.p.front_load,
-                                      b.kappa)
-            kids = plan_children(books[t], pos, sched, b.target, b.deadline - now,
-                                 self.ex.max_size(t), self.p, b.limit_price,
-                                 passive_only=t in self.passive or (self.passive_from is not None
-                                                                     and now >= self.passive_from))
+            kids = self._kids(t, b, books[t], pos, now)
             passive = {c.action: c for c in kids if c.passive}
             for c in kids:
                 if not c.passive:
@@ -302,6 +298,10 @@ class BlockExecutor:
 
     def _kids(self, t: str, b: Block, book: OrderBook, pos: int, now: int) -> list[Child]:
         sched = schedule_position(b.start_pos, b.target, b.start_tick, b.deadline, now, self.p.front_load, b.kappa)
+        if t in self.sprint:
+            # SPRINT (trend against the block): treat the block as due now; the urgent branch crosses at most
+            # urgent_participation x the depth within max_slippage per loop, whatever the schedule says.
+            return plan_children(book, pos, b.target, b.target, 0, self.ex.max_size(t), self.p, b.limit_price)
         return plan_children(book, pos, sched, b.target, b.deadline - now, self.ex.max_size(t), self.p,
                              b.limit_price, passive_only=t in self.passive or (self.passive_from is not None
                                                                                 and now >= self.passive_from))

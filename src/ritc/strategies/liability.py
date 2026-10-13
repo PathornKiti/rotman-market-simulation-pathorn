@@ -231,6 +231,35 @@ def evaluate_tender(
     return TenderDecision(ok, round(bid, 2), pps, vwap_unwind, f"competitive bid {bid:.2f}, profit/share {pps:+.4f}")
 
 
+def solve_linear(a: list[list[float]], v: list[float]) -> list[float] | None:
+    """Solve a x = v (Gauss-Jordan, tiny systems); None if singular."""
+    k = len(v)
+    a, v = [row[:] for row in a], v[:]
+    for c in range(k):
+        if abs(a[c][c]) < 1e-15:
+            return None
+        piv = a[c][c]
+        a[c] = [x / piv for x in a[c]]
+        v[c] /= piv
+        for r in range(k):
+            if r != c:
+                f = a[r][c]
+                a[r] = [x - f * y for x, y in zip(a[r], a[c])]
+                v[r] -= f * v[c]
+    return v
+
+
+def cross_cost(book: OrderBook, action: str, qty: int, cap: float = 0.30) -> float:
+    """$/share vs the mid to cross `qty` now (BUY lifts asks, SELL hits bids); `cap` if the book cannot take it."""
+    mid = book.mid
+    if not mid or qty <= 0:
+        return cap
+    f = book.walk(action, qty)
+    if not f.complete:
+        return cap
+    return (f.vwap - mid) if action.upper() == "BUY" else (mid - f.vwap)
+
+
 def hold_within_budget(qty: int, price_vol_per_tick: float, ticks_left: int, budget: float) -> bool:
     """
     Holding `qty` to the bell risks |qty| x sigma x sqrt(ticks left) (1 sd, $). Under a random walk, with
@@ -324,6 +353,19 @@ class LiabilityStrategy(Strategy):
         self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
         self.absorb: dict[str, float] = {}       # ticker -> learned shares/tick of our own unwinds
         self.exec_cost: float | None = None       # learned $/share an unwind costs vs the mid at acceptance
+        self.mid_hist: dict[str, list[float]] = {}   # TREND: one mid per tick per stock (last 60)
+        # BOOK SIGNAL: features (run, asym, ofi) at the last window per stock, and the sums of x x', x y, y y, n over
+        # (features at a window start -> the next window's move), every stock pooled
+        self.sig_prev: dict[str, tuple[float, ...]] = {}
+        self.sig_xx = [[0.0] * 3 for _ in range(3)]
+        self.sig_xy = [0.0] * 3
+        self.sig_yy = 0.0
+        self.sig_n = 0
+        self.ofi_tick: dict[str, list[float]] = {}   # OFI: Cont-Kukanov-Stoikov events summed per tick (last 60)
+        self.ofi_last: dict[str, tuple[float, int, float, int]] = {}   # previous top of book (bid, size, ask, size)
+        self.ofi_seen: dict[str, int] = {}
+        self.l1_scale: dict[str, float] = {}         # EWMA of the top-of-book size (bid + ask), to scale OFI
+        self.mom = [0, 0.0, 0.0, 0.0]                  # TREND: n, sum ab, sum aa, sum bb of (last 10, next 10) moves
         self.hold_tests: dict[str, dict] = {}     # HOLD TEST (practice): ticker -> window being held untouched
         self.hold_tests_done = 0
         self.hold_test_log: list[dict] = []
@@ -403,6 +445,27 @@ class LiabilityStrategy(Strategy):
                     self.hold_stats[1] += x
                     self.hold_stats[2] += x * x
             self.last_mid[t] = m
+            h = self.mid_hist.setdefault(t, [])
+            h.append(m)
+            del h[:-60]
+            w = int(self.p.get("trend_window", 10))
+            if len(h) > 2 * w and snap.tick % w == 0:       # non-overlapping (previous w, next w) pairs
+                a, b = h[-1 - w] - h[-1 - 2 * w], h[-1] - h[-1 - w]
+                self.mom[0] += 1
+                self.mom[1] += a * b
+                self.mom[2] += a * a
+                self.mom[3] += b * b
+            if len(h) > w and snap.tick % w == 0 and self.p.get("book_signal", False):
+                run = h[-1] - h[-1 - w]
+                if t in self.sig_prev:                       # the previous window's features -> this window's move
+                    x = self.sig_prev[t]
+                    for i in range(3):
+                        self.sig_xy[i] += x[i] * run
+                        for j in range(3):
+                            self.sig_xx[i][j] += x[i] * x[j]
+                    self.sig_yy += run * run
+                    self.sig_n += 1
+                self.sig_prev[t] = self.features(t, snap)
         self.last_pos = dict(snap.positions)
         if self.liq_model in ("flow", "auctions", "adaptive"):
             self._update_liquidity(snap)
@@ -515,6 +578,161 @@ class LiabilityStrategy(Strategy):
         n = int(self.p.get("adaptive_min_obs", 3))
         return self.crowd_learn and self.crowd.n >= n and self.crowd.mean < self.crowd.sd
 
+    def trend_r(self) -> float:
+        """
+        TREND (root cause, practice 2026-10-13 18:37): the mid's move over the last `trend_window` ticks predicts the
+        next one (r +0.46, t 5.0, variance ratio 1.5-2.2, while we held nothing). Learned live from this heat's own
+        prices (every stock, non-overlapping pairs), shrunk to the prior `trend_prior_r` with weight `trend_prior_n`
+        pairs, so a random-walk market drifts it to ~0 within the heat. 0 when `trend_learn` is off.
+        """
+        if not self.p.get("trend_learn", False):
+            return 0.0
+        n, sab, saa, sbb = self.mom
+        r = sab / (saa * sbb) ** 0.5 if n >= 3 and saa > 0 and sbb > 0 else 0.0
+        n0, r0 = float(self.p.get("trend_prior_n", 20)), float(self.p.get("trend_prior_r", 0.46))
+        return max(0.0, (n * r + n0 * r0) / (n + n0))
+
+    def run_against(self, ticker: str, held: int) -> float:
+        """$ the mid moved over the last `trend_window` ticks AGAINST a position of sign `held` (+ = against)."""
+        h, w = self.mid_hist.get(ticker, []), int(self.p.get("trend_window", 10))
+        if len(h) <= w or not held:
+            return 0.0
+        return (-1 if held > 0 else 1) * (h[-1] - h[-1 - w])
+
+    def book_asym(self, ticker: str, snap: Snapshot) -> float:
+        """
+        DEPTH ASYMMETRY ($): cost to cross `book_signal_shares` on the ask side minus the bid side (others' orders).
+        + = the asks are thin, so the price is likely to rise through them. Root-cause recordings 2026-10-13: after
+        momentum it predicts the next 10 ticks with r +0.37 (t 7.6), in every heat and stock.
+        """
+        b = snap.book(ticker)
+        n = int(self.p.get("book_signal_shares", 25000))
+        return cross_cost(b, "BUY", n) - cross_cost(b, "SELL", n)
+
+    def _update_ofi(self, snap: Snapshot) -> None:
+        """
+        ORDER FLOW IMBALANCE (Cont, Kukanov & Stoikov 2014) from consecutive top-of-book snapshots, others' orders only:
+        e = q_bid 1{bid >= old} - old q_bid 1{bid <= old} - q_ask 1{ask <= old} + old q_ask 1{ask >= old}. Summed per
+        tick; scaled by an EWMA of the top-of-book size. Root-cause recordings 2026-10-13: OFI over the last 10 ticks
+        predicts the next 10 beyond run + depth asymmetry (r +0.21, t 4.2; every heat t 2.3-2.5).
+        """
+        if not self.p.get("book_signal", False):
+            return
+        for t in self.tickers:
+            b = snap.book(t)
+            if not b.bids or not b.asks:
+                continue
+            cur = (b.bids[0].price, b.bids[0].quantity, b.asks[0].price, b.asks[0].quantity)
+            ticks = self.ofi_tick.setdefault(t, [])
+            if self.ofi_seen.get(t) != snap.abs_tick:
+                ticks.append(0.0)
+                del ticks[:-60]
+                self.ofi_seen[t] = snap.abs_tick
+                sc = self.l1_scale.get(t)
+                self.l1_scale[t] = cur[1] + cur[3] if sc is None else 0.95 * sc + 0.05 * (cur[1] + cur[3])
+            old = self.ofi_last.get(t)
+            if old:
+                pb, qb, pa, qa = cur
+                ob, oqb, oa, oqa = old
+                ticks[-1] += ((qb if pb >= ob else 0) - (oqb if pb <= ob else 0)
+                              - (qa if pa <= oa else 0) + (oqa if pa >= oa else 0))
+            self.ofi_last[t] = cur
+
+    def ofi(self, ticker: str) -> float:
+        """OFI over the last `trend_window` ticks / the stock's typical top-of-book size (+ = buying pressure)."""
+        w = int(self.p.get("trend_window", 10))
+        return sum(self.ofi_tick.get(ticker, [])[-w:]) / max(1.0, self.l1_scale.get(ticker, 1.0))
+
+    def features(self, ticker: str, snap: Snapshot) -> tuple[float, float, float]:
+        """(last run $, depth asymmetry $, OFI) now, the book signal's inputs."""
+        h, w = self.mid_hist.get(ticker, []), int(self.p.get("trend_window", 10))
+        return (h[-1] - h[-1 - w] if len(h) > w else 0.0), self.book_asym(ticker, snap), self.ofi(ticker)
+
+    # models tried richest first; priors = the 3 recorded heats' fits ($ next 10-tick move per unit of each feature)
+    BOOK_MODELS = (((2, 1), (0.0171, 0.6718)), ((0, 1), (0.40, 0.67)))
+    FEATURE_VAR = (0.01715, 0.00631, 12.95)          # E[x^2] of run, asym, ofi in the recordings (prior weights)
+
+    def _solve(self, idx: tuple[int, ...], prior: tuple[float, ...] | None) -> list[float] | None:
+        """OLS of the next run on features `idx` (no intercept); with `prior`, shrunk to it with book_prior_n
+        pseudo-windows of the recorded feature variances."""
+        n0 = float(self.p.get("book_prior_n", 20)) if prior else 0.0
+        a = [[self.sig_xx[i][j] + (n0 * self.FEATURE_VAR[i] if i == j else 0.0) for j in idx] for i in idx]
+        v = [self.sig_xy[i] + (n0 * self.FEATURE_VAR[i] * prior[m] if prior else 0.0) for m, i in enumerate(idx)]
+        return solve_linear(a, v)
+
+    def _t_stats(self, idx: tuple[int, ...]) -> list[float] | None:
+        """t of each OLS weight from this heat's windows alone (>= 10 windows)."""
+        beta = self._solve(idx, None)
+        if beta is None or self.sig_n < 10:
+            return None
+        rss = self.sig_yy - sum(b * self.sig_xy[i] for b, i in zip(beta, idx))
+        s2 = max(rss, 1e-12) / max(1, self.sig_n - len(idx))
+        xx = [[self.sig_xx[i][j] for j in idx] for i in idx]
+        out = []
+        for m in range(len(idx)):                            # diagonal of (X'X)^-1
+            inv = solve_linear(xx, [1.0 if r == m else 0.0 for r in range(len(idx))])
+            if inv is None:
+                return None
+            out.append(beta[m] / max(s2 * inv[m], 1e-18) ** 0.5)
+        return out
+
+    def book_model(self) -> tuple[tuple[int, ...], list[float]] | None:
+        """
+        The richest book model THIS heat supports: OFI + depth asymmetry, else run + depth asymmetry, each used only
+        once every book feature in it has a positive live t >= `book_gate_t` (>= 10 windows); None = momentum only.
+        `book_models = "ofi"` tries the OFI model first; "asym" (default) skips it. Real leave-one-heat-out backtest
+        (2026-10-13), $/heat of 10k sprint decisions: momentum 8.5k, + asymmetry 15.4k, + OFI 20.7k, OFI + asym 23.1k.
+        """
+        if not self.p.get("book_signal", False):
+            return None
+        g = float(self.p.get("book_gate_t", 0))
+        models = self.BOOK_MODELS if self.p.get("book_models", "asym") == "ofi" else self.BOOK_MODELS[1:]
+        for idx, prior in models:
+            if g > 0:
+                ts = self._t_stats(idx)
+                if ts is None or any(ts[m] < g for m, i in enumerate(idx) if i != 0):
+                    continue
+            beta = self._solve(idx, prior)
+            if beta is not None:
+                return idx, [max(0.0, b) for b in beta]
+        return None
+
+    def book_beta(self) -> tuple[float, float]:
+        """(a, b) of the run + asymmetry model, shrunk to the real fit (kept for reports and tests)."""
+        beta = self._solve((0, 1), self.BOOK_MODELS[1][1]) or list(self.BOOK_MODELS[1][1])
+        return max(0.0, beta[0]), max(0.0, beta[1])
+
+    def book_signal_on(self) -> bool:
+        return self.book_model() is not None
+
+    def predicted_against(self, ticker: str, held: int, snap: Snapshot) -> float:
+        """$ the next window is expected to move against a position of sign `held` (book model or momentum)."""
+        if not held:
+            return 0.0
+        m = self.book_model()
+        if m is not None:
+            idx, beta = m
+            x = self.features(ticker, snap)
+            return (-1 if held > 0 else 1) * sum(b * x[i] for b, i in zip(beta, idx))
+        return self.trend_r() * self.run_against(ticker, held)
+
+    def cross_threshold(self, ticker: str, held: int, snap: Snapshot) -> float:
+        """$ / share a sprint must save: `live_cross_cost` = what crossing the next slice costs in the book now plus
+        the fee (deep book: cheap, thin book: dear); otherwise the fixed `trend_cross_cost`."""
+        if not self.cfg.get("execution", {}).get("live_cross_cost", False):
+            return float(self.p.get("trend_cross_cost", 0.03))
+        n = min(abs(held), int(self.cfg.get("execution", {}).get("live_cross_shares", 10000)))
+        return max(0.01, cross_cost(snap.book(ticker), "SELL" if held > 0 else "BUY", n)
+                   + float(self.fees.get(ticker, 0.02)))
+
+    def trend_cost(self, ticker: str, held: int) -> float:
+        """Expected further move against a position of sign `held` over the next window: r x the last run
+        (negative = a credit, the run is in our favour), capped at +-`trend_value_cap`."""
+        if not self.p.get("trend_value", False):
+            return 0.0
+        cap = float(self.p.get("trend_value_cap", 0.15))
+        return max(-cap, min(cap, self.trend_r() * self.run_against(ticker, held)))
+
     def holder_drift(self) -> float:
         """
         HOLDER DRIFT ($/tick), learned live (`holder_drift_learn`). Solo practice 2026-10-13: while we held a block the
@@ -578,6 +796,7 @@ class LiabilityStrategy(Strategy):
 
     def step(self, snap: Snapshot) -> None:
         self.sync_tickers(snap)
+        self._update_ofi(snap)
         self._update_drift(snap)
         self._watch_auctions(snap)
         self.handle_tenders(snap)
@@ -765,7 +984,8 @@ class LiabilityStrategy(Strategy):
             price_vol_per_tick=self.price_vol(ticker, snap),
             risk_aversion=self.p.get("risk_aversion", 0.0),
             crowd_cost=((self.crowd_cost(int(t.get("quantity", 0))) if crowd else 0.0)
-                        + self.holder_cost(ticker, int(t.get("quantity", 0)))),
+                        + self.holder_cost(ticker, int(t.get("quantity", 0)))
+                        + self.trend_cost(ticker, 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1)),
             close_hold_ticks=(self.close_hold if self.p.get("hold_valuation", False) and not self.holder_drift()
                               else 0),     # holding to the bell is not free once holding has a drift
             flow_rate=(self.flow(ticker, "SELL" if str(t.get("action", "BUY")).upper() == "BUY" else "BUY")
@@ -1140,6 +1360,36 @@ class LiabilityStrategy(Strategy):
                                  if hold_within_budget(snap.positions.get(t, 0) - self.algo.blocks[t].target,
                                                        self.price_vol(t, snap), snap.ticks_left, self.hold_budget)
                                  and not ((stuck(t) and trending(t)) if both else (stuck(t) or trending(t)))}
+        # SPRINT: cross while the expected further move against the block beats the cost of crossing; rest again
+        # once it is under half of that (no flapping on the threshold).
+        sprint: set[str] = set()
+        if self.p.get("trend_exec", False):
+            for t, b in self.algo.blocks.items():
+                held = snap.positions.get(t, 0) - b.target
+                c = self.cross_threshold(t, held, snap)
+                if held and self.predicted_against(t, held, snap) >= (c / 2 if t in self.algo.sprint else c):
+                    sprint.add(t)
+        first = int(self.cfg.get("execution", {}).get("initial_sprint_ticks", 0))
+        gate = self.cfg.get("execution", {}).get("initial_sprint_gate", "always")
+        if first and (gate == "always" or (gate == "crowded" and self.crowded())
+                      or (gate == "leaning" and self.crowd_learn and self.crowd.n >= 2
+                          and (self.crowd.mean or 0.0) > (self.crowd.sd or 0.0))):
+            # OBIZHAEVA-WANG start (2026-10-13): cross the first ticks of every block, then the usual unwind. Always:
+            # rival markets +$8k..+$23k (t 2.4-5.4), solo markets -$13k..-$23k. `initial_sprint_gate` "crowded" (the
+            # learned crowd impact > 2 sd) / "leaning" (> 1 sd): race only when other desks dump the same blocks.
+            sprint |= {t for t, b in self.algo.blocks.items() if now - b.start_tick < first}
+        for t in sprint - self.algo.sprint:
+            log.info("SPRINT %s: next %s ticks expected %+.3f against our %+d block (run %+.3f, book asym %+.3f), "
+                     "crossing costs %.3f: crossing", t, self.p.get("trend_window", 10),
+                     self.predicted_against(t, snap.positions.get(t, 0), snap), snap.positions.get(t, 0),
+                     self.run_against(t, snap.positions.get(t, 0)),
+                     self.book_asym(t, snap) if self.book_signal_on() else 0.0,
+                     self.cross_threshold(t, snap.positions.get(t, 0), snap))
+        for t in self.algo.sprint - sprint:
+            if t in self.algo.blocks:
+                log.info("SPRINT %s off: resting again", t)
+        self.algo.sprint = sprint
+        self.algo.passive -= self.algo.sprint
         if self.algo.active and self.fresh_unwind and not self.ex.dry_run:
             def refresh():
                 orders = self.client.orders("OPEN")         # orders FIRST, then positions (see step_fresh)
