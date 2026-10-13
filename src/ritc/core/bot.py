@@ -231,6 +231,7 @@ class Runner:
         self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
         self._tick_ms = 0.0
         self._trader_t, self._trader_last, self._trader_n = 0.0, None, 0
+        self._final_nlv_stale = False
         self.pnl_every = 30                  # ticks between PNL log lines
         self._pnl_tick, self._pnl_last, self._last_snap = -1, None, None
         self._slow: list[float] = []          # slow loops since the last summary warning
@@ -443,11 +444,20 @@ class Runner:
                 nlv = self.client.trader().get("nlv")
             except RITError:
                 nlv = None
+            self._final_nlv_stale = nlv is None and self._last_snap is not None
+            if self._final_nlv_stale:
+                nlv = self._last_snap.nlv            # the server already closed the case: last NLV we saw
             if nlv is not None:
                 last = self._last_snap
                 per = ("  |  " + "  ".join(f"{t} {last.stock_pnl(t):+,.0f}" for t in last.securities
                                             if last.stock_pnl(t) or last.positions.get(t))) if last else ""
-                log.info("HEAT RESULT: NLV %s%s", f"{float(nlv):,.0f}", per)
+                log.info("HEAT RESULT: NLV %s%s%s", f"{float(nlv):,.0f}", per,
+                         "  (last NLV seen before the server closed the case)" if self._final_nlv_stale else "")
+            if hasattr(self.s, "write_report") and self.journal.path is not None:
+                self.s.write_report(str(self.journal.path).rsplit(".", 1)[0] + ".summary.json", nlv,
+                                    {"p50": self.latency.pct(0.5), "p95": self.latency.pct(0.95),
+                                     "max": self.latency.pct(1.0), "loops": self.loops,
+                                     "throttled_429": getattr(self.client, "throttled", 0)})
             self.journal.write("end", nlv=nlv, loops=self.loops, p50=self.latency.pct(0.5),
                                p95=self.latency.pct(0.95), max=self.latency.pct(1.0),
                                tca=[{"ticker": t, "style": st_, "qty": a.qty, "cost": a.cost}

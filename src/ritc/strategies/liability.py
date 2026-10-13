@@ -318,6 +318,8 @@ class LiabilityStrategy(Strategy):
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
         self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
+        self.block_info: dict[str, dict] = {}   # ticker -> how its current block started (BLOCK DONE stats)
+        self.blocks_done: list[dict] = []
         self.ledger: dict[int, dict] = {}        # tender id -> what we took, expected $, realized $, auction won
         self.block_tids: dict[str, list[int]] = {}   # ticker -> tenders in its current block
         self.auction_watch: dict[int, list] = {}  # auction id -> [ticker, sign, qty, expiry tick, position before]
@@ -723,6 +725,51 @@ class LiabilityStrategy(Strategy):
         net_after = sum(positions.values()) + sign * int(t.get("quantity", 0))
         return abs(net_after) <= int(self.p.get("auction_max_net", 10**9))
 
+    def _block_done(self, t: str, snap: Snapshot, made: float, exp: float, tids: list) -> None:
+        """
+        BLOCK DONE: how the unwind went, for analysis (practice: slow absorption and adverse moves came together).
+        secs and shares/s absorbed; mid move over the unwind (+ = in our favour); shares rested vs crossed and their
+        average price vs the mid when each order went out (+ = earned).
+        """
+        info = self.block_info.pop(t, None)
+        if not info:
+            return
+        secs = max(1, snap.abs_tick - info["start"])
+        sign = 1 if info["side"] == "SELL" else -1         # SELL unwind: a rising mid is in our favour
+        m0, m1 = info["mid0"], snap.mid(t)
+        move = sign * (m1 - m0) if m0 and m1 else 0.0
+        fills = [f for f in self.ex.tca.fills[info["fill0"]:] if f.ticker == t]
+        rest = sum(f.qty for f in fills if f.style == "passive")
+        cross = sum(f.qty for f in fills if f.style != "passive")
+        edge = (sum(-f.shortfall * f.qty for f in fills) / max(1, rest + cross)) if fills else 0.0
+        rec = {"ticker": t, "side": info["side"], "qty": info["qty"], "secs": secs,
+               "rate": round(info["qty"] / secs), "mid_move": round(move, 3), "rested": rest, "crossed": cross,
+               "fill_edge": round(edge, 4), "made": round(made), "expected": round(exp), "tenders": tids,
+               "start_tick": info["start"], "vol": round(self.price_vol(t, snap), 4)}
+        self.blocks_done.append(rec)
+        self.ex.journal.write("block_done", **rec)
+        log.info("BLOCK DONE %s %s %dk in %d s (%s sh/s) | mid %+.2f our way | rested %s crossed %s "
+                 "(fills %+.3f vs mid) | made %s vs expected %s", t, info["side"], info["qty"] // 1000, secs,
+                 f"{rec['rate']:,}", move, f"{rest:,}", f"{cross:,}", edge, f"{made:+,.0f}", f"{exp:+,.0f}")
+
+    def write_report(self, path: str | None, nlv: float | None, latency: dict) -> None:
+        """Machine-readable summary of the heat next to the log (<log>.summary.json), for `ritc practice`."""
+        if not path:
+            return
+        import json
+        doc = {"nlv": nlv, "latency_ms": latency, "profile": self.p.get("profile"),
+               "settings": {k: self.p.get(k) for k in ("liquidity_model", "crowd_robust", "auction_skip_adding",
+                                                       "min_profit_per_share", "decide_late_ticks")},
+               "tenders": {str(k): v for k, v in self.ledger.items()}, "blocks": self.blocks_done,
+               "crowd": {"mean": self.crowd.mean, "sd": self.crowd.sd, "n": self.crowd.n, "crowded": self.crowded()},
+               "seen": len(self.seen), "taken": len(self.taken)}
+        try:
+            with open(path, "w") as f:
+                json.dump(doc, f, indent=1, default=str)
+            log.info("heat summary written: %s", path)
+        except OSError as exc:
+            log.warning("could not write %s: %s", path, exc)
+
     def _watch_auctions(self, snap: Snapshot) -> None:
         """
         AUCTION RESULT in the log: RIT books an award at the window's close and says nothing else, so compare the
@@ -740,8 +787,9 @@ class LiabilityStrategy(Strategy):
                 e = self.ledger.get(tid)
                 if e is not None:
                     e["won"] = won
-                log.info("AUCTION #%s %s %s %dk at %s: %s", tid, "BUY" if sign > 0 else "SELL", ticker, qty // 1000,
-                         e["price"] if e else "?", "WON" if won else "lost")
+                log.info("AUCTION #%s %s %s %dk at %s (%s from the mid when bid): %s", tid,
+                         "BUY" if sign > 0 else "SELL", ticker, qty // 1000, e["price"] if e else "?",
+                         f"{e.get('vs_mid', 0):.2f}" if e else "?", "WON" if won else "lost")
                 del self.auction_watch[tid]
                 if (not won and self.crowd_learn and self.p.get("crowd_learn_lost_auctions", False)
                         and snap.mid(ticker) is not None):
@@ -812,9 +860,14 @@ class LiabilityStrategy(Strategy):
             if not d.accept and self.wait_for_room(t, d, snap):
                 continue          # room frees up as other blocks unwind / pending auction bids resolve: re-check
             self.seen.add(tid)
-            log.info("TENDER %s %s %s x%s @ %s -> %s (%s)%s", tid, t.get("action"), ticker,
-                     t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline", d.reason,
-                     f" ~ ${d.profit_per_share * float(t.get('quantity') or 0):,.0f} expected" if d.accept else "")
+            log.info("TENDER %s %s %s x%s @ %s -> %s (%s)%s  [mid %s spread %s vol %.3f/s pos %+d%s]", tid,
+                     t.get("action"), ticker, t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline",
+                     d.reason,
+                     f" ~ ${d.profit_per_share * float(t.get('quantity') or 0):,.0f} expected" if d.accept else "",
+                     f"{book.mid:.2f}" if book.mid else "?",
+                     f"{book.best_ask - book.best_bid:.2f}" if book.best_ask and book.best_bid else "?",
+                     self.price_vol(ticker, snap), positions.get(ticker, 0),
+                     " crowd ON" if self.crowded() else "")
             if d.accept and ticker not in self.pnl_base:
                 self.pnl_base[ticker] = (snap.stock_pnl(ticker), tid)     # BLOCK P&L is measured from here
             self.ex.journal.write("tender_decision", tid=tid, accept=d.accept, price=d.price, pps=d.profit_per_share,
@@ -842,6 +895,9 @@ class LiabilityStrategy(Strategy):
                                         "expected": d.profit_per_share * int(t["quantity"]), "realized": None,
                                         "won": None if not fixed else True}
                     self.block_tids.setdefault(ticker, []).append(tid)
+                    if not fixed and book.mid and d.price is not None:
+                        # how far from the mid our bid sat, in our favour
+                        self.ledger[tid]["vs_mid"] = round(sign * (book.mid - d.price), 3)
                     if not fixed:
                         self.auction_watch[tid] = [ticker, sign, int(t["quantity"]),
                                                    now + max(0, int(t.get("expires", snap.tick)) - snap.tick), None]
@@ -884,7 +940,7 @@ class LiabilityStrategy(Strategy):
             if pos == target:
                 if b:
                     self.algo.cancel(t)
-                if b and pos == 0 and t in self.pnl_base and t in snap.securities:
+                if pos == 0 and t in self.pnl_base and t in snap.securities and (b or t in self.block_info):
                     base, tid = self.pnl_base.pop(t)
                     made = snap.stock_pnl(t) - base
                     tids = [x for x in self.block_tids.pop(t, [tid]) if self.ledger.get(x, {}).get("won") is not False]
@@ -895,6 +951,7 @@ class LiabilityStrategy(Strategy):
                             self.ledger[x]["realized"] = made * (e / exp if exp else 1 / len(tids))
                     log.info("BLOCK P&L %s: %s since tender %s was accepted (flat now; expected %s)", t,
                              f"{made:+,.0f}", " + ".join(f"#{x}" for x in tids), f"{exp:+,.0f}")
+                    self._block_done(t, snap, made, exp, tids)
                 continue
             # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
             if (b is None or b.target != target or (pos > 0) != (b.start_pos > 0)
@@ -905,6 +962,11 @@ class LiabilityStrategy(Strategy):
                     kappa = ac_kappa(self.price_vol(t, snap), book_eta(snap.book(t), "bid" if pos > 0 else "ask"),
                                      self.ac_lambda)
                 self.algo.work(t, pos, target, now, min(now + self.unwind_horizon(), period_end), kappa=kappa)
+                if t not in self.block_info:
+                    self.block_info[t] = {"start": now, "mid0": snap.mid(t), "qty": abs(pos - target),
+                                          "side": "SELL" if pos > target else "BUY", "fill0": len(self.ex.tca.fills)}
+                else:
+                    self.block_info[t]["qty"] = max(self.block_info[t]["qty"], abs(pos - target))
         if self.stuck_window:
             for t in list(self.unwind_hist):
                 if t not in self.algo.blocks:
