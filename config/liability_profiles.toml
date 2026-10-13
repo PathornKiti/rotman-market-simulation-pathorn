@@ -15,6 +15,15 @@
 "strategy.crowd_robust" = true        # free (real heats: the limit bound once in five heats; auctions are the
 "strategy.liquidity_model" = "auctions"   # biggest pool we do not win)
 
+[D_solo_netting]                       # solo practice server (no other teams): the part of a tender that offsets our
+"strategy.netting_credit" = true      # open block is credited the unwind cost it saves (learned per heat), off once a
+"strategy.netting_gate" = "crowded"   # crowd shows. Sim: solo +$3.4k/heat (t 1.1), rivals -$0.1k..-2.5k (RESEARCH.md)
+
+[F_root_cause]                         # ROOT-CAUSE EXPERIMENT (practice only, 2026-10-13): after the first 2 fixed tenders
+"execution.hold_test_ticks" = 30      # in a flat stock, do NOT trade that block for 30 s (HOLD TEST DONE lines). Run
+                                      # `python -m ritc record` next to it. Drift with zero fills = holding moves the
+                                      # price; ~0 = our fills or trends did (RESEARCH.md "Root cause").
+
 # Only after evidence (RUNBOOK section 6): add them here and they join the rotation.
 # [D_trend]                           # if `ritc practice` shows variance ratio > 1.2 in most heats
 # "strategy.crowd_robust" = true

@@ -296,6 +296,16 @@ def cmd_calibrate(a: argparse.Namespace) -> int:
                 pooled.setdefault(key, []).extend(y)
         print(f"\nPOOLED crowd event study over {len(reps)} recordings (decide on these, not on one heat):")
         print_crowd(summarise_crowd(pooled))
+        from .recorder import print_root_cause, root_cause_verdict
+        rc: dict = {"flat": [], "hold": [], "age": {"0-10": [], "10-30": [], "30+": []}}
+        for rep in reps:
+            raw = rep.get("root_cause_raw") or {}
+            for k in ("flat", "hold"):
+                rc[k] += raw.get(k, [])
+            for k in rc["age"]:
+                rc["age"][k] += raw.get("age", {}).get(k, [])
+        print(f"\nPOOLED over {len(reps)} recordings:")
+        print_root_cause(root_cause_verdict(rc))
     return 0
 
 

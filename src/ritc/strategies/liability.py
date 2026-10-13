@@ -135,6 +135,7 @@ def evaluate_tender(
     close_hold_ticks: int = 0,
     flow_rate: float = 0.0,
     drift_symmetric: bool = False,
+    offset_credit: float = 0.0,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -144,6 +145,8 @@ def evaluate_tender(
     `flow_rate` > 0 (FORWARD LIQUIDITY, shares/tick the market trades on our unwind side): we unwind by resting
     at the touch, so the exit is the touch we rest at, and the time it takes is to_unwind / flow_rate (the risk
     premium and drift grow with it). 0 = the old static model: walk the visible book x `refill_factor`.
+    `offset_credit` ($/share): what unwinding the position we already hold is expected to cost; the part of the
+    tender that offsets that position saves it, so that part is worth this much more (NETTING).
     """
     action = str(tender.get("action", "BUY")).upper()
     qty = int(tender.get("quantity", 0))
@@ -199,6 +202,7 @@ def evaluate_tender(
     drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     drift_cost += crowd_cost             # learned: how far the price runs against tenders' unwinds
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
+    fees -= offset_credit * offset / qty  # NETTING: the offset part spares our open block its unwind cost
 
     # Close to the bell the exit is the case's own close-out at the last traded price (~mid): no fee,
     # no book to walk, only the price risk of holding to the end. Value it that way when it is better.
@@ -319,6 +323,12 @@ class LiabilityStrategy(Strategy):
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
         self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
         self.absorb: dict[str, float] = {}       # ticker -> learned shares/tick of our own unwinds
+        self.exec_cost: float | None = None       # learned $/share an unwind costs vs the mid at acceptance
+        self.hold_tests: dict[str, dict] = {}     # HOLD TEST (practice): ticker -> window being held untouched
+        self.hold_tests_done = 0
+        self.hold_test_log: list[dict] = []
+        self.hold_stats = [0, 0.0, 0.0]          # HOLDER DRIFT: n, sum, sum of squares of the mid's 1-tick move against
+        self.last_pos: dict[str, int] = {}        # the position we held over that tick
         self.block_info: dict[str, dict] = {}   # ticker -> how its current block started (BLOCK DONE stats)
         self.blocks_done: list[dict] = []
         self.ledger: dict[int, dict] = {}        # tender id -> what we took, expected $, realized $, auction won
@@ -386,7 +396,14 @@ class LiabilityStrategy(Strategy):
             self.garch[t].add_price(m)
             if t in self.last_mid:
                 self.drift[t].update(m - self.last_mid[t])
+                q = self.last_pos.get(t, 0)
+                if q:
+                    x = (-1 if q > 0 else 1) * (m - self.last_mid[t])     # + = the mid moved against what we held
+                    self.hold_stats[0] += 1
+                    self.hold_stats[1] += x
+                    self.hold_stats[2] += x * x
             self.last_mid[t] = m
+        self.last_pos = dict(snap.positions)
         if self.liq_model in ("flow", "auctions", "adaptive"):
             self._update_liquidity(snap)
         if snap.tick % 60 == 0:      # practice check: compare with `calibrate`'s measured sigma/tick per stock
@@ -498,6 +515,45 @@ class LiabilityStrategy(Strategy):
         n = int(self.p.get("adaptive_min_obs", 3))
         return self.crowd_learn and self.crowd.n >= n and self.crowd.mean < self.crowd.sd
 
+    def holder_drift(self) -> float:
+        """
+        HOLDER DRIFT ($/tick), learned live (`holder_drift_learn`). Solo practice 2026-10-13: while we held a block the
+        mid moved $0.15 per 30 s against it (t 3.2) whatever we traded, and 0.000 while nobody held; that made holding,
+        not trading, the cost, and the random-walk logic (hold, rest, never cross) the wrong one. Mean 1-tick move
+        against our position over every tick we held anything; 0 until it is `holder_z` standard errors above zero
+        over at least `holder_min_ticks` ticks, so a random-walk market never switches it on.
+        """
+        if not self.p.get("holder_drift_learn", False):
+            return 0.0
+        n, sm, sq = self.hold_stats
+        if n < int(self.p.get("holder_min_ticks", 20)):
+            return 0.0
+        mean = sm / n
+        sd = max((sq / n - mean * mean), 1e-12) ** 0.5
+        if mean <= float(self.p.get("holder_z", 2.5)) * sd / n ** 0.5:
+            return 0.0
+        return min(mean, float(self.p.get("holder_cap", 0.03)))
+
+    def holder_cost(self, ticker: str, qty: int) -> float:
+        """$/share the holder drift costs a new block: drift x half the ticks it takes to unwind (linear unwind)."""
+        d = self.holder_drift()
+        return d * self.unwind_horizon(ticker, qty) / 2 if d and qty else 0.0
+
+    def netting_credit(self) -> float:
+        """`netting_credit`: $/share credited to the part of a tender that offsets our open block. `netting_gate`: only
+        while no rival desk has shown (solo market: +$4.2k/heat; with rivals the same credit cost $5-7k/heat)."""
+        if not self.p.get("netting_credit", False):
+            return 0.0
+        gate = self.p.get("netting_gate", False)
+        if (gate == "crowded" and self.crowded()) or (gate is True and not self.no_crowd_seen()):
+            return 0.0
+        return self.unwind_cost_ps()
+
+    def unwind_cost_ps(self) -> float:
+        """Learned $/share our unwinds cost vs the mid at acceptance (prior `netting_prior`; solo practice 0.21)."""
+        v = self.exec_cost if self.exec_cost is not None else float(self.p.get("netting_prior", 0.15))
+        return min(max(v, 0.0), float(self.p.get("netting_cap", 0.40)))
+
     def absorption(self, ticker: str) -> float:
         """Shares/tick our own unwinds of this stock achieved: EWMA over finished blocks, from the practice prior."""
         prior = float(self.liq_prior.get(ticker, self.p.get("liq_default", 2000)))
@@ -516,6 +572,8 @@ class LiabilityStrategy(Strategy):
             h = int(min(max(qty / self.absorption(ticker), ex.get("horizon_min_ticks", 15)),
                         ex.get("horizon_max_ticks", 90)))
         fast = int(ex.get("crowd_horizon_ticks", 0))
+        if self.holder_drift():
+            h = min(h, int(self.p.get("holder_horizon_ticks", 20)))     # holding costs: race it
         return min(h, fast) if fast and self.crowded() else h
 
     def step(self, snap: Snapshot) -> None:
@@ -523,11 +581,55 @@ class LiabilityStrategy(Strategy):
         self._update_drift(snap)
         self._watch_auctions(snap)
         self.handle_tenders(snap)
-        self.frozen = self.undecided(snap) if self.p.get("respect_windows", False) else set()
+        self.frozen = self.frozen_now(snap)
         for t in self.frozen:
             if t in self.algo.blocks:
                 self.algo.cancel(t)                  # pull resting orders: a fill now is front-running
         self.unwind(snap)
+
+    def maybe_hold_test(self, ticker: str, sign: int, qty: int, fixed: bool, book, snap: Snapshot, now: int) -> None:
+        """
+        HOLD TEST (practice only, `execution.hold_test_ticks` > 0): after a fixed tender in a stock we held none of,
+        do not trade it at all for that many ticks, then unwind as usual. Root-cause experiment (2026-10-13): with
+        zero fills, a drift against us means HOLDING moves the price; none means it was our own fills (the market
+        maker's inventory) or chance. At most `hold_test_max` per heat; logs one HOLD TEST line each.
+        """
+        ex = self.cfg.get("execution", {})
+        n = int(ex.get("hold_test_ticks", 0))
+        if (not n or not fixed or snap.positions.get(ticker, 0) or ticker in self.hold_tests
+                or self.hold_tests_done >= int(ex.get("hold_test_max", 2)) or snap.ticks_left < n + 60 or not book.mid):
+            return
+        self.hold_tests[ticker] = {"until": now + n, "start": now, "mid0": book.mid, "sign": sign, "qty": qty}
+        self.hold_tests_done += 1
+        log.info("HOLD TEST %s: holding %+d for %d ticks with no trading (mid %.2f)", ticker, sign * qty, n, book.mid)
+
+    def _end_hold_tests(self, snap: Snapshot) -> set[str]:
+        """Tickers still in a hold test (frozen); log each test that ends."""
+        now = snap.abs_tick
+        for t, h in list(self.hold_tests.items()):
+            if now < h["until"]:
+                continue
+            m = snap.mid(t)
+            if m:
+                move = -h["sign"] * (m - h["mid0"])          # + = against what we held
+                rec = {"ticker": t, "ticks": now - h["start"], "qty": h["qty"], "against": round(move, 3),
+                       "position": snap.positions.get(t, 0), "vol": round(self.price_vol(t, snap), 4)}
+                self.hold_test_log.append(rec)
+                self.ex.journal.write("hold_test", **rec)
+                log.info("HOLD TEST DONE %s: held %+d for %d ticks, no trading: mid moved %+.3f AGAINST us "
+                         "(1 sd of noise over that time ~%.3f)", t, snap.positions.get(t, 0), rec["ticks"], move,
+                         rec["vol"] * rec["ticks"] ** 0.5)
+            del self.hold_tests[t]
+        return set(self.hold_tests)
+
+    def frozen_now(self, snap: Snapshot) -> set[str]:
+        """Stocks not to trade this loop (respect_windows). `reduce_in_windows`: the brief says "only trades that REDUCE
+        an existing position from an accepted tender are permitted without penalty", and the unwinder never opens a
+        position, so a stock we still hold keeps unwinding through an open window."""
+        out = self.undecided(snap) if self.p.get("respect_windows", False) else set()
+        if self.p.get("reduce_in_windows", False):
+            out = {t for t in out if not snap.positions.get(t, 0)}
+        return out | (self._end_hold_tests(snap) if self.hold_tests else set())
 
     def undecided(self, snap: Snapshot) -> set[str]:
         """
@@ -627,10 +729,13 @@ class LiabilityStrategy(Strategy):
             # AUCTION FREEZE (practice 2026-10-13, -$15k): an open auction bid freezes its stock for the whole
             # window (front-running rule), so bidding one that would ADD to a block we are still unwinding stops
             # that unwind for ~30 s while the price can run, and a win only makes the block bigger. Skip it.
+            # `auction_skip_side = "any"` (solo heats 2026-10-13: an OPPOSITE-side bid froze a short CRZY block for
+            # 35 s while CRZY ran 11.07 -> 11.46): skip every auction on a stock we are still unwinding.
             sign = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
             pos = positions.get(t.get("ticker"), 0)
-            if sign * pos >= skip:
-                return TenderDecision(False, None, 0.0, 0.0, f"auction would add to our {pos:+d} block")
+            side_any = self.p.get("auction_skip_side", "adding") == "any"
+            if (abs(pos) if side_any else sign * pos) >= skip:
+                return TenderDecision(False, None, 0.0, 0.0, f"auction while we unwind our {pos:+d} block")
         if self.liq_model == "ensemble":
             return self.decide_ensemble(t, snap, positions)
         return self._evaluate(t, snap, positions)
@@ -659,11 +764,14 @@ class LiabilityStrategy(Strategy):
             min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
             price_vol_per_tick=self.price_vol(ticker, snap),
             risk_aversion=self.p.get("risk_aversion", 0.0),
-            crowd_cost=self.crowd_cost(int(t.get("quantity", 0))) if crowd else 0.0,
-            close_hold_ticks=self.close_hold if self.p.get("hold_valuation", False) else 0,
+            crowd_cost=((self.crowd_cost(int(t.get("quantity", 0))) if crowd else 0.0)
+                        + self.holder_cost(ticker, int(t.get("quantity", 0)))),
+            close_hold_ticks=(self.close_hold if self.p.get("hold_valuation", False) and not self.holder_drift()
+                              else 0),     # holding to the bell is not free once holding has a drift
             flow_rate=(self.flow(ticker, "SELL" if str(t.get("action", "BUY")).upper() == "BUY" else "BUY")
                        if use_flow else 0.0),
             drift_symmetric=bool(self.p.get("drift_symmetric", False)),
+            offset_credit=self.netting_credit(),
         )
 
     def scenario_weights(self) -> dict[str, float]:
@@ -767,6 +875,11 @@ class LiabilityStrategy(Strategy):
         self.blocks_done.append(rec)
         a = float(self.p.get("absorb_learn", 0.5))     # learn fast: only a few blocks per stock per heat
         self.absorb[t] = (1 - a) * self.absorption(t) + a * max(100.0, info["qty"] / secs)
+        raw = sum(self.ledger[x].get("vs_mid", 0.0) * self.ledger[x]["qty"] for x in tids if x in self.ledger)
+        if raw and info["qty"]:
+            # what this unwind cost per share vs the mid when its tenders were accepted (raw edge - made)
+            c = float(self.p.get("netting_learn", 0.3))
+            self.exec_cost = (1 - c) * self.unwind_cost_ps() + c * (raw - made) / info["qty"]
         self.ex.journal.write("block_done", **rec)
         log.info("BLOCK DONE %s %s %dk in %d s (%s sh/s) | mid %+.2f our way | rested %s crossed %s "
                  "(fills %+.3f vs mid) | made %s vs expected %s", t, info["side"], info["qty"] // 1000, secs,
@@ -781,6 +894,7 @@ class LiabilityStrategy(Strategy):
                "settings": {k: self.p.get(k) for k in ("liquidity_model", "crowd_robust", "auction_skip_adding",
                                                        "min_profit_per_share", "decide_late_ticks")},
                "tenders": {str(k): v for k, v in self.ledger.items()}, "blocks": self.blocks_done,
+               "hold_tests": self.hold_test_log,
                "crowd": {"mean": self.crowd.mean, "sd": self.crowd.sd, "n": self.crowd.n, "crowded": self.crowded()},
                "seen": len(self.seen), "taken": len(self.taken)}
         try:
@@ -910,13 +1024,14 @@ class LiabilityStrategy(Strategy):
                     self.taken.add(tid)
                     sign = 1 if str(t.get("action")).upper() == "BUY" else -1
                     fixed = bool(t.get("is_fixed_bid", True))
+                    self.maybe_hold_test(ticker, sign, int(t["quantity"]), fixed, book, snap, now)
                     self.ledger[tid] = {"ticker": ticker, "side": t.get("action"), "qty": int(t["quantity"]),
                                         "kind": "fixed" if fixed else "auction", "price": d.price,
                                         "expected": d.profit_per_share * int(t["quantity"]), "realized": None,
                                         "won": None if not fixed else True}
                     self.block_tids.setdefault(ticker, []).append(tid)
-                    if not fixed and book.mid and d.price is not None:
-                        # how far from the mid our bid sat, in our favour
+                    if book.mid and d.price is not None:
+                        # how far from the mid the tender price / our bid sat, in our favour
                         self.ledger[tid]["vs_mid"] = round(sign * (book.mid - d.price), 3)
                     if not fixed:
                         self.auction_watch[tid] = [ticker, sign, int(t["quantity"]),
@@ -1003,15 +1118,28 @@ class LiabilityStrategy(Strategy):
                     h.append((now, rem))
                 del h[:-(self.stuck_window + 20)]
         trend_z = float(self.cfg.get("execution", {}).get("trend_unwind_z", 0.0))
-        if self.hold_budget and snap.ticks_left <= self.hold_until:
+        if self.holder_drift():
+            # Holding is what costs (holder drift): no passive hold, no hold to the bell; cross to the schedule.
+            self.algo.passive = set()
+            self.algo.passive_from = None
+        elif self.hold_budget and snap.ticks_left <= self.hold_until:
             self.algo.passive = set()              # flat by the bell: the schedule crosses what is left
         elif self.hold_budget:
+            # STALL-AND-RUN (`stall_and_trend`, solo heats 2026-10-13): every big real loss was a block whose resting
+            # side stopped filling WHILE the price ran against it; leave the passive hold only when both hold.
+            both = bool(self.cfg.get("execution", {}).get("stall_and_trend", False))
+
+            def stuck(t: str) -> bool:
+                return bool(self.stuck_window) and unwind_stuck(self.unwind_hist.get(t, []), now, self.stuck_window,
+                                                                self.stuck_horizon)
+
+            def trending(t: str) -> bool:
+                return bool(trend_z) and self.trend_against(t, snap.positions.get(t, 0), snap) >= trend_z
+
             self.algo.passive = {t for t in self.algo.blocks
                                  if hold_within_budget(snap.positions.get(t, 0) - self.algo.blocks[t].target,
                                                        self.price_vol(t, snap), snap.ticks_left, self.hold_budget)
-                                 and not (self.stuck_window and unwind_stuck(self.unwind_hist.get(t, []), now,
-                                                                             self.stuck_window, self.stuck_horizon))
-                                 and not (trend_z and self.trend_against(t, snap.positions.get(t, 0), snap) >= trend_z)}
+                                 and not ((stuck(t) and trending(t)) if both else (stuck(t) or trending(t)))}
         if self.algo.active and self.fresh_unwind and not self.ex.dry_run:
             def refresh():
                 orders = self.client.orders("OPEN")         # orders FIRST, then positions (see step_fresh)
@@ -1044,7 +1172,7 @@ class LiabilityStrategy(Strategy):
         self.sync_tickers(snap)
         if self.close_hold:
             # Hold to the bell: keep resting at the touch, never cross; the case closes the rest at the last price.
-            self.frozen = self.undecided(snap) if self.p.get("respect_windows", False) else set()
+            self.frozen = self.frozen_now(snap)
             for t in self.frozen:
                 if t in self.algo.blocks:
                     self.algo.cancel(t)

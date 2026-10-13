@@ -205,10 +205,95 @@ def calibrate(path: str) -> dict:
     rep["fills"] = {tk: fill_model(rows, by_tick, ticks, tk) for tk in tickers}
     rep["flow"] = {tk: flow_persistence(rows, by_tick, ticks, tk) for tk in tickers}
     rep["crowd_excluded_own"] = sorted(booked)
+    rep["root_cause_raw"] = root_cause_samples(by_tick, ticks, tickers, me)
+    rep["root_cause"] = root_cause_verdict(rep["root_cause_raw"])
     fin = rows[-1]["trader"]
     rep["final_nlv"] = fin.get("nlv")
     rep["limits"] = rows[-1]["limits"]
     return rep
+
+
+def _others_mid(by_tick: dict, k: int, tk: str, me=None) -> float | None:
+    """Mid of the book WITHOUT our own orders (ours sit at the touch while we unwind and would move it)."""
+    b = by_tick[k]["books"].get(tk) or {}
+    side = {n: [float(r["price"]) for r in b.get(n + "s", b.get(n, [])) if r.get("price") is not None
+                and int(r.get("quantity", 0)) - int(r.get("quantity_filled", 0) or 0) > 0
+                and (me is None or r.get("trader_id") != me)] for n in ("bid", "ask")}
+    return (max(side["bid"]) + min(side["ask"])) / 2 if side["bid"] and side["ask"] else None
+
+
+def root_cause_samples(by_tick: dict, ticks: list[int], tickers: list[str], me=None, w: int = 10) -> dict:
+    """
+    ROOT-CAUSE TEST for the losing unwinds (solo practice 2026-10-13: the mid ran against every block we held).
+    Two explanations look the same in block summaries and need opposite fixes:
+      TREND   the price trends on its own; our resting side stops filling, so we are still holding during trends.
+              Then the price trends while we are FLAT too (momentum: last w ticks predict the next w), and the move
+              against a fresh block is ~0 at first and only shows in blocks that stalled.
+      HOLDER  holding itself is what moves the price. Then there is no momentum while flat, and the move against
+              us starts the moment we hold (age 0-10 ticks) at about the same rate as later.
+      INVENTORY  our own fills move the price (the market maker skews after absorbing them). Looks like HOLDER in
+              this test (validated on the simulator, 7 heats each): only `execution.hold_test_ticks` separates them.
+              Per-tick fill splits and block move vs duration were tried and do not work: resting orders fill
+              when the price comes to them, which biases both.
+    Raw samples (pooled across recordings by `ritc calibrate`): `flat` = (move over the previous w ticks, move over
+    the next w) with our position 0 throughout; `age` buckets = the mid's 1-tick move against the position we held
+    over that tick, by ticks since that position was opened from flat.
+    """
+    out: dict = {"flat": [], "hold": [], "age": {"0-10": [], "10-30": [], "30+": []}}
+    for tk in tickers:
+        mids = {k: _others_mid(by_tick, k, tk, me) for k in ticks}
+        pos = {k: next((int(s.get("position", 0)) for s in by_tick[k]["securities"] if s["ticker"] == tk), 0)
+               for k in ticks}
+        opened = None
+        for k in ticks:
+            q = pos[k]
+            if q == 0:
+                opened = None
+            elif opened is None:
+                opened = k
+            k1 = k + 1
+            if q and k1 in mids and mids[k] is not None and mids[k1] is not None:
+                x = (-1 if q > 0 else 1) * (mids[k1] - mids[k])
+                age = k - opened
+                out["age"]["0-10" if age < 10 else "10-30" if age < 30 else "30+"].append(round(x, 4))
+            a, b, c = k - w, k, k + w
+            if all(j in mids and mids[j] is not None for j in (a, b, c)):
+                if all(pos.get(j, 1) == 0 for j in range(a, c + 1)):
+                    out["flat"].append((round(mids[b] - mids[a], 4), round(mids[c] - mids[b], 4)))
+                elif all(pos.get(j, 0) and (pos[j] > 0) == (q > 0) for j in range(a, c + 1)) and q:
+                    sg = -1 if q > 0 else 1                  # signed so + = against what we hold
+                    out["hold"].append((round(sg * (mids[b] - mids[a]), 4), round(sg * (mids[c] - mids[b]), 4)))
+    return out
+
+
+def root_cause_verdict(raw: dict, w: int = 10) -> dict:
+    """Summary of `root_cause_samples` (one recording or pooled): momentum while flat and while holding (every w-th
+    pair, non-overlapping), and the mean move against us per 30 ticks by position age."""
+    def mom(pairs):
+        pairs = pairs[::w]
+        if len(pairs) < 8:
+            return {"n": len(pairs)}
+        r, t = _corr([a for a, _ in pairs], [b for _, b in pairs])
+        return {"n": len(pairs), "r": round(r, 3), "t": round(t, 1)}
+    ages = {}
+    for k, v in raw["age"].items():
+        if len(v) >= 10:
+            m, sd = st.fmean(v), st.pstdev(v)
+            ages[k] = {"n": len(v), "per_30": round(30 * m, 3), "t": round(m / (sd / len(v) ** 0.5), 1) if sd else 0.0}
+        else:
+            ages[k] = {"n": len(v)}
+    return {"flat_momentum": mom(raw["flat"]), "hold_momentum": mom(raw["hold"]), "against_by_age": ages}
+
+
+def print_root_cause(v: dict) -> None:
+    f, h, a = v["flat_momentum"], v["hold_momentum"], v["against_by_age"]
+    print("\nROOT-CAUSE TEST (why unwinds lose): TREND = momentum while FLAT (r > 0, t >= 2) and little move against a "
+          "fresh block; HOLDER = no momentum while flat and the move against us already there at age 0-10 ticks")
+    print(f"  momentum (last 10 ticks -> next 10) while flat: {f}   while holding: {h}")
+    print("  move against our position, $ per 30 ticks, by ticks since it opened: "
+          + "  ".join(f"{k}: {x}" for k, x in a.items()))
+    print("  HOLDER vs INVENTORY (our own fills) cannot be told apart from a passive unwind: run one heat with "
+          "execution.hold_test_ticks (HOLD TEST lines in the bot log)")
 
 
 def _corr(x: list[float], y: list[float]) -> tuple[float, float]:
@@ -434,6 +519,8 @@ def print_report(rep: dict) -> None:
     for tk, f in rep.get("flow", {}).items():
         print(f"  {tk:<6} n {f['n']:>3}  r {f['flow_next_r']:+.3f} (t {f['flow_next_t']:+.1f})  "
               f"variance ratio {f['variance_ratio']}")
+    if "root_cause" in rep:
+        print_root_cause(rep["root_cause"])
     print("\nbook imbalance -> next mid move (others' orders only; |t| >= 3 on a real recording = a usable signal)")
     for tk, d in rep.get("imbalance", {}).items():
         for h, v in d.items():

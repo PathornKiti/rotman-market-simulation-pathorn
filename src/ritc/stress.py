@@ -53,6 +53,29 @@ SCENARIOS: dict[str, tuple[str, float, bool, int, str]] = {
     "practice thin + vol spikes": ("real=1,late_award=1,depth=0.4,flow=0.5,vol=2.5", 0, False, 4, "practice"),
     "practice trending flow":    ("real=1,late_award=1,kyle=0.3,kyle_phi=0.9", 0, False, 4, "practice"),
     "practice + rival desks":    ("real=1,late_award=1,anchor=1", 1, False, 4, "practice"),
+    # ---- the 2026-10-13 solo practice heats (only us + the house market maker; 7 heats, logs/): the mid ran
+    # against every unwind (+$0.29/share, t 3.2; lost auctions moved 0.000), slow blocks most; 49 private
+    # tenders 0.21 +- 0.24 vs mid; 0 of 26 auctions won. Calibrated (calib harness): adverse +0.32, sd 0.63,
+    # max 1.65, median block 74 s, made/raw 0.43. "rivals + trends" = the same tenders with other desks.
+    "solo market maker":         ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99,"
+                                  "mm_inv=5e-6", 0, False, 4, "real2"),
+    "solo MM, strict windows":   ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99,"
+                                  "mm_inv=5e-6,strict_fr=1", 0, False, 4, "real2"),
+    # The mechanism the regressions on the solo logs point to (2026-10-13): the mid drifts against whoever HOLDS
+    # a block (+$0.15 / 30 s, t 3.2; 0.000 with no holder), not against what we trade. 0.007 alone: $27k/heat,
+    # adverse +0.30, made/raw 0.35 (real $23k, +0.29, 0.33).
+    "solo, drift vs holder":     ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,hold_drift=0.007", 0,
+                                  False, 4, "real2"),
+    "solo, holder drift+trends": ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,hold_drift=0.005,"
+                                  "kyle=0.5,kyle_phi=0.97", 0, False, 4, "real2"),
+    "rivals + holder drift":     ("real=1,late_award=1,edge_sd=0.24,anchor=1,hold_drift=0.005", 1, False, 4, "real2"),
+    "solo MM, trends only":      ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,kyle=0.8,kyle_phi=0.99",
+                                  0, False, 4, "real2"),
+    "solo MM, inventory only":   ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,flow=0.4,mm_inv=6e-6", 0, False, 4,
+                                  "real2"),
+    "rivals + trends":           ("real=1,late_award=1,edge_sd=0.24,anchor=1,kyle=0.5,kyle_phi=0.97", 1, False, 4,
+                                  "real2"),
+    "rivals, calm":              ("real=1,late_award=1,edge_sd=0.24,anchor=1", 1, False, 4, "real2"),
     "real-world + hostile":      ("maker_fee=1,spread=0.02,close_slip=0.03,bell=0.10,flow=0.6,anchor=1", 1, True, 2,
                                   "gap"),
 }

@@ -692,6 +692,65 @@ real-world + hostile            1,597    1,537      -60  -1.0       -959
 pooled 432 heats: +41/heat t 1.81;  failing rule: []
 ```
 
+## Root cause of the losing unwinds (2026-10-13 late): not settled yet; a test that settles it
+
+Three explanations fit the solo logs' block summaries and need different fixes:
+
+| cause | what it means | fix it calls for |
+|---|---|---|
+| TREND | the price trends on its own; our resting side stops filling, so we are still holding in trends | detect the stall + trend early; acceptance rules |
+| HOLDER | holding a block is what moves the price (time held costs) | race every block, charge time held (`holder_drift_learn`) |
+| INVENTORY | our own fills move the price (the house market maker skews) | charge lambda x Q / 2 in valuation; speed does not help |
+
+Real logs (7 solo heats): while we held, the mid moved +$0.15 per 30 s against us (t 3.2); with no holder 0.000.
+But in the first 10 / 20 / 30 s after accepting a clean block only +0.011 / +0.029 / +0.058 (t 0.8 / 1.3 / 1.8):
+most of the move comes later, in blocks that had stalled, which TREND explains as well as HOLDER. Regressions of
+the move on shares filled are biased (resting orders fill when the price comes to them), so INVENTORY is not ruled
+out either. The fixes tried earlier the same day were judged in simulated worlds without the true cause; that is
+why they all looked worse.
+
+**The test** (validated on the simulator, 7 heats per world):
+- `ritc calibrate` ROOT-CAUSE TEST (run `ritc record` next to the bot): momentum while FLAT separates TREND
+  (r +0.27, t 7.2) from the rest (|t| < 1); the move against a fresh block (age 0-10 ticks) is +0.19 (t 2.4) for
+  HOLDER, +0.13 (t 1.5) for INVENTORY, ~0 for TREND and a random walk.
+- profile `F_root_cause` (`execution.hold_test_ticks = 30`): after the first 2 fixed tenders in a flat stock the bot
+  does not trade the block for 30 s (HOLD TEST DONE lines). Mid move against us with zero fills, ~12 tests:
+  HOLDER +0.245 (t 6.5); INVENTORY +0.038, TREND -0.058, random walk +0.037 (|t| < 1).
+Tried and dropped: per-tick "filled vs only held" split and block move vs duration (both biased / no power).
+
+## Solo practice heats and the five gaps (2026-10-13 evening): new scenarios, nothing adopted as default
+
+**Real data** (7 heats, logs/liability-20261013-*.log, only us + the house market maker). 29 private tenders: raw
+edge vs mid $486k, the bot expected $304k, made $162k (made - raw: -$11.2k/tender, t -3.45). The mid ran against
+every unwind by +$0.29/share (n 27, t 3.19), while 48 lost auctions (nobody traded) moved 0.000. Fast blocks
+(<= 45 s) -$0.09, slow ones +$0.52: the five big losses were all slow blocks. The competitor heats of 2026-10-11/12
+show the same split (PRACTICE_LOGS.md). 49 private tenders: edge vs mid 0.21 +- 0.24. Auctions 0 of 26.
+
+**Simulator** (sim knobs `mm_inv`, `edge_sd`/`edge_mu`; stress group `real2`). The old "practice calibrated"
+market is far too kind: $121k/heat, made/raw 0.90, adverse move +0.004. "solo market maker"
+(`kyle=0.8,kyle_phi=0.99,mm_inv=5e-6,flow=0.4,edge_sd=0.24,reserve_hi=0.08`) reproduces the solo heats: adverse
++0.32 (sd 0.63, max 1.65), median block 74 s, made/raw 0.43, auctions 1/88, $43k/heat. Variants: strict windows,
+trends only, inventory only; and "rivals + trends" / "rivals, calm" (hostile desks on the same tenders).
+
+**A/B, seeds 1-24, 9 scenarios (real2 + practice), paired, pooled n 216-192:**
+
+| gap | change | pooled | where it helps / hurts | verdict |
+|---|---|---|---|---|
+| 1 passive only | `hold_risk_budget` 10000 / 0 (cross more) | -$1.9k (t -2.9) / -$3.0k (t -4.0) | worse everywhere | rejected |
+| 1 | `stall_and_trend` (cross only when stuck AND trending, z 2.5) | +$0 (t 0.0) | solo worst -$76k -> -$62k | off |
+| 2 auction freeze | `reduce_in_windows` | -$2.5k (t -4.3) | strict fines -$18.1k (t -6.2) | rejected (fine risk) |
+| 2 | `auction_skip_side = "any"` | -$0.4k (t -0.9) | solo +$0.7k, rivals -$0.8k..-1.9k | off |
+| 3 valuation | `liquidity_aware`, `risk_aversion` 0.8 / 1.5 | -$3.1k (t -2.0) / -$11.9k (t -4.8) | cuts solo worst heat to -$27k / -$10k | rejected |
+| 2+4 netting | `netting_credit` (offset part credited the learned unwind cost) | -$0.6k (t -0.7) | solo +$4.2k (t 1.3); rivals -$5.3k..-7.4k (t -2.1) | off |
+| 2+4 | + `netting_gate = "crowded"` (off once a crowd shows) | +$0.2k (t 0.4) | solo +$3.4k (t 1.1); rivals -$0.1k..-2.5k | profile D |
+| 2+4 | + `netting_gate = true` (on only after no-crowd evidence) | +$0.2k (t 0.5) | solo +$0.9k; rivals $0 | off |
+| 5 own-quote stepping | none: `OrderBook.from_api` already drops our own orders | - | - | not a bug |
+
+Reading: on average the bot already takes the right tenders (a tender at +$0.21 still nets ~+$0.09 after a solo
+unwind); the losing heats are the variance of holding 50k through a trend while the resting side stops filling.
+Every way tested of buying that variance down (crossing, a liquidity premium, declining) costs more mean than it
+saves. Rival desks are the weak market: $3k-9k/heat in "rivals" scenarios vs $43k solo.
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

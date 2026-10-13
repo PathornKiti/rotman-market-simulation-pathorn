@@ -426,3 +426,13 @@ def test_auction_skip_adding_declines_auctions_that_grow_an_unwinding_block():
     assert s.decide(sell_auction, None, {"CROC": 35000}).accept             # long: it would offset
     assert s.decide(sell_auction, None, {"CROC": -2000}).accept             # under the threshold
     assert s.decide(dict(sell_auction, is_fixed_bid=True), None, {"CROC": -35000}).accept   # fixed tenders unaffected
+
+
+def test_netting_credit_values_the_offset_of_an_open_block():
+    # We are short 30k: a 30k auction to BUY closes it, sparing the unwind its expected cost.
+    t = {"action": "BUY", "quantity": 30000, "price": None, "is_fixed_bid": False}
+    plain = evaluate_tender(t, DEEP, 0.02, position=-30000)
+    netted = evaluate_tender(t, DEEP, 0.02, position=-30000, offset_credit=0.20)
+    assert netted.price == round(plain.price + 0.20, 2)
+    # Nothing to offset: the credit changes nothing.
+    assert evaluate_tender(t, DEEP, 0.02, offset_credit=0.20).price == evaluate_tender(t, DEEP, 0.02).price

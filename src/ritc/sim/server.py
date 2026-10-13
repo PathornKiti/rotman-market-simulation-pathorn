@@ -33,6 +33,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from statistics import NormalDist
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -202,11 +203,20 @@ class Market:
         # 1 - k; total vol unchanged). kyle_phi 0: the flow is noise, the price still a martingale. kyle_phi 0.9:
         # one-sided flow persists, so the price trends while our resting side stops filling (the two slow real
         # unwinds: 700-900 shares/s, ~3 sigma moves).
+        # mm_inv=L (liability): SOLO MARKET (practice 2026-10-13, only us + the house market maker): every share
+        # we trade, resting or crossing, lands in the market maker's inventory and it skews its quotes, so the
+        # mid moves L $ per share against us, permanently (a 50k block at 6e-6 = $0.30).
+        # hold_drift=D (liability): the price drifts D $/tick AGAINST whoever holds a position (ours), scaled by
+        # min(1, |position| / hold_drift_size). Solo practice 2026-10-13: while we held a block the mid moved $0.15 per
+        # 30 s against us (t 3.2) whatever we traded; when nobody held (48 lost auctions) it moved 0.000.
+        # edge_sd=S (with real=1): fixed tenders' edge vs mid ~ Normal(edge_mu, S) instead of U(-0.45, 0.90); the 49
+        # private tenders of 2026-10-13 were 0.21 +- 0.24 (-0.47..+0.64).
         self.stress = {"vol": 1.0, "depth": 1.0, "edge": 0.0, "size": 1.0, "gap": 12.0, "book": 1.0,
                        "strict_fr": 0.0, "flow": 1.0, "anchor": 0.0, "maker_fee": 0.0, "spread": 0.04,
                        "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0, "real": 0.0,
                        "reserve_lo": 0.0, "reserve_hi": 0.15, "late_award": 0.0,
-                       "kyle": 0.0, "kyle_phi": 0.9, "kyle_sd": 0.5}
+                       "kyle": 0.0, "kyle_phi": 0.9, "kyle_sd": 0.5, "mm_inv": 0.0,
+                       "edge_mu": 0.21, "edge_sd": 0.0, "hold_drift": 0.0, "hold_drift_size": 30000.0}
         for kv in filter(None, (os.environ.get("RITC_STRESS") or "").split(",")):
             k, _, v = kv.partition("=")
             self.stress[k.strip()] = float(v)
@@ -327,6 +337,11 @@ class Market:
                 if s.sigma:
                     s.mid = max(0.5, s.mid + self.rng.gauss(0, s.sigma) * (1 - kyle) ** 0.5)
             self._book_tenders()
+            if self.case == "liability" and self.stress["hold_drift"]:
+                for s in self.secs.values():
+                    if s.position:
+                        k = min(1.0, abs(s.position) / self.stress["hold_drift_size"])
+                        s.mid = max(0.5, s.mid - (1 if s.position > 0 else -1) * self.stress["hold_drift"] * k)
             getattr(self, f"_tick_{self.case}")()
             if kyle:
                 self._kyle_step(kyle)
@@ -537,7 +552,11 @@ class Market:
             if real:          # same draws, rescaled to the practice heats
                 frac = (qty / self.stress["size"] - 10_000) / 40_000
                 qty = int(round(50_000 + 9_000 * frac, -3) * self.stress["size"])
-                edge = -0.45 + (edge - self.stress["edge"] + 0.10) / 0.35 * 1.35 + self.stress["edge"]
+                u = (edge - self.stress["edge"] + 0.10) / 0.35
+                edge = -0.45 + u * 1.35 + self.stress["edge"]
+                if self.stress["edge_sd"]:   # the same draw as a normal quantile (practice 2026-10-13: 0.21 +- 0.24)
+                    q = NormalDist().inv_cdf(min(max(u, 1e-6), 1 - 1e-6))
+                    edge = self.stress["edge_mu"] + self.stress["edge_sd"] * q + self.stress["edge"]
             # The tender is priced off the TRUE mid by default. anchor=1: off the VISIBLE mid (true + the current
             # manipulation / crowd offset), as a real server quoting off the current market would. Same draws.
             ref = s.mid + (self.adv_off.get(t, 0.0) if self.stress["anchor"] else 0.0)
@@ -741,6 +760,8 @@ class Market:
         self._settle(s.ccy, -sign * qty * px * s.mult + (-s.fee if maker_pays or not maker else s.rebate) * qty)
         if not maker and s.impact:
             s.mid += sign * s.impact * qty
+        if self.case == "liability" and self.stress["mm_inv"]:
+            s.mid = max(0.5, s.mid + sign * self.stress["mm_inv"] * qty)
         if s.position == 0:
             s.realized -= s.cost       # back to flat: what the round trip made (before fees)
             s.cost = 0.0

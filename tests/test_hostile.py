@@ -267,3 +267,52 @@ def test_room_wait_rechecks_a_tender_declined_only_for_room():
     assert not s.wait_for_room({**t, "expires": 425}, room, snap(414))          # 6 left: past the last acceptable tick
     off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
     assert not off.wait_for_room(t, room, snap(100))           # off unless configured
+
+
+def test_holder_drift_switches_on_only_when_the_price_runs_against_what_we_hold():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]},
+           "strategy": {"holder_drift_learn": True, "holder_min_ticks": 20, "holder_z": 2.5,
+                        "holder_horizon_ticks": 20},
+           "execution": {"unwind_horizon_ticks": 30}}
+
+    def run(moves: list[float], pos: int) -> LiabilityStrategy:
+        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        mid = 25.0
+        for k, dm in enumerate(moves):
+            mid += dm
+            s._update_drift(Snapshot({"tick": k + 1, "period": 1, "ticks_per_period": 300},
+                                     {"X": {"bid": mid - 0.01, "ask": mid + 0.01, "position": pos}}))
+        return s
+
+    # Long 50k while the mid falls ~0.7c a tick with noise: learned, and the bot races its unwinds.
+    falling = run([-0.007 + (0.01 if k % 2 else -0.01) for k in range(60)], 50_000)
+    assert 0.005 < falling.holder_drift() < 0.009 and falling.unwind_horizon() == 20
+    assert falling.holder_cost("X", 50_000) > 0.05
+    # The same moves while flat, or a random-walk-like zigzag while long: nothing.
+    assert run([-0.007 + (0.01 if k % 2 else -0.01) for k in range(60)], 0).holder_drift() == 0.0
+    assert run([0.01 if k % 2 else -0.01 for k in range(60)], 50_000).holder_drift() == 0.0
+
+
+def test_hold_test_freezes_a_fresh_block_then_logs_the_move_against_it():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]}, "execution": {"hold_test_ticks": 30, "hold_test_max": 1}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+
+    def snap(tick: int, mid: float, pos: int) -> Snapshot:
+        return Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                        {"X": {"bid": mid - 0.01, "ask": mid + 0.01, "position": pos}})
+
+    book = OrderBook("X", [Level(24.99, 1000)], [Level(25.01, 1000)])
+    s.maybe_hold_test("X", 1, 50_000, True, book, snap(10, 25.0, 0), 10)
+    assert s.frozen_now(snap(20, 24.9, 50_000)) == {"X"}            # untouched while the test runs
+    assert s.frozen_now(snap(40, 24.8, 50_000)) == set()            # over: unwind as usual
+    assert s.hold_test_log[0]["against"] == 0.2 and s.hold_test_log[0]["ticks"] == 30
+    s.maybe_hold_test("X", 1, 50_000, True, book, snap(50, 25.0, 0), 50)
+    assert not s.hold_tests                                         # at most hold_test_max per heat
