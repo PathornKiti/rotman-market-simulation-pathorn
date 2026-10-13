@@ -612,6 +612,48 @@ real-world + hostile             -311      -71     +240   1.4         +0
 pooled 432 heats: +503/heat t 2.45;  failing rule: ['volatility x2']
 ```
 
+## Adaptive horizon + liquidity-aware valuation (2026-10-13): not adopted
+
+`horizon_mode = "absorption"` (unwind target = qty / measured absorption, 15-90 s) with `liquidity_aware` (risk
+premium on T = qty / absorption), seeds 1301-1316 vs the same base:
+
+```
+scenario                         base      new     diff     t  worst chg
+base (brief)                   60,193   59,232     -960  -0.7         +0
+volatility x2                  39,606   41,784   +2,177   1.6         +0
+thin books x0.5                52,000   52,906     +905   1.3         +0
+worse tenders -10c             23,171   23,171       +0   0.0         +0
+bigger tenders x2              77,462   78,378     +916   1.0         +0
+tenders twice as often         95,694   97,961   +2,268   1.7         +0
+booking delay 3s               59,955   57,339   -2,616  -1.3       +393
+strict front-running           57,042   55,922   -1,120  -0.8         +0
+hostile market                 71,835   71,343     -491  -0.5     -4,672
+hostile anchored                1,663    1,690      +27   0.0     -2,264
+everything at once            158,437  159,033     +596   0.7       +600
+everything anchored            -4,059   -3,098     +962   1.0       +676
+resting fills pay $0.02        54,921   53,905   -1,016  -0.7     +3,035
+spread 2c + queue              52,385   53,475   +1,090   2.0     +7,214
+spread 1c + queue              53,093   53,636     +543   1.6         +0
+scarce resting fills           49,903   47,344   -2,559  -1.4     +8,566
+close 5c against holder        59,380   58,420     -960  -0.7         +0
+desks dump at the bell         59,526   58,566     -960  -0.7     +2,540
+very slow bot (1 loop/s)       59,944   59,005     -939  -0.6         +0
+hostile crowd at expiry        24,730   23,174   -1,556  -0.9     -4,623
+vol regimes (hidden)           50,257   50,512     +255   1.1     +3,410
+real-world combined            44,025   44,871     +846   1.7     +6,650
+practice calibrated           125,259  123,933   -1,326  -1.5    -11,080
+practice thin + vol spikes     84,879   82,339   -2,540  -0.9    +10,137
+practice trending flow        122,617  121,359   -1,258  -1.2    -16,965
+practice + rival desks         26,866   25,903     -963  -0.3    -28,160
+real-world + hostile             -311   -1,103     -792  -0.8     +1,455
+
+pooled 432 heats: -351/heat t -1.31;  failing rule: ['practice calibrated', 'practice trending flow', 'practice + rival desks']
+```
+
+Fails: the prior absorption rates give 15-18 s horizons (shorter than 30), so over-budget blocks cross harder, and the
+lower risk premium takes more marginal tenders; practice-market worst heats -$11k to -$28k. Next: lengthen-only
+(horizon_min_ticks = 30), no valuation change.
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out
