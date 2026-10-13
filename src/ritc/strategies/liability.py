@@ -318,6 +318,7 @@ class LiabilityStrategy(Strategy):
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
         self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
+        self.absorb: dict[str, float] = {}       # ticker -> learned shares/tick of our own unwinds
         self.block_info: dict[str, dict] = {}   # ticker -> how its current block started (BLOCK DONE stats)
         self.blocks_done: list[dict] = []
         self.ledger: dict[int, dict] = {}        # tender id -> what we took, expected $, realized $, auction won
@@ -497,10 +498,25 @@ class LiabilityStrategy(Strategy):
         n = int(self.p.get("adaptive_min_obs", 3))
         return self.crowd_learn and self.crowd.n >= n and self.crowd.mean < self.crowd.sd
 
-    def unwind_horizon(self) -> int:
-        """Race the crowd: once it is known to unwind into our book, finish before it does."""
-        fast = int(self.cfg.get("execution", {}).get("crowd_horizon_ticks", 0))
-        return min(self.horizon, fast) if fast and self.crowded() else self.horizon
+    def absorption(self, ticker: str) -> float:
+        """Shares/tick our own unwinds of this stock achieved: EWMA over finished blocks, from the practice prior."""
+        prior = float(self.liq_prior.get(ticker, self.p.get("liq_default", 2000)))
+        return max(100.0, self.absorb.get(ticker, prior))
+
+    def unwind_horizon(self, ticker: str | None = None, qty: int = 0) -> int:
+        """
+        Race the crowd: once it is known to unwind into our book, finish before it does.
+        `horizon_mode = "absorption"` (ADAPTIVE): the target is qty / the absorption rate this stock has shown, clipped
+        to [horizon_min_ticks, horizon_max_ticks], instead of a fixed `unwind_horizon_ticks`: a thin book gets the time
+        it needs (forcing it pays impact), a deep one is done sooner (less risk, net room back sooner).
+        """
+        ex = self.cfg.get("execution", {})
+        h = self.horizon
+        if ex.get("horizon_mode", "fixed") == "absorption" and ticker and qty:
+            h = int(min(max(qty / self.absorption(ticker), ex.get("horizon_min_ticks", 15)),
+                        ex.get("horizon_max_ticks", 90)))
+        fast = int(ex.get("crowd_horizon_ticks", 0))
+        return min(h, fast) if fast and self.crowded() else h
 
     def step(self, snap: Snapshot) -> None:
         self.sync_tickers(snap)
@@ -637,7 +653,9 @@ class LiabilityStrategy(Strategy):
             min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
             competitive_margin=self.p.get("competitive_margin", 0.05),
             drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
-            unwind_ticks_per_lot=self.p.get("unwind_ticks_per_share", 0.0),
+            # LIQUIDITY-AWARE: time to unwind = shares / the absorption this stock has shown (feeds sigma x sqrt(T))
+            unwind_ticks_per_lot=(1.0 / self.absorption(ticker) if self.p.get("liquidity_aware", False)
+                                  else self.p.get("unwind_ticks_per_share", 0.0)),
             min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
             price_vol_per_tick=self.price_vol(ticker, snap),
             risk_aversion=self.p.get("risk_aversion", 0.0),
@@ -747,6 +765,8 @@ class LiabilityStrategy(Strategy):
                "fill_edge": round(edge, 4), "made": round(made), "expected": round(exp), "tenders": tids,
                "start_tick": info["start"], "vol": round(self.price_vol(t, snap), 4)}
         self.blocks_done.append(rec)
+        a = float(self.p.get("absorb_learn", 0.5))     # learn fast: only a few blocks per stock per heat
+        self.absorb[t] = (1 - a) * self.absorption(t) + a * max(100.0, info["qty"] / secs)
         self.ex.journal.write("block_done", **rec)
         log.info("BLOCK DONE %s %s %dk in %d s (%s sh/s) | mid %+.2f our way | rested %s crossed %s "
                  "(fills %+.3f vs mid) | made %s vs expected %s", t, info["side"], info["qty"] // 1000, secs,
@@ -961,7 +981,8 @@ class LiabilityStrategy(Strategy):
                     # sigma: GARCH $/share/tick; eta: from the side we unwind INTO.
                     kappa = ac_kappa(self.price_vol(t, snap), book_eta(snap.book(t), "bid" if pos > 0 else "ask"),
                                      self.ac_lambda)
-                self.algo.work(t, pos, target, now, min(now + self.unwind_horizon(), period_end), kappa=kappa)
+                self.algo.work(t, pos, target, now, min(now + self.unwind_horizon(t, abs(pos - target)), period_end),
+                               kappa=kappa)
                 if t not in self.block_info:
                     self.block_info[t] = {"start": now, "mid0": snap.mid(t), "qty": abs(pos - target),
                                           "side": "SELL" if pos > target else "BUY", "fill0": len(self.ex.tca.fills)}
