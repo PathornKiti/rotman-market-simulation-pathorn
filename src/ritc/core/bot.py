@@ -74,6 +74,11 @@ class Snapshot:
     def positions(self) -> dict[str, int]:
         return {t: int(s.get("position", 0)) for t, s in self.securities.items()}
 
+    def stock_pnl(self, ticker: str) -> float:
+        """This stock's P&L so far, as the server reports it: realized + unrealized (RIT /securities)."""
+        s = self.securities.get(ticker) or {}
+        return float(s.get("realized") or 0.0) + float(s.get("unrealized") or 0.0)
+
     def book(self, ticker: str, depth: int = 20) -> OrderBook:
         """Prefetched in parallel by the Runner; fetched lazily if not. Own orders excluded."""
         if ticker not in self._books:
@@ -225,12 +230,23 @@ class Runner:
         self.loops = 0
         self.journal = NULL_JOURNAL          # run journal for the post-trade report (`ritc run` opens one)
         self._tick_ms = 0.0
+        self._trader_t, self._trader_last, self._trader_n = 0.0, None, 0
+        self._final_nlv_stale = False
+        self.pnl_every = 30                  # ticks between PNL log lines
+        self._pnl_tick, self._pnl_last, self._last_snap = -1, None, None
+        self._slow: list[float] = []          # slow loops since the last summary warning
+        self._slow_t = time.monotonic()
         self.interrupted = False             # Ctrl-C (vs the heat ending): `run --forever` stops on it
 
     def snapshot(self) -> Snapshot:
         """Case + securities + trader + all prefetch books, in parallel."""
         books = list(dict.fromkeys(self.s.book_tickers))
-        calls = [self.client.case, self.client.security_map, self.client.trader]
+        # NLV (/trader) only feeds the journal and the drawdown guard: once a second is plenty. Every call costs
+        # when the client is throttled (RIT_MIN_INTERVAL, or a server that answers 429), practice 2026-10-13.
+        self._trader_n += 1
+        want_trader = time.monotonic() - self._trader_t >= 1.0 or self._trader_n >= 4    # 1 s, or 4 loops (lock-step)
+        calls = [self.client.case, self.client.security_map,
+                 self.client.trader if want_trader else (lambda: self._trader_last)]
         calls += [lambda t=t: self.client.book(t, 20) for t in books]
         extra = self.s.prefetch()
         calls += list(extra.values())
@@ -245,6 +261,8 @@ class Runner:
             if isinstance(r, Exception):
                 raise r if isinstance(r, RITError) else RITError(str(r))
         case, secs, trader = res[0], res[1], res[2]
+        if want_trader and isinstance(trader, dict):
+            self._trader_t, self._trader_last, self._trader_n = time.monotonic(), trader, 0
         snap = Snapshot(case=case, securities=secs, _client=self.client, trader_id=self.trader_id,
                         nlv=float(trader.get("nlv")) if isinstance(trader, dict) and trader.get("nlv") is not None
                         else None)
@@ -253,6 +271,19 @@ class Runner:
                 snap._books[t] = OrderBook.from_api(payload, t, self.trader_id or None)
         snap.extra = dict(zip(extra, res[3 + len(books):3 + len(books) + len(extra)]))
         return snap
+
+    def _log_pnl(self, snap: Snapshot) -> None:
+        """PNL line every `pnl_every` ticks: NLV, the change since the last line, and each stock's position / P&L."""
+        self._pnl_tick = snap.tick
+        if snap.nlv is None:
+            return
+        d = snap.nlv - self._pnl_last if self._pnl_last is not None else snap.nlv
+        self._pnl_last = snap.nlv
+        per = "  ".join(f"{t} {snap.positions.get(t, 0):+,d} sh {snap.stock_pnl(t):+,.0f}"
+                        for t in snap.securities if snap.positions.get(t) or snap.stock_pnl(t))
+        log.info("PNL t=%d  NLV %s (%s in %d s)%s", snap.tick, f"{snap.nlv:,.0f}", f"{d:+,.0f}", self.pnl_every,
+                 f"  |  {per}" if per else "")
+        self.journal.write("pnl", nlv=snap.nlv, per={t: round(snap.stock_pnl(t), 2) for t in snap.securities})
 
     def run(self, once: bool = False) -> None:
         log.info("strategy=%s dry_run=%s", self.s.name, self.s.ex.dry_run)
@@ -286,6 +317,10 @@ class Runner:
 
         feed = None
         if self.use_feed and (self.s.wants_news or self.s.wants_tenders):
+            if self.client.min_interval:
+                # A throttled client serialises every call: a 0.1 s feed poll would take half the budget, and the
+                # loop's own snapshot already polls tenders. Poll at most every 5 throttle slots.
+                self.feed_poll = max(self.feed_poll, 5 * self.client.min_interval)
             feed = EventFeed(self.client, self.feed_poll, news=self.s.wants_news,
                              tenders=self.s.wants_tenders).start()
             self.s.feed = feed
@@ -302,6 +337,10 @@ class Runner:
                     snap = self.snapshot()     # also kills the leftovers of last loop's aggressive orders
                     self.s.ex.arrival = snap.mid
                     status = snap.case.get("status")
+                    if status == "ACTIVE" and snap.tick != self._pnl_tick and snap.tick % self.pnl_every == 0:
+                        self._log_pnl(snap)
+                    if status == "ACTIVE":
+                        self._last_snap = snap
                     if snap.tick != self.journal.tick and status == "ACTIVE":
                         self.journal.tick = snap.tick
                         self.journal.write(
@@ -361,8 +400,17 @@ class Runner:
                 self._tick_ms = max(self._tick_ms, ms)
                 self.loops += 1
                 if ms > self.slow_loop_ms:
-                    log.warning("slow loop: %.0f ms (market may have moved under you)", ms)
                     self.journal.write("slow_loop", ms=round(ms))
+                    self._slow.append(ms)
+                if self._slow and time.monotonic() - self._slow_t >= 15.0:
+                    # One summary every 15 s instead of a line per loop (practice logs were mostly this warning).
+                    # Each loop is a few RIT round trips; `python -m ritc doctor` measures one on this machine.
+                    log.warning("slow loops: %d in the last %.0f s over %.0f ms (worst %.0f ms) - prices can be a "
+                                "tick old; `ritc doctor` measures the RIT round trip", len(self._slow),
+                                time.monotonic() - self._slow_t, self.slow_loop_ms, max(self._slow))
+                    self._slow, self._slow_t = [], time.monotonic()
+                elif not self._slow and time.monotonic() - self._slow_t >= 15.0:
+                    self._slow_t = time.monotonic()
                 if self.loops % 200 == 0:
                     log.info("%s%s", self.latency, f", feed {feed.latency_ms:.0f} ms" if feed else "")
                 if self.loops % 20 == 0:
@@ -396,6 +444,20 @@ class Runner:
                 nlv = self.client.trader().get("nlv")
             except RITError:
                 nlv = None
+            self._final_nlv_stale = nlv is None and self._last_snap is not None
+            if self._final_nlv_stale:
+                nlv = self._last_snap.nlv            # the server already closed the case: last NLV we saw
+            if nlv is not None:
+                last = self._last_snap
+                per = ("  |  " + "  ".join(f"{t} {last.stock_pnl(t):+,.0f}" for t in last.securities
+                                            if last.stock_pnl(t) or last.positions.get(t))) if last else ""
+                log.info("HEAT RESULT: NLV %s%s%s", f"{float(nlv):,.0f}", per,
+                         "  (last NLV seen before the server closed the case)" if self._final_nlv_stale else "")
+            if hasattr(self.s, "write_report") and self.journal.path is not None:
+                self.s.write_report(str(self.journal.path).rsplit(".", 1)[0] + ".summary.json", nlv,
+                                    {"p50": self.latency.pct(0.5), "p95": self.latency.pct(0.95),
+                                     "max": self.latency.pct(1.0), "loops": self.loops,
+                                     "throttled_429": getattr(self.client, "throttled", 0)})
             self.journal.write("end", nlv=nlv, loops=self.loops, p50=self.latency.pct(0.5),
                                p95=self.latency.pct(0.95), max=self.latency.pct(1.0),
                                tca=[{"ticker": t, "style": st_, "qty": a.qty, "cost": a.cost}

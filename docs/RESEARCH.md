@@ -473,6 +473,225 @@ batch, stale quotes are cancelled in parallel, 16 I/O workers, the inline feed p
 already polling. Profiled at 0.2 s per RIT call: loop p50 603 -> 206 ms, p95 1810 -> 1212 ms; lock-step results
 identical (seed 501: $157,812 before and after).
 
+## Auction freeze on a block we are unwinding (2026-10-13): adopted (`auction_skip_adding = 5000`)
+
+Real heats: 2026-10-13 00:35:59 the bot bid SELL CROC auction #701 while still buying back a short CROC block; the
+bid froze CROC for its 30 s window and CROC rallied, so ~36k shares were bought back at $20.50-21.15 against the
+$20.45 received (~-$15k). Same pattern on CRZY 2026-10-12 16:08. Rule: decline an auction that would ADD to a
+block of >= 5,000 shares we still hold. Fresh seeds 1001-1032 (5,000 / 20,000 shares):
+
+| calibrated | Kyle flow | hostile | generous reserves (0.15-0.40) |
+|---|---|---|---|
+| +$0.3k / +$0.2k (t 1.0) | +$1.2k (t 1.1), worst -$7.7k -> $0 | +$1.1k (t 1.1), worst -$64.0k -> -$31.9k | -$1.1k / -$1.3k (t -0.5) |
+
+Not significant (it fires in 2-4 of 32 heats), but it removes a loss seen twice on the real server and halves the
+hostile worst heat; the cost is skipping a few winnable same-side auctions when reserves are generous. Adopted.
+
+## One robust default across 27 market types (2026-10-13)
+
+`python -m ritc stress` now includes four practice-server scenarios (calibrated; house market maker only with a
+thin book and volatility spikes; trending flow; rival desks). Seeds 1201-1216, paired vs the default of the day
+(t = paired t, w = change in the worst heat):
+
+```
+scenario                         base |                 robust |                 urgent |                   both
+base (brief)                   53,856 |    +976 t  1.4 w +2,140 |    +504 t  1.0 w     +0 |  +1,468 t  1.4 w +2,140
+volatility x2                  31,808 |  +3,026 t  0.7 w-34,664 |      +0 t  0.0 w     +0 |  +3,026 t  0.7 w-34,664
+thin books x0.5                42,924 |    +646 t  1.3 w     +0 |      +0 t  0.0 w     +0 |    +646 t  1.3 w     +0
+worse tenders -10c             11,472 |  +1,383 t  1.5 w   +440 |      +0 t  0.0 w     +0 |  +1,383 t  1.5 w   +440
+bigger tenders x2              56,193 |    +121 t  1.0 w     +0 |      +0 t  0.0 w     +0 |    +121 t  1.0 w     +0
+tenders twice as often        108,377 |  -1,043 t -1.0 w   +970 |      +0 t  0.0 w     +0 |  -1,043 t -1.0 w   +970
+booking delay 3s               53,912 |    +946 t  1.3 w +1,570 |    +504 t  1.0 w     +0 |  +1,438 t  1.4 w +1,570
+strict front-running           50,649 |    +877 t  1.4 w +1,730 |    +691 t  1.0 w     +0 |  +1,557 t  1.4 w +1,730
+hostile market                 30,136 |  +1,936 t  0.7 w -9,003 |    +658 t  1.2 w +8,334 |  +2,865 t  1.0 w +3,673
+hostile anchored               -1,436 |    +756 t  0.6 w   -222 |      +0 t  0.0 w     +0 |    +756 t  0.6 w   -222
+everything at once             76,108 | -29,930 t -2.4 w-165,044 |    -743 t -1.4 w   +441 | -30,203 t -2.6 w-150,786
+everything anchored            -5,514 |  -1,510 t -1.1 w     +0 |     +28 t  1.0 w   +441 |  -1,483 t -1.1 w   +441
+resting fills pay $0.02        48,433 |    +866 t  1.3 w +2,220 |    +521 t  1.0 w     +0 |  +1,379 t  1.4 w +2,220
+spread 2c + queue              51,203 |    +459 t  1.1 w   -100 |      +0 t  0.0 w     +0 |    +459 t  1.1 w   -100
+spread 1c + queue              50,428 |    +589 t  1.6 w   +458 |      +0 t  0.0 w     +0 |    +589 t  1.6 w   +458
+scarce resting fills           42,016 |    -665 t -0.6 w -3,434 |    +356 t  1.0 w     +0 |    -698 t -0.7 w -3,434
+close 5c against holder        52,981 |    +765 t  1.0 w +2,140 |    +504 t  1.0 w     +0 |  +1,250 t  1.2 w +2,140
+desks dump at the bell         52,427 |    +548 t  0.6 w +2,140 |    +504 t  1.0 w     +0 |  +1,031 t  0.9 w +2,140
+very slow bot (1 loop/s)       53,847 |    +974 t  1.4 w +2,140 |    +196 t  1.0 w     +0 |  +1,169 t  1.4 w +2,140
+hostile crowd at expiry        11,858 |     -28 t -0.0 w     +0 |    -693 t -1.0 w     +0 |    -721 t -0.3 w     +0
+vol regimes (hidden)           39,127 |  +7,042 t  1.9 w +8,344 |  -1,826 t -1.1 w     +0 |  +5,234 t  1.3 w +8,344
+real-world combined            43,030 |    -628 t -0.7 w -1,650 |      +0 t  0.0 w     +0 |    -628 t -0.7 w -1,650
+practice calibrated           128,142 |    +544 t  1.0 w     +0 |      +0 t  0.0 w     +0 |    +544 t  1.0 w     +0
+practice thin + vol spikes     73,712 |  +8,194 t  1.1 w-13,798 |    -236 t -0.9 w -3,032 |  +8,194 t  1.1 w-13,798
+practice trending flow        121,554 |    +823 t  1.0 w     +0 |      +0 t  0.0 w     +0 |    +823 t  1.0 w     +0
+practice + rival desks         32,607 |  +2,409 t  0.6 w -4,601 |     -96 t -1.0 w     +0 |  +2,106 t  0.5 w -7,917
+real-world + hostile           -2,693 |    -364 t -0.3 w -4,873 |      +0 t  0.0 w     +0 |    -364 t -0.3 w -4,873
+
+robust   pooled over 432 heats: -11/heat  t -0.02
+urgent   pooled over 432 heats: +32/heat  t 0.36
+both     pooled over 432 heats: +33/heat  t 0.05
+```
+
+Rule for a default: no scenario significantly worse, worst heats not deeper, pooled total not lower.
+- `urgent_participation = 0.35`: passes (neutral almost everywhere, hostile worst +$8.3k). **Adopted.**
+- `crowd_robust` (vol-scaled crowd evidence): better in 19 of 27 (practice thin + vol spikes +$8.2k, hidden vol
+  regimes +$7.0k) but "everything at once" -$29.9k (t -2.4), worst heat -$165k: a real crowd hides inside high
+  volatility. Not the default.
+- `crowd_robust_mode = "clip"` + `crowd_min_obs = 2` (cap single outlier moves, keep the noise level), vs the new
+  default, same seeds:
+
+```
+scenario                         base     clip     diff     t  worst chg
+base (brief)                   54,359   54,493     +134   1.0     +2,140
+volatility x2                  31,808   31,808       +0   0.0         +0
+thin books x0.5                42,924   42,741     -183  -1.0     -1,330
+worse tenders -10c             11,472   11,500      +28   1.0       +440
+bigger tenders x2              56,193   56,193       +0   0.0         +0
+tenders twice as often        108,377  108,377       +0   0.0         +0
+booking delay 3s               54,416   54,514      +98   1.0     +1,570
+strict front-running           51,340   51,473     +134   1.0     +1,730
+hostile market                 30,794   31,630     +836   0.3     -7,462
+hostile anchored               -1,436   -1,905     -469  -0.4       -222
+everything at once             75,365   52,862  -22,504  -2.4   -104,605
+everything anchored            -5,486   -5,273     +213   1.0         +0
+resting fills pay $0.02        48,953   49,092     +139   1.0     +2,220
+spread 2c + queue              51,203   51,197       -6  -1.0       -100
+spread 1c + queue              50,428   50,456      +29   1.0       +458
+scarce resting fills           42,372   42,157     -215  -1.0     -3,434
+close 5c against holder        53,484   53,618     +134   1.0     +2,140
+desks dump at the bell         52,930   53,064     +134   1.0     +2,140
+very slow bot (1 loop/s)       54,043   54,177     +134   1.0     +2,140
+hostile crowd at expiry        11,165   10,680     -486  -0.5         +0
+vol regimes (hidden)           37,302   37,305       +4   0.0         +0
+real-world combined            43,030   42,927     -103  -1.0     -1,650
+practice calibrated           128,142  128,142       +0   0.0         +0
+practice thin + vol spikes     73,476   79,915   +6,439   0.9    -10,765
+practice trending flow        121,554  121,554       +0   0.0         +0
+practice + rival desks         32,511   30,773   -1,738  -0.5     +1,186
+real-world + hostile           -2,693   -2,460     +233   0.1     -4,873
+
+pooled 432 heats: -630/heat t -1.22;  failing rule: ['hostile market', 'everything at once', 'practice thin + vol spikes']
+```
+
+  Fails the same way ("everything at once" -$22.5k, t -2.4; pooled -$630/heat). Any weakening of the crowd alarm
+  costs when a real crowd meets high volatility, so the gated crowd learner stays the default. On a practice server
+  with no other teams (every "crowd" is noise) run `--profile B_robust_crowd`.
+
+## Rival desks that win auctions at any price (2026-10-13): adopted (`crowd_learn_lost_auctions`)
+
+A lost auction is a block another desk holds and must unwind from the award on; the crowd learner used to skip it
+(it only scored tenders we did not bid on, and only in the first 10 s). Now a lost auction starts a crowd observation
+at the award, in the winner's unwind direction. 27 scenarios, seeds 1301-1316, paired vs the default of the day:
+
+```
+scenario                         base      new     diff     t  worst chg
+base (brief)                   60,193   60,686     +493   1.2       +613
+volatility x2                  39,606   39,166     -440  -0.8     -5,037
+thin books x0.5                52,000   52,369     +369   0.8         +0
+worse tenders -10c             23,171   22,621     -549  -1.0       -967
+bigger tenders x2              77,462   77,462       +0   0.0         +0
+tenders twice as often         95,694   96,799   +1,105   1.1     +1,500
+booking delay 3s               59,955   60,442     +487   1.2         +0
+strict front-running           57,042   57,520     +478   1.2       +133
+hostile market                 71,835   72,082     +247   0.4       -300
+hostile anchored                1,663    1,977     +314   2.2         +0
+everything at once            158,437  160,864   +2,427   1.5       -900
+everything anchored            -4,059   -4,059       +0   0.0         +0
+resting fills pay $0.02        54,921   55,297     +376   1.0         +0
+spread 2c + queue              52,385   52,735     +350   1.0         +0
+spread 1c + queue              53,093   53,417     +325   1.0         +0
+scarce resting fills           49,903   50,098     +195   0.2         +0
+close 5c against holder        59,380   59,873     +493   1.2     +2,113
+desks dump at the bell         59,526   60,019     +493   1.2         +0
+very slow bot (1 loop/s)       59,944   60,437     +493   1.2       +613
+hostile crowd at expiry        24,730   25,424     +694   0.4         +0
+vol regimes (hidden)           50,257   50,338      +81   1.0         +0
+real-world combined            44,025   44,303     +278   1.0         +0
+practice calibrated           125,259  123,610   -1,649  -1.0         +0
+practice thin + vol spikes     84,879   87,515   +2,636   1.6         +0
+practice trending flow        122,617  124,237   +1,620   1.4     +4,174
+practice + rival desks         26,866   28,894   +2,029   0.5       +948
+real-world + hostile             -311      -71     +240   1.4         +0
+
+pooled 432 heats: +503/heat t 2.45;  failing rule: ['volatility x2']
+```
+
+## Adaptive horizon + liquidity-aware valuation (2026-10-13): not adopted
+
+`horizon_mode = "absorption"` (unwind target = qty / measured absorption, 15-90 s) with `liquidity_aware` (risk
+premium on T = qty / absorption), seeds 1301-1316 vs the same base:
+
+```
+scenario                         base      new     diff     t  worst chg
+base (brief)                   60,193   59,232     -960  -0.7         +0
+volatility x2                  39,606   41,784   +2,177   1.6         +0
+thin books x0.5                52,000   52,906     +905   1.3         +0
+worse tenders -10c             23,171   23,171       +0   0.0         +0
+bigger tenders x2              77,462   78,378     +916   1.0         +0
+tenders twice as often         95,694   97,961   +2,268   1.7         +0
+booking delay 3s               59,955   57,339   -2,616  -1.3       +393
+strict front-running           57,042   55,922   -1,120  -0.8         +0
+hostile market                 71,835   71,343     -491  -0.5     -4,672
+hostile anchored                1,663    1,690      +27   0.0     -2,264
+everything at once            158,437  159,033     +596   0.7       +600
+everything anchored            -4,059   -3,098     +962   1.0       +676
+resting fills pay $0.02        54,921   53,905   -1,016  -0.7     +3,035
+spread 2c + queue              52,385   53,475   +1,090   2.0     +7,214
+spread 1c + queue              53,093   53,636     +543   1.6         +0
+scarce resting fills           49,903   47,344   -2,559  -1.4     +8,566
+close 5c against holder        59,380   58,420     -960  -0.7         +0
+desks dump at the bell         59,526   58,566     -960  -0.7     +2,540
+very slow bot (1 loop/s)       59,944   59,005     -939  -0.6         +0
+hostile crowd at expiry        24,730   23,174   -1,556  -0.9     -4,623
+vol regimes (hidden)           50,257   50,512     +255   1.1     +3,410
+real-world combined            44,025   44,871     +846   1.7     +6,650
+practice calibrated           125,259  123,933   -1,326  -1.5    -11,080
+practice thin + vol spikes     84,879   82,339   -2,540  -0.9    +10,137
+practice trending flow        122,617  121,359   -1,258  -1.2    -16,965
+practice + rival desks         26,866   25,903     -963  -0.3    -28,160
+real-world + hostile             -311   -1,103     -792  -0.8     +1,455
+
+pooled 432 heats: -351/heat t -1.31;  failing rule: ['practice calibrated', 'practice trending flow', 'practice + rival desks']
+```
+
+Fails: the prior absorption rates give 15-18 s horizons (shorter than 30), so over-budget blocks cross harder, and the
+lower risk premium takes more marginal tenders; practice-market worst heats -$11k to -$28k. Next: lengthen-only
+(horizon_min_ticks = 30), no valuation change.
+
+## Lengthen-only adaptive horizon (2026-10-13): adopted
+
+`horizon_mode = "absorption"`, `horizon_min_ticks = 30`, `horizon_max_ticks = 90` (valuation unchanged), seeds
+1401-1416:
+
+```
+scenario                         base      new     diff     t  worst chg
+base (brief)                   53,103   53,114      +11   1.4         +0
+volatility x2                  33,652   33,669      +16   0.9         +0
+thin books x0.5                48,589   48,436     -152  -1.0         +0
+worse tenders -10c             20,345   20,345       +0   0.0         +0
+bigger tenders x2              72,278   73,260     +981   1.9         +0
+tenders twice as often        100,395  100,398       +4   1.0         +0
+booking delay 3s               53,318   53,326       +8   1.0         +0
+strict front-running           50,430   50,440      +11   1.4         +0
+hostile market                 39,996   40,005       +9   1.0       +143
+hostile anchored                3,308    3,304       -4  -1.0        -57
+everything at once             99,627   99,627       +0   0.0         +0
+everything anchored            -1,465   -1,465       +0   0.0         +0
+resting fills pay $0.02        47,959   47,969      +10   1.4         +0
+spread 2c + queue              50,574   50,583       +9   1.4         +0
+spread 1c + queue              52,349   52,379      +31   1.0         +0
+scarce resting fills           42,224   42,276      +52   1.3         +0
+close 5c against holder        52,136   52,147      +11   1.4         +0
+desks dump at the bell         48,665   48,678      +14   1.4         +0
+very slow bot (1 loop/s)       53,393   53,403      +11   1.4         +0
+hostile crowd at expiry        16,388   16,433      +45   1.0         +0
+vol regimes (hidden)           40,818   40,857      +39   1.0       +626
+real-world combined            40,882   40,977      +95   1.0         +0
+practice calibrated            94,508   94,518      +10   1.0         +0
+practice thin + vol spikes     56,501   56,531      +30   1.4       +159
+practice trending flow         88,447   88,444       -3  -1.0         +0
+practice + rival desks         22,804   22,727      -76  -1.0         +0
+real-world + hostile            1,597    1,537      -60  -1.0       -959
+
+pooled 432 heats: +41/heat t 1.81;  failing rule: []
+```
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

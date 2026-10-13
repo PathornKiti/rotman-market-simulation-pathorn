@@ -45,6 +45,12 @@ decide_late_end_guard = true  # ...but never wait past the last tick a tender ca
                               # Seeds 1-16 +$3.7k (t 4.1), 301-316 +$2.3k (t 2.6); anchored hostile +-$0.1k.
 reserve_auction_room = true   # count pending auction bids against the net limit. false: -$1.8k..+$0.3k even when the
                               # server voids awards that no longer fit (sim award_room=1); hostile worst heat worse.
+auction_skip_adding = 5000     # AUCTION FREEZE (default since 2026-10-13): decline an auction that would ADD to a block we
+                              # still hold >= this many shares of. An open bid freezes the stock ~30 s (front-running
+                              # rule) and a win only grows the block. Real heats: CROC 2026-10-13 (~-$15k: frozen
+                              # buy-back while CROC rallied) and CRZY 2026-10-12. Fresh seeds 1001-1032: calibrated
+                              # +$0.2k, Kyle +$1.2k (worst -$7.7k -> $0), hostile +$1.1k (worst -$64k -> -$32k),
+                              # generous reserves -$1.1k; |t| <= 1.1 (fires in 2-4 of 32 heats). 0 = old behaviour.
 room_wait = true              # a fixed tender declined ONLY for risk room is re-checked every tick until 2 ticks before
                               # expiry instead of declined at once (answer-at-once still holds for everything else). Real
                               # heats: log2 #103 and the last heat's #403 were declined for room held by an auction bid we
@@ -92,6 +98,9 @@ rank_tenders = false          # answer the most valuable open tender first: no e
 drift_symmetric = false       # credit favourable drift too: -$4k..-$13.5k everywhere
 crowd_robust = false          # vol-scaled crowd evidence: fixes 2 real false alarms, but holdout hostile worst heats
                               # -$2.7k -> -$25.8k / -$12.2k -> -$46.2k
+                              # 27-scenario stress 2026-10-13: "full" -$29.9k and "clip" (+crowd_min_obs 2) -$22.5k in
+                              # "everything at once" (real crowd + high vol). Keep false for competition; true (profile
+                              # B) only on a practice server with no other teams.
 liq_default = 2000            # other tickers
 liq_halflife = 20             # ticks
 liq_cap = 6000                # never forecast more than this (a burst of other desks' trades is not our flow)
@@ -102,6 +111,10 @@ liq_cap = 6000                # never forecast more than this (a burst of other 
 # (t 3.0), benign +$0 (the gate never fires without a crowd). Ungated / learning from our own tenders cost
 # $2.8k-$4.9k in the benign market (our own unwind impact looked like a crowd).
 crowd_learn = true
+crowd_learn_lost_auctions = true   # RIVAL WINNERS (default since 2026-10-13): an auction we lost is a block another desk
+                              # now holds and must unwind, starting at the award: score the price from then. 27-scenario
+                              # stress, seeds 1301-1316: pooled +$503/heat (t 2.45), better in 22 of 27 (practice thin +
+                              # vol +$2.6k, everything at once +$2.4k, rival desks +$2.0k); vol x2 worst heat -$5.0k.
 crowd_untaken_only = true     # skip tenders we hold: walking the book already prices our own impact
 crowd_gate = true             # charge nothing until the crowd is statistically there
 crowd_prior_mean = 0.0        # $/10k shares before anything is learned
@@ -151,11 +164,21 @@ order_settle = 1.0            # s an order we sent counts as working although th
                               # list nor the position (real RIT books orders asynchronously; 2026-10-11 practice sent
                               # duplicate unwind orders 40-250 ms apart -> TAME +10,800 past zero). Lock-step tests use 0.
 unwind_horizon_ticks = 30     # target: flat within this many ticks of accepting a tender
+horizon_mode = "absorption"   # ADAPTIVE HORIZON (default since 2026-10-13): target = block / the absorption this stock has
+horizon_min_ticks = 30        # shown (learned from our own finished blocks), never shorter than 30 s, at most 90 s: a thin
+horizon_max_ticks = 90        # book gets the time it needs instead of being swept. 27-scenario stress, seeds 1401-1416: no
+                              # scenario worse, pooled +$41/heat (t 1.8). A 15 s floor (shorter horizons) + liquidity-
+                              # aware valuation failed (practice worst heats -$11k..-$28k).
 crowd_horizon_ticks = 12      # ...but race the crowd once it is detected (learned impact > 2 sd). A FIXED 12 cost
                               #   -$7.6k (t -6.1) in the benign sim; switching only on evidence costs nothing there.
 max_slippage = 0.04           # aggressive catch-up slices: VWAP within this of the touch
 participation = 0.35          # max fraction of visible depth per aggressive slice
 display_qty = 5000            # iceberg: largest passive child shown in the book
+urgent_participation = 0.35   # THIN-BOOK URGENCY (default since 2026-10-13): past the schedule's deadline take at most
+                              # this x the depth within the price limit per loop, instead of up to max_order (25k), which
+                              # swept every re-quote of the house market maker (practice: CRZY $10.12 -> $11.12 while
+                              # buying back 55k). 27-scenario stress, seeds 1201-1216: no scenario significantly worse,
+                              # pooled +$32/heat (t 0.4), hostile worst heat +$8.3k. 0 = old sweep.
 urgent_ticks = 6              # cross for everything left in the final ticks of the schedule
 front_load = 0.3              # 0 = linear schedule; >0 = unwind more early (less drift risk)
 schedule = "almgren_chriss"   # optimal path from GARCH vol, book-implied impact, risk aversion ("front_load" = old curve)

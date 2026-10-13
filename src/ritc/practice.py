@@ -200,6 +200,31 @@ def report(paths: list[str]) -> str:
             hi = (f"won from {min(won):+.2f}" if won
                   else f"no wins yet: the reserve is above {max(lost):+.2f} from the mid (bid closer: profile C)")
             out.append(f"  reserve bracket: {lo}, {hi} (vs mid, client's favour)")
+    blocks = []
+    for p in paths:
+        sj = Path(p).with_suffix("").with_suffix(".summary.json") if p.endswith(".jsonl") else None
+        if sj and sj.exists():
+            try:
+                doc = json.loads(sj.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            blocks += [dict(b, heat=Path(p).stem.split("-", 1)[-1][:15]) for b in doc.get("blocks", [])]
+    if blocks:
+        out.append("\nunwound blocks, slowest first (rate = shares/s absorbed; mid = move over the unwind, "
+                   "+ = our way):")
+        for b in sorted(blocks, key=lambda b: b["rate"]):
+            out.append(f"  {b['heat']}  {b['ticker']:<5}{b['side']:<5}{b['qty'] // 1000:>3}k {b['secs']:>4}s "
+                       f"{b['rate']:>6,}/s  mid {b['mid_move']:+.2f}  rested {b['rested']:>7,} crossed "
+                       f"{b['crossed']:>7,}  made {b['made']:>+8,} vs exp {b['expected']:>+8,}")
+        if len(blocks) >= 4:
+            r = [b["rate"] for b in blocks]
+            m = [b["mid_move"] for b in blocks]
+            mr, mm = statistics.mean(r), statistics.mean(m)
+            cov = sum((a - mr) * (c - mm) for a, c in zip(r, m))
+            den = (sum((a - mr) ** 2 for a in r) * sum((c - mm) ** 2 for c in m)) ** 0.5
+            if den:
+                out.append(f"  correlation(absorption rate, move our way) = {cov / den:+.2f} over {len(blocks)} blocks "
+                           "(clearly positive = slow unwinds lose: the stuck-inventory risk is real)")
     return "\n".join(out)
 
 

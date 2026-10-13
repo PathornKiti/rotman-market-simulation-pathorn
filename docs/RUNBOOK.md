@@ -141,6 +141,13 @@ Each heat's log and journal are named after what it changed, e.g.
 `logs/liability-20261012-171840__C_auctions__crowd_robust=True+liquidity_model=auctions.log` (a plain run has
 no suffix; `--set` overrides are listed the same way).
 
+**Only ONE bot window per account.** With `--forever` the first window keeps trading every heat; starting a
+second `ritc run --live` would put two bots on the same positions (both unwind, positions go through zero,
+speculation fines; a -$45k heat on 2026-10-12 is the suspected case). A second live bot now refuses to start;
+`ritc record`, `ritc practice`, `ritc monitor` and `ritc suggest` are read-only and fine in other windows.
+`python -m ritc doctor` measures the RIT round trip on this machine: a loop is ~1 round trip idle and ~4-5
+while unwinding, so "slow loops" during unwinds are expected above ~120 ms per round trip.
+
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
 far, prints `PROFILE <name>` and records it in the journal. Start it before the heat opens, as always. To force
 one: `--profile C_auctions`. An explicit `--set` still wins over the profile.
@@ -153,6 +160,12 @@ one: `--profile C_auctions`. An explicit `--set` still wins over the profile.
 
 Optional and harmless: `python -m ritc record` in a second window (a 0.5 s recording of every book for
 `calibrate`). The scoreboard below does not need it; the journal already has every tick's quotes.
+
+**Reading a heat's log** (liability): `TENDER ... ACCEPT (...) ~ $X expected` per tender answered;
+`PNL t=210  NLV ... (+... in 30 s) | CROC -62,306 sh +27,564` every 30 s (RIT's realized + unrealized per stock);
+`AUCTION #702 BUY CRZY 53k at 9.34: WON / lost` a few seconds after each auction closes; `BLOCK P&L CROC: +35,081
+since tender #5 + #14 ... (expected +20,589)` when a block is flat again; at the end a `HEAT SUMMARY` table (every
+tender: expected vs made, auctions won of bid) and `HEAT RESULT: NLV ... | per stock`.
 
 **After each heat** (or a batch of heats), in the same folder:
 

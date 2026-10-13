@@ -53,6 +53,8 @@ class AlgoParams:
     urgent_ticks: int = 10           # cross everything in the final ticks
     front_load: float = 0.0          # 0 = linear schedule; 1 = strongly front-loaded
     improve_if_spread_ticks: int = 3 # step one tick inside the spread when it is at least this wide
+    urgent_participation: float = 0.0  # >0: past the deadline take at most this x the depth within the limit per loop
+                                       # (0 = up to max_order: sweeps a thin book every loop and chases the price)
     tick: float = 0.01
 
 
@@ -130,7 +132,12 @@ def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks
         lim = touch + p.max_slippage if action == "BUY" else touch - p.max_slippage
         if limit_price is not None:
             lim = min(lim, limit_price) if action == "BUY" else max(lim, limit_price)
-        if ticks_left <= p.urgent_ticks:
+        if ticks_left <= p.urgent_ticks and p.urgent_participation > 0:
+            # THIN-BOOK URGENCY (practice 2026-10-13, only the house market maker): sweeping max_order every loop ate
+            # each re-quote and chased CRZY $10.12 -> $11.12 while buying back 55k. Take a share of what is shown.
+            depth = book.depth("ask" if action == "BUY" else "bid", lim)
+            qty = min(behind, max_order, max(1, int(depth * p.urgent_participation)))
+        elif ticks_left <= p.urgent_ticks:
             qty = min(behind, max_order)                 # urgent: rely on the protective limit only
         else:
             depth = book.depth("ask" if action == "BUY" else "bid", lim)

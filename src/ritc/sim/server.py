@@ -72,6 +72,7 @@ class Sec:
     tick: float = TICK           # price increment (currencies quote to 4 decimals)
     position: int = 0
     cost: float = 0.0            # signed cost basis for vwap
+    realized: float = 0.0        # P&L of positions closed back to flat (RIT /securities "realized")
     volume: int = 0
     last: float = 0.0
     bids: list[list[float]] = field(default_factory=list)   # [price, qty]
@@ -741,6 +742,7 @@ class Market:
         if not maker and s.impact:
             s.mid += sign * s.impact * qty
         if s.position == 0:
+            s.realized -= s.cost       # back to flat: what the round trip made (before fees)
             s.cost = 0.0
 
     def submit(self, ticker: str, otype: str, qty: int, action: str, price: float | None) -> dict:
@@ -938,7 +940,8 @@ class Market:
                 "bid_size": s.bids[0][1] if s.bids else 0, "ask_size": s.asks[0][1] if s.asks else 0,
                 "volume": s.volume, "trading_fee": s.fee, "limit_order_rebate": s.rebate,
                 "max_trade_size": s.max_trade, "multiplier": s.mult, "is_tradeable": s.tradeable, "currency": s.ccy,
-                "unrealized": round((s.mid * s.position - s.cost) * s.mult, 2)}
+                "unrealized": round((s.mid * s.position - s.cost) * s.mult, 2),
+                "realized": round(s.realized * s.mult, 2)}
 
     def book_view(self, s: Sec, limit: int) -> dict:
         def rows(levels, action):

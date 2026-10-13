@@ -76,6 +76,18 @@ def build(case: str, cfg_path: str | None, live: bool, overrides: dict | None = 
 
 
 def cmd_run(a: argparse.Namespace) -> int:
+    lock = None
+    if a.live:
+        from .core.single import AlreadyRunning, acquire
+        try:
+            lock = acquire(config.ROOT / "logs" / f"{a.case}-live.lock")    # noqa: F841 - held until exit
+        except AlreadyRunning:
+            print(f"\n!!! Another `ritc run {a.case} --live` is already running on this machine (maybe a --forever "
+                  "window).\n!!! Two bots on one account trade the same positions against each other: fines and "
+                  "losses.\n!!! Use that window, or Ctrl-C it first. Not starting.\n")
+            return 2
+        except Exception as exc:                 # noqa: BLE001 - never refuse to trade because of the guard itself
+            print(f"(single-bot guard unavailable: {exc}; make sure only one bot window runs)")
     heat = 0
     while True:
         heat += 1
@@ -147,6 +159,37 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         except RITError as exc:
             ok = False
             print(f"\n--- {name} --- FAILED: {exc}")
+    if ok:
+        # ROUND TRIPS per endpoint on this machine, and what throttles them. A bot loop issues ~6-9 reads in parallel
+        # when idle and ~4-5 calls in sequence while unwinding; RIT_MIN_INTERVAL serialises ALL of them.
+        print(f"\n--- latency ---\nRIT_MIN_INTERVAL = {c.min_interval:g} s"
+              + ("  <- every call waits this long after the previous one: a loop of ~10 calls takes >= "
+                 f"{10 * c.min_interval:.1f} s. Set RIT_MIN_INTERVAL=0 in .env unless RIT answers 429."
+                 if c.min_interval else ""))
+        tick = (c.securities() or [{}])[0].get("ticker")
+        probes = [("case", c.case), ("securities", c.securities), ("trader", c.trader), ("tenders", c.tenders),
+                  ("orders", c.orders)] + ([("book", lambda: c.book(tick, 20)), ("tas", lambda: c.tas(tick))]
+                                            if tick else [])
+        worst = 0.0
+        for name, fn in probes:
+            times = []
+            for _ in range(5):
+                t0 = time.perf_counter()
+                try:
+                    fn()
+                except RITError:
+                    continue
+                times.append(1000 * (time.perf_counter() - t0))
+            if times:
+                med = sorted(times)[len(times) // 2]
+                worst = max(worst, med)
+                print(f"  {name:<11} median {med:6.0f} ms  (max {max(times):.0f})")
+        print(f"429 rate-limit answers during this test: {c.throttled}")
+        print(f"Expected bot loop: ~{worst:.0f} ms idle, ~{worst + 3.5 * worst:.0f} ms while unwinding.")
+        if worst > 120:
+            print("Slow for a local RIT client: run the bot on the SAME machine as RIT, exclude localhost / the "
+                  "python folder from antivirus web scanning, close other heavy programs, use wired network "
+                  "for a remote (DMA) server.")
     if not ok:
         print("\nSome calls failed. Is the RIT client running and logged in? Is RIT_API_KEY right?"
               "\nOffline? Start the simulator:  python -m ritc sim equity")
