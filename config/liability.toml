@@ -156,39 +156,6 @@ crowd_weight = 1.0
 # crowd impact, crowd position cap. Each worsened the worst seed with tenders priced off the visible price (anchor=1).
 # If the practice rounds show a crowd, set crowd_prior_mean to the learned $/10k (prior sd ~ half of it) instead.
 
-
-# PER-TICKER settings: any [strategy] key can be overridden per stock in a [strategy.per_ticker.<TICKER>] table placed
-# here (LiabilityStrategy.tp). CRZY, TAME and CROC behave differently (22 real heats 2026-10-14). ONE change at a time.
-[strategy.per_ticker.CROC]
-edge_floor = 0.0              # OFF (2026-10-14 night): FAILED on real heats. 22:15-22:32 (3 heats, ~3 other teams online)
-                              # it took 2 CROC tenders the cost model priced at -0.25 and -0.36/share; both lost
-                              # (-$51.8k, about -$28.6k); the old bot declines both. The "+$66k, 0 losers" below came from a
-                              # 10-tick proxy; on the full recorded price path the floor's 8 evening tenders net ~$0.
-                              # The cost model is right: evening blocks valued < +0.10 lost, >= +0.10 made money.
-                              # Was 0.15: VALUATION (2026-10-14): take a fixed CROC tender the cost model declines when its edge vs the
-                              # mid is >= 0.15. The stacked charges (book walk on CROC's thin book + drift x a long unwind
-                              # + crowd) averaged 0.26/share on CROC; taken CROC blocks really gave back 0.036 (day) and
-                              # 0.125 (evening, 3-5 other teams online). 22 real heats, conservative scoring: +12 tenders,
-                              # +$94k (day +$52k, evening +$42k), 1 loser. TAME: evening-only gain (+$56k, 4 losers):
-                              # not yet. CRZY: -$17k: never (its valuation is about right).
-                              # CROWD GUARD (code): off while the crowd alarm is on -> real +7 tenders, +$66k, 0 losers.
-                              # Sim (26 markets): pooled +$3.2k (t 4.6); extreme "everything at once" -$32k -> $0 with
-                              # the guard; left: "impact: trend + rivals" -$10k (one seed; the sprint dumps the extra
-                              # block). 0.20: real +$49k (3 tenders), sim fixes "everything anchored" worst seed.
-soft_trend = false            # FAILED the sim safety check (docs/results/ab_croc_soft_2026-10-14.txt). EXECUTION (2026-10-14): CROC has no fast 10-tick sprint; it responds to its SLOW trend in
-                              # steps instead (LiabilityStrategy.soft_levels): the 60-tick trend against the block, our own
-                              # crossing removed, in units of CROC's own noise (GARCH vol x sqrt(60/3)):
-                              #   >= 1 sd: rest one tick inside the spread, twice the display (still passive);
-                              #   >= 2 sd: also cross gently, <= soft_cross_rate shares per tick (~CROC's own flow).
-                              # Why: 14 real heats: CROC sprints crossed 46-53k at 4-13k sh/s (CROC trades ~1.5k/s), fills
-                              # -0.046 vs mid, -$77k vs expected; resting on the SAME price path beat them in 7 of 9
-                              # (+$29k); 10 of 12 fired with CROC's slow trend in our favour. CROC is the noisiest stock
-                              # tick to tick (sd 0.042 vs 0.031-0.033) and its 60-tick trend predicts it best (r 0.45).
-soft_trend_window = 60
-soft_trend_z1 = 1.0
-soft_trend_z2 = 2.0
-soft_cross_rate = 1500
-
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
 close_hold_ticks = 90         # HOLD TO THE BELL (2027 brief: open positions close at the last traded price, no fine).
@@ -262,10 +229,6 @@ ac_risk_aversion = 3e-7       # Almgren-Chriss lambda (1/$): higher = unwind fas
                               # 1e-6 $37.3k, 1e-5 $35.5k, 1e-4 $31.4k; old front_load=0.3 $34.1k/worst $16.9k.
                               # Impact dominates risk here, so near-linear wins; in a more volatile market
                               # (higher GARCH sigma) the same lambda front-loads automatically.
-# PATIENT TAIL / RIDE (bundle 7fc95c4 `ride_ticks`): REJECTED on real data 2026-10-14 late night (17 evening journals,
-# replay + time & sales fill estimate). The rebound after rested blocks is real (+0.21 in 20 ticks, t 8.2) but shows only
-# AFTER the block ends: when ride would switch on (momentum says "our way") the mid moved AGAINST us -0.042 in 5 ticks
-# (t -2.6), ~+$0.4k/heat est.; riding whenever resting -0.125 (t -4.9), -$1.6k/heat; last 25% of the block only -$0.1k.
 
 [run]
 max_drawdown = 0              # kill switch OFF (0 = off; was 15000). Halting after one bad block forfeits every later

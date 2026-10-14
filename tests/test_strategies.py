@@ -436,37 +436,3 @@ def test_netting_credit_values_the_offset_of_an_open_block():
     assert netted.price == round(plain.price + 0.20, 2)
     # Nothing to offset: the credit changes nothing.
     assert evaluate_tender(t, DEEP, 0.02, offset_credit=0.20).price == evaluate_tender(t, DEEP, 0.02).price
-
-
-def test_per_ticker_settings_override_the_strategy_wide_value():
-    from ritc.strategies.liability import LiabilityStrategy
-
-    s = LiabilityStrategy.__new__(LiabilityStrategy)
-    s.p = {"refill_factor": 2.0, "trend_exec": True,
-           "per_ticker": {"CROC": {"refill_factor": 4.0, "trend_exec": False}}}
-    assert s.tp("CROC", "refill_factor") == 4.0 and s.tp("CROC", "trend_exec") is False
-    assert s.tp("TAME", "refill_factor") == 2.0 and s.tp("TAME", "trend_exec") is True
-    assert s.tp("CRZY", "risk_aversion", 0.3) == 0.3                       # unset anywhere: the default
-
-
-def test_edge_floor_takes_value_declines_with_a_big_edge_only():
-    from types import SimpleNamespace
-
-    from ritc.strategies.liability import LiabilityStrategy, TenderDecision
-
-    s = LiabilityStrategy.__new__(LiabilityStrategy)
-    s.p = {"edge_floor": 0.15}
-    s.crowded = lambda: False
-    snap = SimpleNamespace(book=lambda tk: SimpleNamespace(mid=20.30))
-    t = {"ticker": "CROC", "action": "BUY", "price": 20.10, "is_fixed_bid": True}      # edge +0.20
-    no = TenderDecision(False, 20.10, -0.05, 20.2, "profit/share -0.0500 < 0.0100")
-    assert s.edge_floor(t, snap, no).accept                                            # big edge: take it
-    assert not s.edge_floor(dict(t, price=20.20), snap, no).accept                      # edge +0.10 < floor
-    room = TenderDecision(False, None, 0.0, 0.0, "exceeds risk room (53000 > 48000)")
-    assert not s.edge_floor(t, snap, room).accept                                      # limits still win
-    assert not s.edge_floor(dict(t, is_fixed_bid=False), snap, no).accept              # auctions untouched
-    s.p = {"edge_floor": 0.15, "per_ticker": {"CROC": {"edge_floor": 0.0}}}
-    assert not s.edge_floor(t, snap, no).accept                                        # off for one stock
-    s.p = {"edge_floor": 0.15}
-    s.crowded = lambda: True
-    assert not s.edge_floor(t, snap, no).accept                                        # crowd alarm on: model decides

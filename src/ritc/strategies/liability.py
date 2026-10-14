@@ -738,47 +738,6 @@ class LiabilityStrategy(Strategy):
     def book_signal_on(self) -> bool:
         return self.book_model() is not None
 
-    def slow_trend_z(self, ticker: str, held: int, snap: Snapshot) -> float:
-        """
-        SOFT TREND signal: the stock's SLOW trend against a position of sign `held`, in units of its own noise.
-        = (last mid - mean of the last `soft_trend_window` mids), our own crossing's impact removed (`own_impact`),
-        / (GARCH $ vol per tick x sqrt(window / 3), the sd of that deviation for a random walk). + = against us.
-        CROC (14 real heats, flat periods): the 60-tick trend predicts its next 20 ticks best (r 0.45; 10-tick run
-        0.37), and CROC is the noisiest stock tick to tick (sd 0.042 vs 0.031-0.033).
-        """
-        w = int(self.tp(ticker, "soft_trend_window", 60))
-        h, o = self.mid_hist.get(ticker, [])[-w:], self.own_flow.get(ticker, [])[-w:]
-        sig = self.price_vol(ticker, snap)
-        if not held or len(h) < max(10, w // 2) or sig <= 0:
-            return 0.0
-        lam = float((self.p.get("own_impact") or {}).get(ticker, 0.0))
-        cum, adj = 0.0, []
-        for k, m in enumerate(h):
-            cum += o[k] if k < len(o) else 0.0
-            adj.append(m - lam * cum)                    # the price without our own crossing's push
-        dev = adj[-1] - sum(adj) / len(adj)
-        return (-1 if held > 0 else 1) * dev / (sig * math.sqrt(len(h) / 3))
-
-    def soft_levels(self, snap: Snapshot) -> dict[str, tuple[int, int]]:
-        """SOFT TREND (`soft_trend`, per ticker): instead of the fast sprint, respond in steps to the slow trend:
-        z >= soft_trend_z1 -> rest more aggressively; z >= soft_trend_z2 -> also cross gently, `soft_cross_rate`
-        shares per tick at most. Never inside the hold-to-bell window (that keeps its own rule)."""
-        out = {}
-        for t, b in self.algo.blocks.items():
-            if not self.tp(t, "soft_trend", False):
-                continue
-            held = snap.positions.get(t, 0) - b.target
-            z = self.slow_trend_z(t, held, snap)
-            if z >= float(self.tp(t, "soft_trend_z2", 2.0)):
-                out[t] = (2, int(self.tp(t, "soft_cross_rate", 1500)))
-            elif z >= float(self.tp(t, "soft_trend_z1", 1.0)):
-                out[t] = (1, 0)
-            if out.get(t) and out[t] != getattr(self, "_soft_prev", {}).get(t):
-                log.info("SOFT %s: slow trend %.1f sd against our %+d block -> %s", t, z, held,
-                         "rest one tick inside" if out[t][0] == 1 else f"also cross <= {out[t][1]:,} sh/tick")
-        self._soft_prev = out
-        return out
-
     def predicted_against(self, ticker: str, held: int, snap: Snapshot) -> float:
         """$ the next window is expected to move against a position of sign `held` (book model or momentum)."""
         if not held:
@@ -794,7 +753,7 @@ class LiabilityStrategy(Strategy):
         """$ / share a sprint must save: `live_cross_cost` = what crossing the next slice costs in the book now plus
         the fee (deep book: cheap, thin book: dear); otherwise the fixed `trend_cross_cost`."""
         if not self.cfg.get("execution", {}).get("live_cross_cost", False):
-            return float(self.tp(ticker, "trend_cross_cost", 0.03))
+            return float(self.p.get("trend_cross_cost", 0.03))
         n = min(abs(held), int(self.cfg.get("execution", {}).get("live_cross_shares", 10000)))
         return max(0.01, cross_cost(snap.book(ticker), "SELL" if held > 0 else "BUY", n)
                    + float(self.fees.get(ticker, 0.02)))
@@ -1036,79 +995,45 @@ class LiabilityStrategy(Strategy):
                 return TenderDecision(False, None, 0.0, 0.0, f"auction while we unwind our {pos:+d} block")
         if self.liq_model == "ensemble":
             return self.decide_ensemble(t, snap, positions)
-        return self.edge_floor(t, snap, self._evaluate(t, snap, positions))
-
-    def edge_floor(self, t: dict, snap: Snapshot, d: TenderDecision) -> TenderDecision:
-        """
-        EDGE FLOOR (`strategy.edge_floor`, per ticker via [strategy.per_ticker.<TK>]): take a FIXED tender the cost
-        model declines when its edge vs the mid is at least the floor. 22 real heats 2026-10-14: the stacked charges
-        (book walk + drift x unwind + risk + crowd) averaged 0.16-0.26/share and reached 1.4, while taken blocks really
-        gave back 0.03-0.04/share in calm heats and 0.08-0.14 with 3-5 other teams online. Only adds tenders the model
-        declined ON VALUE: room, time, no-market and auction answers are untouched.
-        """
-        floor = float(self.tp(t.get("ticker"), "edge_floor", 0.0) or 0.0)
-        if d.accept or floor <= 0 or not t.get("is_fixed_bid", True) or not d.reason.startswith("profit/share"):
-            return d
-        if self.crowded() and not self.tp(t.get("ticker"), "edge_floor_crowded", False):
-            # CROWD GUARD: with the crowd alarm on, keep the cost model's answer. Sim: the floor gains +$3-10k/heat in
-            # normal and moderate-rival markets but -$21k..-34k where every tender is dumped (worst -102k -> -219k).
-            # Real heats: the guard gives up 5 CROC tenders (+$28k net) of the floor's 12 (+$94k).
-            return d
-        mid, px = snap.book(t.get("ticker")).mid, t.get("price")
-        if not mid or px is None:
-            return d
-        edge = (1 if str(t.get("action", "BUY")).upper() == "BUY" else -1) * (mid - float(px))
-        if edge < floor:
-            return d
-        return TenderDecision(True, d.price, d.profit_per_share, d.unwind_vwap,
-                              f"edge floor: edge {edge:+.3f} >= {floor:.2f} (cost model {d.profit_per_share:+.4f})")
-
-    def tp(self, ticker: str | None, key: str, default=None):
-        """
-        PER-TICKER setting: `[strategy.per_ticker.<TICKER>]` overrides any strategy key for that stock (CRZY, TAME and
-        CROC behave differently: 13 real heats 2026-10-14), else the strategy-wide value.
-        """
-        ov = (self.p.get("per_ticker") or {}).get(ticker) or {}
-        return ov[key] if key in ov else self.p.get(key, default)
+        return self._evaluate(t, snap, positions)
 
     def _evaluate(self, t: dict, snap: Snapshot, positions: dict[str, int], flow: bool | None = None,
                   crowd: bool = True, room: int | None = None) -> TenderDecision:
         """evaluate_tender with the bot's state. `flow`: force the forward-liquidity exit on / off (None = the
         liquidity_model's choice); `crowd`: include the learned crowd charge; `room`: override the risk room."""
         ticker = t.get("ticker")
-        lm = self.tp(ticker, "liquidity_model", self.liq_model)
-        use_flow = ((lm == "flow" or (lm == "auctions" and self.bid_up(t, positions))
-                     or (lm == "adaptive" and self.no_crowd_seen())) if flow is None else flow)
+        use_flow = ((self.liq_model == "flow" or (self.liq_model == "auctions" and self.bid_up(t, positions))
+                     or (self.liq_model == "adaptive" and self.no_crowd_seen())) if flow is None else flow)
         return evaluate_tender(
             t, snap.book(ticker),
             fee=float(self.fees.get(ticker, 0.0)),
             position=positions.get(ticker, 0),
             room=self.risk.room(ticker, t.get("action", "BUY"), positions) if room is None else room,
             ticks_left=snap.ticks_left,
-            refill_factor=self.tp(ticker, "refill_factor", 2.0),
+            refill_factor=self.p.get("refill_factor", 2.0),
             # In a drawdown, only the best tenders: required margin scales with 1/throttle.
-            min_profit=self.tp(ticker, "min_profit_per_share", 0.02) * self.edge_mult(),
-            competitive_margin=self.tp(ticker, "competitive_margin", 0.05),
+            min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
+            competitive_margin=self.p.get("competitive_margin", 0.05),
             drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
             # LIQUIDITY-AWARE: time to unwind = shares / the absorption this stock has shown (feeds sigma x sqrt(T))
             unwind_ticks_per_lot=(1.0 / self.absorption(ticker) if self.p.get("liquidity_aware", False)
-                                  else self.tp(ticker, "unwind_ticks_per_share", 0.0)),
-            min_ticks_to_unwind=self.tp(ticker, "min_ticks_to_unwind", 10),
+                                  else self.p.get("unwind_ticks_per_share", 0.0)),
+            min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
             price_vol_per_tick=self.price_vol(ticker, snap),
-            risk_aversion=self.tp(ticker, "risk_aversion", 0.0),
+            risk_aversion=self.p.get("risk_aversion", 0.0),
             crowd_cost=((self.crowd_cost(int(t.get("quantity", 0))) if crowd else 0.0)
                         + self.holder_cost(ticker, int(t.get("quantity", 0)))
                         + self.trend_cost(ticker, 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1)),
-            close_hold_ticks=(self.close_hold if self.tp(ticker, "hold_valuation", False) and not self.holder_drift()
+            close_hold_ticks=(self.close_hold if self.p.get("hold_valuation", False) and not self.holder_drift()
                               else 0),     # holding to the bell is not free once holding has a drift
             flow_rate=(self.flow(ticker, "SELL" if str(t.get("action", "BUY")).upper() == "BUY" else "BUY")
                        if use_flow else 0.0),
-            drift_symmetric=bool(self.tp(ticker, "drift_symmetric", False)),
+            drift_symmetric=bool(self.p.get("drift_symmetric", False)),
             offset_credit=self.netting_credit(),
             # DRIFT HORIZON (practice 2026-10-14, 47 fixed tenders): the EWMA drift x 20 ticks matched the next 20
             # ticks' move against the unwind (charged 0.118, moved 0.116), but x the full unwind time it charged
             # 0.232 for a 0.078 move over 40 ticks: the trend fades within 10-20 ticks.
-            drift_horizon_ticks=float(self.tp(ticker, "drift_horizon_ticks", 0)),
+            drift_horizon_ticks=float(self.p.get("drift_horizon_ticks", 0)),
         )
 
     def scenario_weights(self) -> dict[str, float]:
@@ -1527,10 +1452,8 @@ class LiabilityStrategy(Strategy):
         # SPRINT: cross while the expected further move against the block beats the cost of crossing; rest again
         # once it is under half of that (no flapping on the threshold).
         sprint: set[str] = set()
-        if self.p.get("trend_exec", False) or self.p.get("per_ticker"):
+        if self.p.get("trend_exec", False):
             for t, b in self.algo.blocks.items():
-                if not self.tp(t, "trend_exec", False):
-                    continue                       # PER-TICKER: the sprint can be off for one stock
                 held = snap.positions.get(t, 0) - b.target
                 c = self.cross_threshold(t, held, snap)
                 if held and self.predicted_against(t, held, snap) >= (c / 2 if t in self.algo.sprint else c):
@@ -1546,8 +1469,6 @@ class LiabilityStrategy(Strategy):
             sprint |= {t for t, b in self.algo.blocks.items() if now - b.start_tick < first}
         if self.sprint_walk:
             sprint = self.cap_sprint_walk(sprint, snap)
-        self.algo.soft = self.soft_levels(snap)
-        sprint -= set(self.algo.soft) | {t for t in self.algo.blocks if self.tp(t, "soft_trend", False)}
         for t in sprint - self.algo.sprint:
             log.info("SPRINT %s: next %s ticks expected %+.3f against our %+d block (run %+.3f, book asym %+.3f), "
                      "crossing costs %.3f: crossing", t, self.p.get("trend_window", 10),

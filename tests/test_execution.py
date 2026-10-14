@@ -356,11 +356,3 @@ def test_fresh_unwind_cancels_its_own_unmanaged_orders():
     algo.step_fresh({"TAME": BOOK}, {"TAME": -3000}, 1, lambda: (rest, {"TAME": -3000}), lambda t, p: 0)
     assert stray in c.cancelled and 9 not in c.cancelled
     assert sum(q for _, a, q, _ in c.posted[1:] if a == "BUY") <= 1500     # both still count this loop
-
-
-def test_lean_rests_inside_a_two_tick_spread_with_double_display():
-    book = make_book([(25.00, 5000)], [(25.02, 5000)])
-    normal = plan_children(book, 20000, sched=20000, target=0, ticks_left=50, max_order=10000, p=P)
-    lean = plan_children(book, 20000, sched=20000, target=0, ticks_left=50, max_order=10000, p=P, lean=True)
-    assert normal[0].price == pytest.approx(25.02) and normal[0].qty == 4000
-    assert lean[0].price == pytest.approx(25.01) and lean[0].qty == 8000
