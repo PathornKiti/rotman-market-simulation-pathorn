@@ -1,3 +1,46 @@
+# Handoff: 2026-10-14 night, per-ticker version (START HERE; older notes below are history)
+
+> **CASE RULE (organisers; keep this note in EVERY handoff):** The speculation fine will increase from $0.40 to
+> $0.60 per share for speculation exceeding 5,000 shares. The fine for speculation of 5,000 shares or fewer remains
+> unchanged at $0.20 per share. (Code: sim `_apply_fill`, `postmortem/replay.py` + `live.py` FINE1/FINE2, Excel
+> template: all $0.20 / $0.60.)
+
+**Base:** commit 60c9b4b (= b19e95c; the user reverted the 2026-10-14 evening bundle, which is kept in 7fc95c4). On
+top of it, UNCOMMITTED (the user handles git): a per-ticker layer and two CROC-only changes. CRZY and TAME run exactly
+as b19e95c. 182 tests pass.
+
+**Working rules (user):** one case at a time; judge on REAL heats first (journal replay / real-outcome counterfactual);
+the simulator only as a safety check (rival desks); focus on CRZY / TAME / CROC.
+
+**What is new:**
+1. `LiabilityStrategy.tp(ticker, key)`: `[strategy.per_ticker.<TK>]` overrides any strategy key per stock (valuation
+   and sprint use it).
+2. VALUATION, CROC: `edge_floor = 0.15` (`LiabilityStrategy.edge_floor`): accept a fixed CROC tender the cost model
+   declines when its edge vs the mid is >= 0.15, but NOT while the crowd alarm is on (crowd guard). 22 real heats:
+   the model declined 40 of 99 tenders with edge > 0.10; 75% of those would have made money (+$207k), charged 0.49/share
+   vs a real cost of 0.13. CROC floor + guard: +7 tenders, +$66k, 0 losers. Sim (26 markets): +$3.2k (t 4.6); left:
+   one "impact: trend + rivals" seed. Log line: `ACCEPT (edge floor: ...)`.
+3. EXECUTION, CROC: `soft_trend = true` replaces the fast 10-tick sprint on CROC: the 60-tick trend against the block
+   (own crossing removed), in units of CROC's own noise: >= 1 sd rest one tick inside, >= 2 sd also cross <= 1,500
+   sh/tick. 14 real heats: CROC sprints -$77k vs expected; resting on the same price path +$29k better (7 of 9).
+   Log line: `SOFT CROC: ...`.
+
+**Key real-data facts (36 real heats on 2026-10-14):** rested blocks always beat their expected value (+$53k, 0 losers
+in 14 heats); sprinted blocks -$106k (CROC -$77k, TAME -$37k; TAME sprints still beat resting on the same path).
+All three stocks TREND (no mean reversion); TAME/CRZY fast momentum (r 0.54/0.46), CROC slow (60-tick r 0.45) and the
+noisiest tick to tick. Evening heats with 3-5 other teams online: post-tender move -0.06..-0.11 against (sim rival
+markets -0.31): a moderate crowd. Tools (session scratchpad, re-create if needed): journal_replay.py (feeds a journal's
+market rows through the strategy; live=True; exact decisions, no fills), verify_step.py (decision diffs + real
+outcomes). Old-layout journals (logs/liability-*.jsonl) have no market rows and cannot be replayed.
+
+**Next:** the user archives the logs and runs a batch of this version on Windows (copy .log + zipped logs\data;
+note how many other teams are online). Then: replay every new heat through the old bot (`--set
+strategy.per_ticker.CROC.edge_floor=0 --set strategy.per_ticker.CROC.soft_trend=false` = b19e95c) and compare per
+tender / per block. Open cases after that: TAME valuation (evening-only gains so far), the crowd learner learning only
+from untaken tenders (starves the adaptive gate when we accept more), TAME sprint in crowded markets.
+
+---
+
 # Handoff: 2026-10-14 (START HERE)
 
 8 practice heats reviewed (RESEARCH.md "Sprint walk cap and own-impact run"). Default unchanged; new code, all OFF by

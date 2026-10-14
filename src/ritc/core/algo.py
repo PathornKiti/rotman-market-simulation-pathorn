@@ -108,10 +108,11 @@ def schedule_position(start: int, target: int, start_tick: int, deadline: int, n
 
 def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks_left: int,
                   max_order: int, p: AlgoParams, limit_price: float | None = None,
-                  passive_only: bool = False) -> list[Child]:
+                  passive_only: bool = False, lean: bool = False) -> list[Child]:
     """
     Pure function: the child orders to have working this loop. `passive_only`: never cross, just
     rest at the touch (the case closes what is left at the last price, so crossing buys nothing).
+    `lean` (SOFT TREND, mild): rest more aggressively - one tick inside any spread of 2+ ticks, twice the display.
     """
     remaining = target - position
     if remaining == 0 or book.best_bid is None or book.best_ask is None:
@@ -150,15 +151,16 @@ def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks
     # ---- passive part: rest the rest (iceberg) at the touch to earn the spread
     if remaining > 0 and (ticks_left > p.urgent_ticks or passive_only):
         spread_ticks = round((book.best_ask - book.best_bid) / p.tick)
+        improve_at = 2 if lean else p.improve_if_spread_ticks
         if action == "SELL":
-            px = book.best_ask - (p.tick if spread_ticks >= p.improve_if_spread_ticks else 0)
+            px = book.best_ask - (p.tick if spread_ticks >= improve_at else 0)
             if limit_price is not None:
                 px = max(px, limit_price)
         else:
-            px = book.best_bid + (p.tick if spread_ticks >= p.improve_if_spread_ticks else 0)
+            px = book.best_bid + (p.tick if spread_ticks >= improve_at else 0)
             if limit_price is not None:
                 px = min(px, limit_price)
-        qty = min(remaining, p.display_qty, max_order)
+        qty = min(remaining, p.display_qty * (2 if lean else 1), max_order)
         children.append(Child(action, qty, round(px, 6), passive=True))
     return children
 
@@ -196,6 +198,8 @@ class BlockExecutor:
         self.passive: set[str] = set()           # tickers that only rest this loop (risk within budget)
         self.sprint: set[str] = set()            # tickers to cross now (a trend runs against the block)
         self.sprint_limit: dict[str, float] = {}  # ticker -> worst price a sprint may pay (sprint_max_walk)
+        self.soft: dict[str, tuple[int, int]] = {}  # SOFT TREND: ticker -> (level 1 lean / 2 gentle cross, shares/tick)
+        self.soft_used: dict[str, tuple[int, int]] = {}  # ticker -> (abs tick, shares crossed gently this tick)
 
     def work(self, ticker: str, position: int, target: int, now: int, deadline: int,
              limit_price: float | None = None, kappa: float = 0.0) -> Block:
@@ -308,9 +312,26 @@ class BlockExecutor:
                 buy = b.target > pos
                 lim = cap if lim is None else (min(lim, cap) if buy else max(lim, cap))
             return plan_children(book, pos, b.target, b.target, 0, self.ex.max_size(t), self.p, lim)
-        return plan_children(book, pos, sched, b.target, b.deadline - now, self.ex.max_size(t), self.p,
+        level, rate = self.soft.get(t, (0, 0))
+        kids = plan_children(book, pos, sched, b.target, b.deadline - now, self.ex.max_size(t), self.p,
                              b.limit_price, passive_only=t in self.passive or (self.passive_from is not None
-                                                                                and now >= self.passive_from))
+                                                                               and now >= self.passive_from),
+                             lean=level >= 1)
+        if level >= 2 and rate > 0 and not any(not c.passive for c in kids):
+            # SOFT TREND, strong: cross GENTLY on top of resting - at most `rate` shares per tick (about the stock's own
+            # trade flow), within max_slippage of the touch, so the block speeds up without walking a thin book.
+            tick, used = self.soft_used.get(t, (now, 0))
+            used = used if tick == now else 0
+            action = "BUY" if b.target > pos else "SELL"
+            touch = book.best_ask if action == "BUY" else book.best_bid
+            if touch is not None:
+                lim = touch + self.p.max_slippage if action == "BUY" else touch - self.p.max_slippage
+                depth = book.depth("ask" if action == "BUY" else "bid", lim)
+                qty = min(abs(b.target - pos), self.ex.max_size(t), rate - used, int(depth * self.p.participation))
+                if qty > 0:
+                    kids.insert(0, Child(action, qty, lim, passive=False))
+                    self.soft_used[t] = (now, used + qty)
+        return kids
 
     @property
     def active(self) -> bool:

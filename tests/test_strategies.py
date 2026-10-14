@@ -456,6 +456,7 @@ def test_edge_floor_takes_value_declines_with_a_big_edge_only():
 
     s = LiabilityStrategy.__new__(LiabilityStrategy)
     s.p = {"edge_floor": 0.15}
+    s.crowded = lambda: False
     snap = SimpleNamespace(book=lambda tk: SimpleNamespace(mid=20.30))
     t = {"ticker": "CROC", "action": "BUY", "price": 20.10, "is_fixed_bid": True}      # edge +0.20
     no = TenderDecision(False, 20.10, -0.05, 20.2, "profit/share -0.0500 < 0.0100")
@@ -466,3 +467,6 @@ def test_edge_floor_takes_value_declines_with_a_big_edge_only():
     assert not s.edge_floor(dict(t, is_fixed_bid=False), snap, no).accept              # auctions untouched
     s.p = {"edge_floor": 0.15, "per_ticker": {"CROC": {"edge_floor": 0.0}}}
     assert not s.edge_floor(t, snap, no).accept                                        # off for one stock
+    s.p = {"edge_floor": 0.15}
+    s.crowded = lambda: True
+    assert not s.edge_floor(t, snap, no).accept                                        # crowd alarm on: model decides

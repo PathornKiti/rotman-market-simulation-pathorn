@@ -738,6 +738,47 @@ class LiabilityStrategy(Strategy):
     def book_signal_on(self) -> bool:
         return self.book_model() is not None
 
+    def slow_trend_z(self, ticker: str, held: int, snap: Snapshot) -> float:
+        """
+        SOFT TREND signal: the stock's SLOW trend against a position of sign `held`, in units of its own noise.
+        = (last mid - mean of the last `soft_trend_window` mids), our own crossing's impact removed (`own_impact`),
+        / (GARCH $ vol per tick x sqrt(window / 3), the sd of that deviation for a random walk). + = against us.
+        CROC (14 real heats, flat periods): the 60-tick trend predicts its next 20 ticks best (r 0.45; 10-tick run
+        0.37), and CROC is the noisiest stock tick to tick (sd 0.042 vs 0.031-0.033).
+        """
+        w = int(self.tp(ticker, "soft_trend_window", 60))
+        h, o = self.mid_hist.get(ticker, [])[-w:], self.own_flow.get(ticker, [])[-w:]
+        sig = self.price_vol(ticker, snap)
+        if not held or len(h) < max(10, w // 2) or sig <= 0:
+            return 0.0
+        lam = float((self.p.get("own_impact") or {}).get(ticker, 0.0))
+        cum, adj = 0.0, []
+        for k, m in enumerate(h):
+            cum += o[k] if k < len(o) else 0.0
+            adj.append(m - lam * cum)                    # the price without our own crossing's push
+        dev = adj[-1] - sum(adj) / len(adj)
+        return (-1 if held > 0 else 1) * dev / (sig * math.sqrt(len(h) / 3))
+
+    def soft_levels(self, snap: Snapshot) -> dict[str, tuple[int, int]]:
+        """SOFT TREND (`soft_trend`, per ticker): instead of the fast sprint, respond in steps to the slow trend:
+        z >= soft_trend_z1 -> rest more aggressively; z >= soft_trend_z2 -> also cross gently, `soft_cross_rate`
+        shares per tick at most. Never inside the hold-to-bell window (that keeps its own rule)."""
+        out = {}
+        for t, b in self.algo.blocks.items():
+            if not self.tp(t, "soft_trend", False):
+                continue
+            held = snap.positions.get(t, 0) - b.target
+            z = self.slow_trend_z(t, held, snap)
+            if z >= float(self.tp(t, "soft_trend_z2", 2.0)):
+                out[t] = (2, int(self.tp(t, "soft_cross_rate", 1500)))
+            elif z >= float(self.tp(t, "soft_trend_z1", 1.0)):
+                out[t] = (1, 0)
+            if out.get(t) and out[t] != getattr(self, "_soft_prev", {}).get(t):
+                log.info("SOFT %s: slow trend %.1f sd against our %+d block -> %s", t, z, held,
+                         "rest one tick inside" if out[t][0] == 1 else f"also cross <= {out[t][1]:,} sh/tick")
+        self._soft_prev = out
+        return out
+
     def predicted_against(self, ticker: str, held: int, snap: Snapshot) -> float:
         """$ the next window is expected to move against a position of sign `held` (book model or momentum)."""
         if not held:
@@ -1007,6 +1048,11 @@ class LiabilityStrategy(Strategy):
         """
         floor = float(self.tp(t.get("ticker"), "edge_floor", 0.0) or 0.0)
         if d.accept or floor <= 0 or not t.get("is_fixed_bid", True) or not d.reason.startswith("profit/share"):
+            return d
+        if self.crowded() and not self.tp(t.get("ticker"), "edge_floor_crowded", False):
+            # CROWD GUARD: with the crowd alarm on, keep the cost model's answer. Sim: the floor gains +$3-10k/heat in
+            # normal and moderate-rival markets but -$21k..-34k where every tender is dumped (worst -102k -> -219k).
+            # Real heats: the guard gives up 5 CROC tenders (+$28k net) of the floor's 12 (+$94k).
             return d
         mid, px = snap.book(t.get("ticker")).mid, t.get("price")
         if not mid or px is None:
@@ -1500,6 +1546,8 @@ class LiabilityStrategy(Strategy):
             sprint |= {t for t, b in self.algo.blocks.items() if now - b.start_tick < first}
         if self.sprint_walk:
             sprint = self.cap_sprint_walk(sprint, snap)
+        self.algo.soft = self.soft_levels(snap)
+        sprint -= set(self.algo.soft) | {t for t in self.algo.blocks if self.tp(t, "soft_trend", False)}
         for t in sprint - self.algo.sprint:
             log.info("SPRINT %s: next %s ticks expected %+.3f against our %+d block (run %+.3f, book asym %+.3f), "
                      "crossing costs %.3f: crossing", t, self.p.get("trend_window", 10),

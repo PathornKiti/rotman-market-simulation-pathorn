@@ -166,6 +166,23 @@ edge_floor = 0.15             # VALUATION (2026-10-14): take a fixed CROC tender
                               # 0.125 (evening, 3-5 other teams online). 22 real heats, conservative scoring: +12 tenders,
                               # +$94k (day +$52k, evening +$42k), 1 loser. TAME: evening-only gain (+$56k, 4 losers):
                               # not yet. CRZY: -$17k: never (its valuation is about right).
+                              # CROWD GUARD (code): off while the crowd alarm is on -> real +7 tenders, +$66k, 0 losers.
+                              # Sim (26 markets): pooled +$3.2k (t 4.6); extreme "everything at once" -$32k -> $0 with
+                              # the guard; left: "impact: trend + rivals" -$10k (one seed; the sprint dumps the extra
+                              # block). 0.20: real +$49k (3 tenders), sim fixes "everything anchored" worst seed.
+soft_trend = true             # EXECUTION (2026-10-14): CROC has no fast 10-tick sprint; it responds to its SLOW trend in
+                              # steps instead (LiabilityStrategy.soft_levels): the 60-tick trend against the block, our own
+                              # crossing removed, in units of CROC's own noise (GARCH vol x sqrt(60/3)):
+                              #   >= 1 sd: rest one tick inside the spread, twice the display (still passive);
+                              #   >= 2 sd: also cross gently, <= soft_cross_rate shares per tick (~CROC's own flow).
+                              # Why: 14 real heats: CROC sprints crossed 46-53k at 4-13k sh/s (CROC trades ~1.5k/s), fills
+                              # -0.046 vs mid, -$77k vs expected; resting on the SAME price path beat them in 7 of 9
+                              # (+$29k); 10 of 12 fired with CROC's slow trend in our favour. CROC is the noisiest stock
+                              # tick to tick (sd 0.042 vs 0.031-0.033) and its 60-tick trend predicts it best (r 0.45).
+soft_trend_window = 60
+soft_trend_z1 = 1.0
+soft_trend_z2 = 2.0
+soft_cross_rate = 1500
 
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
