@@ -223,18 +223,13 @@ class Market:
         # still there 30-40 ticks later; a sprint walked the CROC ask 20.29 -> 21.54). The default impact moved CROC
         # 0.13 per 50k, so the old sim let a sprint sweep CROC for cents. The transient part (TAME all, CRZY half,
         # CROC 0.3) decays `impact_revert` per tick.
-        # passive_impact=K (liability): OUR RESTING fills move the mid K $/share against us too (the flow they absorb
-        # would have moved it), all of it transient, decaying `passive_revert` per tick. Practice 2026-10-14, 28
-        # rested blocks: the mid moved +0.067 our way during the unwind, then +0.243 in the 20 ticks after the last
-        # fill (t 6.2). passive_impact=1e-5, passive_revert=0.09, flow=1.5 on the trend market: +0.111 / +0.252.
         self.stress = {"vol": 1.0, "depth": 1.0, "edge": 0.0, "size": 1.0, "gap": 12.0, "book": 1.0,
                        "strict_fr": 0.0, "flow": 1.0, "anchor": 0.0, "maker_fee": 0.0, "spread": 0.04,
                        "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0, "real": 0.0,
                        "reserve_lo": 0.0, "reserve_hi": 0.15, "late_award": 0.0,
                        "kyle": 0.0, "kyle_phi": 0.9, "kyle_sd": 0.5, "mm_inv": 0.0,
                        "edge_mu": 0.21, "edge_sd": 0.0, "hold_drift": 0.0, "hold_drift_size": 30000.0,
-                       "kyle_fill_tilt": 1.0, "book_tilt": 0.0, "real_impact": 0.0, "impact_revert": 0.07,
-                       "passive_impact": 0.0, "passive_revert": 0.05}
+                       "kyle_fill_tilt": 1.0, "book_tilt": 0.0, "real_impact": 0.0, "impact_revert": 0.07}
         for kv in filter(None, (os.environ.get("RITC_STRESS") or "").split(",")):
             k, _, v = kv.partition("=")
             self.stress[k.strip()] = float(v)
@@ -363,11 +358,6 @@ class Market:
                 for t, x in tmp.items():             # the transient part of our impact fades
                     self.secs[t].mid -= x * self.stress["impact_revert"]
                     tmp[t] = x * (1 - self.stress["impact_revert"])
-            if self.case == "liability" and self.stress["passive_impact"]:
-                ptmp = self.state.setdefault("pas_tmp", {})
-                for t, x in ptmp.items():            # our resting fills' impact fades
-                    self.secs[t].mid -= x * self.stress["passive_revert"]
-                    ptmp[t] = x * (1 - self.stress["passive_revert"])
             self._book_tenders()
             if self.case == "liability" and self.stress["hold_drift"]:
                 for s in self.secs.values():
@@ -802,11 +792,6 @@ class Market:
             if self.case == "liability" and self.stress["real_impact"]:
                 tmp = self.state["imp_tmp"]
                 tmp[s.ticker] = tmp.get(s.ticker, 0.0) + sign * s.impact * qty * self.state["imp_tmp_frac"][s.ticker]
-        if maker and self.case == "liability" and self.stress["passive_impact"]:
-            x = sign * self.stress["passive_impact"] * qty
-            s.mid = max(0.5, s.mid + x)
-            ptmp = self.state.setdefault("pas_tmp", {})
-            ptmp[s.ticker] = ptmp.get(s.ticker, 0.0) + x
         if self.case == "liability" and self.stress["mm_inv"]:
             s.mid = max(0.5, s.mid + sign * self.stress["mm_inv"] * qty)
         if s.position == 0:

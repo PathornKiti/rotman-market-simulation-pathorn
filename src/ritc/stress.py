@@ -114,23 +114,6 @@ SCENARIOS: dict[str, tuple[str, float, bool, int, str]] = {
                                   "kyle_sd=0.7,kyle_fill_tilt=3,real_impact=2", 0, False, 4, "impact"),
     "real-world + hostile":      ("maker_fee=1,spread=0.02,close_slip=0.03,bell=0.10,flow=0.6,anchor=1", 1, True, 2,
                                   "gap"),
-    # ---- PASSIVE IMPACT (practice 2026-10-14, 28 rested blocks): the mid moved +0.067 our way during a resting
-    # unwind and +0.133 / +0.243 in the 10 / 20 ticks after its last fill (t 6.0 / 6.2); the old sim showed
-    # +0.192 / +0.029 / +0.086. passive_impact=1e-5, passive_revert=0.09, flow=1.5: +0.111 / +0.169 / +0.252.
-    "passive: trend":            ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,kyle_phi=0.985,"
-                                  "kyle_sd=0.7,kyle_fill_tilt=3,real_impact=1,passive_impact=1e-5,passive_revert=0.09,"
-                                  "flow=1.5", 0, False, 4, "passive"),
-    "passive: trend + thin side": ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,"
-                                   "kyle_phi=0.985,kyle_sd=0.7,kyle_fill_tilt=3,depth=2.5,book_tilt=1.2,real_impact=1,"
-                                   "passive_impact=1e-5,passive_revert=0.09,flow=1.5", 0, False, 4, "passive"),
-    "passive: no trend":         ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,real_impact=1,"
-                                  "passive_impact=1e-5,passive_revert=0.09,flow=1.5", 0, False, 4, "passive"),
-    "passive: half impact":      ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,kyle_phi=0.985,"
-                                  "kyle_sd=0.7,kyle_fill_tilt=3,real_impact=1,passive_impact=5e-6,passive_revert=0.09,"
-                                  "flow=1.5", 0, False, 4, "passive"),
-    "passive: trend + rivals":   ("real=1,late_award=1,edge_sd=0.24,anchor=1,vol=0.6,kyle=0.97,kyle_phi=0.985,"
-                                  "kyle_sd=0.7,kyle_fill_tilt=3,real_impact=1,passive_impact=1e-5,passive_revert=0.09,"
-                                  "flow=1.5", 1, False, 4, "passive"),
 }
 
 

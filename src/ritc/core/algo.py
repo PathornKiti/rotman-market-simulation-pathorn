@@ -108,11 +108,10 @@ def schedule_position(start: int, target: int, start_tick: int, deadline: int, n
 
 def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks_left: int,
                   max_order: int, p: AlgoParams, limit_price: float | None = None,
-                  passive_only: bool = False, behind_ticks: int = 0) -> list[Child]:
+                  passive_only: bool = False) -> list[Child]:
     """
     Pure function: the child orders to have working this loop. `passive_only`: never cross, just
     rest at the touch (the case closes what is left at the last price, so crossing buys nothing).
-    `behind_ticks` > 0 (RIDE): rest that many ticks behind the touch and never cross (let the price come to us).
     """
     remaining = target - position
     if remaining == 0 or book.best_bid is None or book.best_ask is None:
@@ -123,7 +122,7 @@ def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks
     behind = max(0, sign * (sched - position))           # units behind schedule
     if ticks_left <= p.urgent_ticks:
         behind = remaining
-    if passive_only or behind_ticks:
+    if passive_only:
         behind = 0
     children: list[Child] = []
 
@@ -149,16 +148,14 @@ def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks
             remaining -= qty
 
     # ---- passive part: rest the rest (iceberg) at the touch to earn the spread
-    if remaining > 0 and (ticks_left > p.urgent_ticks or passive_only or behind_ticks):
+    if remaining > 0 and (ticks_left > p.urgent_ticks or passive_only):
         spread_ticks = round((book.best_ask - book.best_bid) / p.tick)
-        if behind_ticks:
-            spread_ticks = 0                              # never step inside the spread while riding
         if action == "SELL":
-            px = book.best_ask - (p.tick if spread_ticks >= p.improve_if_spread_ticks else 0) + behind_ticks * p.tick
+            px = book.best_ask - (p.tick if spread_ticks >= p.improve_if_spread_ticks else 0)
             if limit_price is not None:
                 px = max(px, limit_price)
         else:
-            px = book.best_bid + (p.tick if spread_ticks >= p.improve_if_spread_ticks else 0) - behind_ticks * p.tick
+            px = book.best_bid + (p.tick if spread_ticks >= p.improve_if_spread_ticks else 0)
             if limit_price is not None:
                 px = min(px, limit_price)
         qty = min(remaining, p.display_qty, max_order)
@@ -199,7 +196,6 @@ class BlockExecutor:
         self.passive: set[str] = set()           # tickers that only rest this loop (risk within budget)
         self.sprint: set[str] = set()            # tickers to cross now (a trend runs against the block)
         self.sprint_limit: dict[str, float] = {}  # ticker -> worst price a sprint may pay (sprint_max_walk)
-        self.ride: dict[str, int] = {}            # ticker -> ticks behind the touch to rest (the price runs our way)
 
     def work(self, ticker: str, position: int, target: int, now: int, deadline: int,
              limit_price: float | None = None, kappa: float = 0.0) -> Block:
@@ -314,8 +310,7 @@ class BlockExecutor:
             return plan_children(book, pos, b.target, b.target, 0, self.ex.max_size(t), self.p, lim)
         return plan_children(book, pos, sched, b.target, b.deadline - now, self.ex.max_size(t), self.p,
                              b.limit_price, passive_only=t in self.passive or (self.passive_from is not None
-                                                                                and now >= self.passive_from),
-                             behind_ticks=self.ride.get(t, 0))
+                                                                                and now >= self.passive_from))
 
     @property
     def active(self) -> bool:

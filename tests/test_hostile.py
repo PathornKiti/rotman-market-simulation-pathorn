@@ -452,15 +452,3 @@ def test_calibrate_reads_market_rows_from_a_bot_journal(tmp_path):
     old = tmp_path / "record-x.jsonl"                          # a plain `ritc record` file still loads
     old.write_text(json.dumps(snap) + "\n")
     assert load_snapshots(str(old)) == [snap]
-
-
-def test_drift_is_charged_over_at_most_the_drift_horizon():
-    from conftest import make_book
-    from ritc.strategies.liability import evaluate_tender
-
-    book = make_book([(24.99, 50000)], [(25.01, 50000)])
-    t = {"action": "BUY", "quantity": 50000, "price": 24.50, "is_fixed_bid": True}
-    kw = dict(fee=0.02, drift_per_tick=-0.005, unwind_ticks_per_lot=0.001, min_profit=0.01)   # 50 ticks to unwind
-    full = evaluate_tender(t, book, **kw).profit_per_share
-    capped = evaluate_tender(t, book, drift_horizon_ticks=20, **kw).profit_per_share
-    assert abs((capped - full) - 0.005 * 30) < 1e-9          # 30 of the 50 ticks' drift no longer charged

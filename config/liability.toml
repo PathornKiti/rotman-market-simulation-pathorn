@@ -22,13 +22,6 @@ min_profit_per_share = 0.01   # accept only if expected profit/share after costs
 refill_factor = 2.0           # visible depth is ~this fraction of what you can unwind into
 competitive_margin = 0.05     # $/share kept when bidding on non-fixed tenders
 drift_halflife = 15           # ticks, for the adverse-drift estimate
-drift_horizon_ticks = 20      # DEFAULT since 2026-10-14: charge the drift over at most 20 ticks of the unwind (a trend
-                              # fades: 47 real tenders, drift x 20 ticks = the next 20 ticks' move, x the full unwind
-                              # overcharged 0.23 vs 0.08). Seeds 1-16, 21 markets +$2.5k (t 4.3); holdout 101-116 +$2.0k
-                              # (t 4.8); no market worse than -$1.0k (t -0.3). Rejected tenders at 24-37c of edge.
-auction_bid = true            # false = never bid auctions (they hold ~55k of room 30 ticks; 0 of 32 won 2026-10-14):
-                              # +$1.8k (t 1.8) / holdout +$1.9k (t 1.6) on top of the drift cap, but -$4k..-$5k with
-                              # rival desks. Not adopted.
 unwind_ticks_per_share = 0.0005  # expected unwind time per share (drift exposure)
 min_ticks_to_unwind = 5       # 2027 brief: no end-of-case fine (closed at last price). 15 -> 5: +$1.1-1.8k (t 2.2-3.0), holdout +$0.4-0.6k (t 1.9-2.2), hostile +$0.5-2.0k (t 1.5-1.8)
 risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind ticks)
@@ -95,15 +88,7 @@ liquidity_model = "adaptive"  # ADAPTIVE (default since 2026-10-12): start each 
                               # -$0.2k, Kyle +$0.1k, hostile identical. Holdout 601-632: default +$4.0k (t 2.5, worst
                               # -$18.5k -> -$9.2k), calibrated +$3.2k (t 2.2, worst $14.6k -> $23.1k), hostile -$0.3k
                               # (t -1.0) / calibrated hostile identical. "book" = the old default (RESEARCH.md).
-adaptive_min_obs = 2          # 4: default sim +$2.6k (t 2.6), calibrated +$0.4k. 0 (flow from the start): real heats
-                              # +$5.6k/heat but every rival market -$2..-8.5k, holdout +$0.2k (t 0.4): rejected 2026-10-14
-early_probe_ticks = 5         # EARLY PROBE (DEFAULT since 2026-10-14): a fixed tender the book walk declines but the flow
-                              # value takes, before the crowd learner has evidence: wait 5 ticks, take it unless the mid ran
-                              # > early_probe_max_move (0.05) against the unwind (rival desks show by tick 5: sim -0.21).
-                              # 10 real heats: 7 declined winners, est. +$8.5k/heat, no new losers. Sim seeds 1-16 +$3.1k
-                              # (t 6.2), holdout 101-116 +$1.0k (t 5.0), rival markets ~0, no worst heat worse (35 markets).
-                              # Rejected with it: early_flow_weight (rivals -$4..-7k), value_model = "calibrated" (hostile
-                              # markets -$3..-9.7k, worst -7.5k -> -46.6k).
+adaptive_min_obs = 2          # 4: default sim +$2.6k (t 2.6), calibrated +$0.4k
 liq_prior = { CRZY = 2600, TAME = 3200, CROC = 1500 }   # shares/tick our resting unwinds got in practice (14 blocks)
 # PROFESSOR'S IDEAS (2026-10-12, RESEARCH.md): all tested on fresh seeds 901-932, none adopted.
 #   liquidity_model = "ensemble": weighted book / flow / crowd(1.4x size) worlds with a worst-case floor
@@ -244,13 +229,6 @@ ac_risk_aversion = 3e-7       # Almgren-Chriss lambda (1/$): higher = unwind fas
                               # 1e-6 $37.3k, 1e-5 $35.5k, 1e-4 $31.4k; old front_load=0.3 $34.1k/worst $16.9k.
                               # Impact dominates risk here, so near-linear wins; in a more volatile market
                               # (higher GARCH sigma) the same lambda front-loads automatically.
-ride_ticks = 1                # RIDE (DEFAULT since 2026-10-14): while the predicted next move is our way by >= ride_min (0.02;
-                              # momentum / book model, as for the sprint), rest 1 tick behind the touch and never cross.
-                              # Real: after a rested block's last fill the mid moved our way +0.13 / +0.24 in 10 / 20 ticks
-                              # (t 6.2). Sim seeds 1-16 +$0.6k (t 3.2), holdout +$1.1k (t 7.3); passive-impact markets
-                              # +$3.8..6.6k, rivals ~0. 2 ticks +$0.3k (t 1.3); always riding -$10k without the rebound.
-ride_min = 0.02
-ride_end_ticks = 60           # never ride this close to the bell
 
 [run]
 max_drawdown = 0              # kill switch OFF (0 = off; was 15000). Halting after one bad block forfeits every later
