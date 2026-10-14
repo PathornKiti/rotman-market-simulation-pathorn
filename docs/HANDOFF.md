@@ -4,7 +4,11 @@
 default: `execution.sprint_max_walk` (sprint price cap), `strategy.run_ex_own` + `own_impact` (trend run without our
 own impact), sim knob `real_impact` + stress group `impact`. All three fail the testing rule (sim says sprinting pays).
 Fine text/Excel now $0.20 first 5,000 / $0.60 beyond (sim + replay already were). 178 tests pass. Uncommitted.
-Next: default-only practice heats + `ritc record`; measure the mid's reversion after each CROC sprint.
+Later 2026-10-14: **`strategy.drift_horizon_ticks = 20` adopted** (+$2.5k t 4.3 / holdout +$2.0k t 4.8);
+`auction_bid = false` rejected (rivals -$4-5k); crowd_robust -$3.1k (keep default). Practice = one command
+`ritc run liability --live --forever --record` (Windows on branch main): one readable .log per heat in logs/,
+data journal in logs/data/. First 2 default heats on Windows: both >= $80k (old code, before the drift cap).
+Next: default-only heats; measure the mid's reversion after each CROC sprint from logs/data/.
 
 ---
 

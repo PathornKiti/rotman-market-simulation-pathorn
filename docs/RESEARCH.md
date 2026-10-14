@@ -844,6 +844,19 @@ All rejected; options kept (default off). The simulator says sprinting into a tr
 the two real CROC sprints cannot tell our impact from the trend (2 cases). To settle it: more DEFAULT heats with
 `ritc record`, then the reversion of the mid after each sprint (`sprint_eval` in the 2026-10-14 session).
 
+## Drift horizon, no auctions, crowd_robust (2026-10-14): drift horizon adopted
+
+From the 2026-10-14 journals: 6 fixed tenders were declined at 24-37c of edge (accepted ones averaged 33c and made
+~$0.20/share). The drift charge (EWMA drift x unwind ticks) matched the next 20 ticks' move (charged 0.118, moved
+0.116, n 47) but over the full unwind overcharged (0.232 vs 0.078 over 40 ticks): the trend fades. 6 of 10 late
+answers waited on room held by an auction bid that then lost (~$30k of edge over 8 heats).
+
+| change (paired vs default) | seeds 1-16, 21 markets | holdout 101-116 | notes |
+|---|---|---|---|
+| `drift_horizon_ticks = 20` | +$2.5k (t 4.3) | +$2.0k (t 4.8) | no market worse than -$1.0k (t -0.3): **adopted** |
+| `auction_bid = false` | +$1.8k (t 1.8) | (+cap) -$0.1k vs cap alone | -$4k..-$5k with rival desks: rejected |
+| `crowd_robust = true` (profile B) | -$3.1k (t -3.1) | - | "everything at once" -$40k, impact + rivals -$26k: keep false |
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

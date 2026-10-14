@@ -22,6 +22,13 @@ min_profit_per_share = 0.01   # accept only if expected profit/share after costs
 refill_factor = 2.0           # visible depth is ~this fraction of what you can unwind into
 competitive_margin = 0.05     # $/share kept when bidding on non-fixed tenders
 drift_halflife = 15           # ticks, for the adverse-drift estimate
+drift_horizon_ticks = 20      # DEFAULT since 2026-10-14: charge the drift over at most 20 ticks of the unwind (a trend
+                              # fades: 47 real tenders, drift x 20 ticks = the next 20 ticks' move, x the full unwind
+                              # overcharged 0.23 vs 0.08). Seeds 1-16, 21 markets +$2.5k (t 4.3); holdout 101-116 +$2.0k
+                              # (t 4.8); no market worse than -$1.0k (t -0.3). Rejected tenders at 24-37c of edge.
+auction_bid = true            # false = never bid auctions (they hold ~55k of room 30 ticks; 0 of 32 won 2026-10-14):
+                              # +$1.8k (t 1.8) / holdout +$1.9k (t 1.6) on top of the drift cap, but -$4k..-$5k with
+                              # rival desks. Not adopted.
 unwind_ticks_per_share = 0.0005  # expected unwind time per share (drift exposure)
 min_ticks_to_unwind = 5       # 2027 brief: no end-of-case fine (closed at last price). 15 -> 5: +$1.1-1.8k (t 2.2-3.0), holdout +$0.4-0.6k (t 1.9-2.2), hostile +$0.5-2.0k (t 1.5-1.8)
 risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind ticks)
