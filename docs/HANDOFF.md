@@ -1,4 +1,64 @@
-# Handoff: 2026-10-14 night, per-ticker version (START HERE; older notes below are history)
+# Handoff: 2026-10-14 late night, a731c81 batch reviewed (START HERE)
+
+> **CASE RULE (organisers; keep this note in EVERY handoff):** The speculation fine will increase from $0.40 to
+> $0.60 per share for speculation exceeding 5,000 shares. The fine for speculation of 5,000 shares or fewer remains
+> unchanged at $0.20 per share.
+
+**Batch:** 3 heats 22:15-22:32, ~3 other teams online, run with the COMMITTED a731c81 config (edge floor AND
+soft_trend on; the `--set soft_trend=false` override was not used). NLV $32.2k, -$44.7k, $3.8k. The b19e95c evening
+heats (12, 19:42-21:11) averaged $37k, worst $19k. Logs: logs/ + ~/Downloads/log_transfer (14 earlier evening journals).
+
+**Why it was worse: CROC only.** The replay (`docs/results/journal_replay.py`, old vs as-run config) differs on exactly 2
+tenders, both from the edge floor: 22:23 #402 BUY CROC 54k (cost model -0.25/sh) made -$51.8k; 22:32 #302 SELL CROC 54k
+(model -0.36, stacked on a -33k block) about -$28.6k. The soft trend then unwound them at 684-874 sh/s while the mid ran
+-1.17 / -0.71. CROC per heat: b19e95c evening +$8.2k mean, this batch -$22.4k. TAME+CRZY: $29.0k -> $19.4k (3 heats,
+t about -1, no code change there).
+**Done (uncommitted):** `[strategy.per_ticker.CROC] edge_floor = 0.0` (soft_trend was already false) = b19e95c on
+CROC. Replay of 22:23 now declines #402. 182 tests pass.
+VERIFIED: replaying 7 heats (19:42-19:58, 21:11, 22:15-22:32) through b19e95c and through the working tree gives
+identical TENDER / SPRINT / BLOCK / CROWD lines. Windows without a commit: `--set strategy.per_ticker.CROC.edge_floor=0
+--set strategy.per_ticker.CROC.soft_trend=false` gives the same.
+
+**Main pain point of evening heats (user question): a crowded exit.** 17 evening journals, 55 blocks: tender edge
++$1,000k, mid move against us during the unwind -$501k, fills -$26k, made +$468k (CROC kept 10% of its edge, TAME 56%,
+CRZY 80%). Within 20 ticks of a fixed tender the mid runs against its holder by 0.11 + 0.59 x the 10-tick trend before it +
+0.23 x the tender edge (t 3.2 / 3.4 / 2.1, n 118). Whether WE took it: -0.02 (t -0.3), so this is not our own impact.
+Lost auctions (one winner) show none of it (+0.002 at +10 ticks). Day heats: +0.03..0.06 at +10 vs evening +0.15. So the
+other teams take the same fixed tender and sell into the same book. Scripts: `docs/results/evening_2026-10-14/`.
+What does NOT fix it (real-data checks): (a) racing at block start on the recorded books: CRZY -$36k..-49k (t -3..-4),
+TAME ~0, CROC + but n.s. (optimistic refills); (b) a bigger valuation charge: the cost model already sorts outcomes
+(blocks valued < +0.10: 14, -$34k, 7 losers; >= +0.10: 40, all buckets profitable); (c) the CROC edge floor and soft
+trend. Crowd detector: "no crowd detected" in all 3 heats (it pools lost auctions with ~0 move and scores only 10 ticks).
+Fixing it would switch on the crowd charge and race, and both look harmful above, so leave it.
+**PATIENT TAIL: built, checked on real data, REJECTED, code removed (note in config [execution]).** After a mostly-rested
+block ends, the mid does come back our way (+0.21 in 20 ticks, t 8.2, n 29), but only AFTER the block. Replaying the 17
+evening journals with the bundle's `ride` (rest 1 tick behind the touch when momentum says "our way"): the mid then
+moved AGAINST us -0.042 in 5 ticks (t -2.6); time & sales fill estimate +$0.4k/heat. Riding whenever resting: -0.125
+(t -4.9), -$1.6k/heat. Only the last 25% of a block: -$0.1k/heat.
+
+**EARLY TENDERS (user question: why nothing early?).** The schedule: fixed tenders at ticks ~15-30 (#2), ~76-89 (#102),
+~135-148, then every ~60; auctions 0 of 68 won. So before tick 100 there are only 2 chances. 17 evening heats: the bot
+took #2 in 11/17 and something before tick 100 in 13/17; nothing until tick 136-206 in 4/17. Early tenders it took made
++0.160/share (17). Early declined (17): model value -0.318 (charges: drift 0.245, book walk 0.154 (book mode: adaptive
+gate needs 2 scored tenders), risk 0.042, crowd 0.044). The recorded price path says about +0.06/share, and that path
+overstates taken blocks by 0.054, so they were about break-even (swings -0.56..+0.54). The model's LEVEL is too
+pessimistic but its RANKING is right, so a "less pessimistic early" fix (bundle `early_probe_ticks`, drift cap) mostly
+adds break-even, high-variance tenders. Not a priority. Scripts: `docs/results/evening_2026-10-14/`.
+
+**AUCTIONS (user question: why always lost?).** 17 evening heats: 68 auctions (39 Above_Reserve, 29 Winner_Take_ALL),
+bid on 67, won 0 (solo heats 2026-10-13: 0/26). Our bid sits a median 0.19 (reserve) / 0.23 (WTA) from the listing mid
+(= the fixed-tender charges + 0.05 margin); we lost even at 0.075-0.105 (8 auctions), so the winning price (hidden
+reserve, or a rival for WTA) is inside ~0.075. A block won at distance x from the mid, on the recorded path (awarded at
+expiry, minus the 0.054 path overstatement): x = 0 -0.145/sh, 0.05 -0.095, 0.10 -0.045, 0.15 +0.005, 0.20 +0.055. So any
+price that wins loses money (~-$3k per 55k block), and the blocks also take net-limit room from fixed tenders. Losing
+is correct. Only "trend already our way" auctions look positive (+0.15/sh at 0.03 from the mid at threshold 0.02), but
+it is not robust (t 1.1 / 2.2 / 1.1 at thresholds 0 / 0.02 / 0.05; TAME negative): do not build. `auctions*.py`.
+Correction to wording above: per the brief, fixed tenders are PRIVATE (they differ by team in timing, price and size);
+the evening move is rivals unwinding SIMILAR blocks at the same time. Auctions go to every team at once.
+
+---
+
+# Handoff: 2026-10-14 night, per-ticker version (history)
 
 > **CASE RULE (organisers; keep this note in EVERY handoff):** The speculation fine will increase from $0.40 to
 > $0.60 per share for speculation exceeding 5,000 shares. The fine for speculation of 5,000 shares or fewer remains
@@ -33,10 +93,24 @@ markets -0.31): a moderate crowd. Tools (session scratchpad, re-create if needed
 market rows through the strategy; live=True; exact decisions, no fills), verify_step.py (decision diffs + real
 outcomes). Old-layout journals (logs/liability-*.jsonl) have no market rows and cannot be replayed.
 
+**SIM SAFETY CHECK OF `soft_trend`: FAILED** (`docs/results/ab_croc_soft_2026-10-14.txt`; arm0 today's CROC sprint,
+arm1 CROC sprint off, arm2 soft trend; seeds 1-16). Soft trend pooled -$4.1k (t -5.6): trend markets -$4k..-12k with the
+worst heat +$4.6k -> -$39k, rival markets -$5k..-7k, "everything at once" -$12k. Sprint off -$2.4k (t -3.9). The sim
+says a CROC block caught in a STRONG trend needs a fast exit; gentle crossing (<= 1,500 sh/tick at 2 sd) is too slow.
+Real data (9 CROC sprints) said the opposite, but our 14 heats may lack a strong CROC trend against a block. The user
+was told to run the batch with `--set strategy.per_ticker.CROC.soft_trend=false` (edge floor only). The committed
+config a731c81 still has soft_trend = true: set it to false (or redesign: faster gentle crossing / exit at 2 sd, then
+re-test) before the next default run. Replay tools: `docs/results/journal_replay.py`, `docs/results/verify_step.py`.
+
 **Next:** the user archives the logs and runs a batch of this version on Windows (copy .log + zipped logs\data;
 note how many other teams are online). Then: replay every new heat through the old bot (`--set
 strategy.per_ticker.CROC.edge_floor=0 --set strategy.per_ticker.CROC.soft_trend=false` = b19e95c) and compare per
-tender / per block. Open cases after that: TAME valuation (evening-only gains so far), the crowd learner learning only
+tender / per block. Open cases after that: (0) FLAT FIRST 100 TICKS (user's question): only tenders #2 (~tick 20) and #102 (~85) can
+make money before tick 100 (auctions 0/92 won). 22 heats: #2 taken 70% (mean edge +0.30; 7 declined with edge > 0.10,
+crowd alarm off), #102 taken 57%; both declined in 5/23 heats -> nothing until ~tick 140. Cause: warm-up valuation (the
+adaptive gate needs 2 scored tenders, so early tenders are priced by the pessimistic book walk; drift/vol just started;
+a trend after #2 can trip the crowd alarm before #102). The CROC edge floor already applies from tick 0; TAME/CRZY early
+tenders are not fixed yet: next valuation case "warm-up valuation". TAME valuation (evening-only gains so far), the crowd learner learning only
 from untaken tenders (starves the adaptive gate when we accept more), TAME sprint in crowded markets.
 
 ---
