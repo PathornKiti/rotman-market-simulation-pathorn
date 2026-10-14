@@ -1,3 +1,13 @@
+# Handoff: 2026-10-14 (START HERE)
+
+8 practice heats reviewed (RESEARCH.md "Sprint walk cap and own-impact run"). Default unchanged; new code, all OFF by
+default: `execution.sprint_max_walk` (sprint price cap), `strategy.run_ex_own` + `own_impact` (trend run without our
+own impact), sim knob `real_impact` + stress group `impact`. All three fail the testing rule (sim says sprinting pays).
+Fine text/Excel now $0.20 first 5,000 / $0.60 beyond (sim + replay already were). 178 tests pass. Uncommitted.
+Next: default-only practice heats + `ritc record`; measure the mid's reversion after each CROC sprint.
+
+---
+
 # Handoff: state at the end of 2026-10-13 (START HERE; older notes below are history)
 
 **Nothing committed.** All work is uncommitted on `main` (ask before commit/push); Windows needs it pulled.

@@ -814,6 +814,36 @@ unwind); the losing heats are the variance of holding 50k through a trend while 
 Every way tested of buying that variance down (crossing, a liquidity premium, declining) costs more mean than it
 saves. Rival desks are the weak market: $3k-9k/heat in "rivals" scenarios vs $43k solo.
 
+## Sprint walk cap and own-impact run after the 2026-10-14 practice heats: both rejected, default unchanged
+
+**Real heats (8, rotate profiles, logs/ + record-*.jsonl).** NLV $71.2k / 85.3k / 39.8k / -8.5k / 60.9k / 63.5k / 39.6k /
+-19.3k (default A: $71.2k, $63.5k). 0 fines, flat at every bell, 0 of 32 auctions. Both losing heats: a SPRINT crossed a
+whole CROC block (59.5k, 54k) and its buy limits walked 20.29 -> 21.54 and 20.94 -> 22.39 in ~8 s (-$24.8k, -$23.0k
+vs +$7.4k / +$10.8k expected). Mechanism: each loop re-anchors `max_slippage` on the touch it has just moved, and our
+own buying is part of the "run against us" that keeps the sprint on.
+
+**Momentum in the recordings (10-tick windows):** flat r +0.45 (t 12.7, n 637); holding and NOT sprinting r +0.43
+(t 4.0, n 75); during our own sprints r -0.15, -0.33 signed against the block (n 29-53). The trend is real while we
+hold; the runs inside our sprints are partly our own impact and revert.
+
+**Simulator: `real_impact=1`** (new knob, stress group `impact`): our crossing moves the mid as measured on our ~50k
+real sprints (CRZY 4e-6, TAME 5e-6, CROC 1.3e-5 $/share; transient share 0.5 / 1.0 / 0.3 decaying 7%/tick). Static
+real books match the sim (crossing 50k costs 6.6 / 7.5 / 9.4 c/share real vs 6-11 c sim); the gap was impact
+(the old sim moved CROC $0.13 per 50k).
+
+**A/B, seeds 1-24, groups impact + trend (13 markets), paired vs the default:**
+
+| change | pooled | t | notes |
+|---|---|---|---|
+| `sprint_max_walk` 0.05 / 0.10 / 0.15 | -$7.7k / -$5.5k / -$3.7k | -7.5 / -6.8 / -5.3 | loses in every trending market |
+| `sprint_max_walk` 0.25 / 0.35 / 0.50 | -$2.3k / -$1.9k / -$0.9k | -3.4 / -3.0 / -2.0 | rivals + impact worst heat -$102k -> -$115k..-$176k |
+| `trend_exec = false` (no sprint) | -$10.0k | -8.4 | only "impact: calibrated" (no trend) gains +$5.9k |
+| `run_ex_own` (run minus own_impact x our crossed shares) | -$0.5k | -2.2 | half the impact: -$0.1k (t -0.5) |
+
+All rejected; options kept (default off). The simulator says sprinting into a trend pays even at the measured impact;
+the two real CROC sprints cannot tell our impact from the trend (2 cases). To settle it: more DEFAULT heats with
+`ritc record`, then the reversion of the mid after each sprint (`sprint_eval` in the 2026-10-14 session).
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

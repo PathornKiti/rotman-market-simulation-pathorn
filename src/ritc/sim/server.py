@@ -218,13 +218,18 @@ class Market:
         # 30 s against us (t 3.2) whatever we traded; when nobody held (48 lost auctions) it moved 0.000.
         # edge_sd=S (with real=1): fixed tenders' edge vs mid ~ Normal(edge_mu, S) instead of U(-0.45, 0.90); the 49
         # private tenders of 2026-10-13 were 0.21 +- 0.24 (-0.47..+0.64).
+        # real_impact=K: OUR crossing moves the mid as measured in the practice heats of 2026-10-14 (K x): ~50k crossed
+        # in 4-9 s moved TAME +0.17..+0.34 (back to ~0 within 30 ticks), CRZY +0.01..+0.14, CROC +0.6..+0.8 (most of it
+        # still there 30-40 ticks later; a sprint walked the CROC ask 20.29 -> 21.54). The default impact moved CROC
+        # 0.13 per 50k, so the old sim let a sprint sweep CROC for cents. The transient part (TAME all, CRZY half,
+        # CROC 0.3) decays `impact_revert` per tick.
         self.stress = {"vol": 1.0, "depth": 1.0, "edge": 0.0, "size": 1.0, "gap": 12.0, "book": 1.0,
                        "strict_fr": 0.0, "flow": 1.0, "anchor": 0.0, "maker_fee": 0.0, "spread": 0.04,
                        "close_slip": 0.0, "bell": 0.0, "crowd_at_expiry": 0.0, "vol_regime": 0.0, "real": 0.0,
                        "reserve_lo": 0.0, "reserve_hi": 0.15, "late_award": 0.0,
                        "kyle": 0.0, "kyle_phi": 0.9, "kyle_sd": 0.5, "mm_inv": 0.0,
                        "edge_mu": 0.21, "edge_sd": 0.0, "hold_drift": 0.0, "hold_drift_size": 30000.0,
-                       "kyle_fill_tilt": 1.0, "book_tilt": 0.0}
+                       "kyle_fill_tilt": 1.0, "book_tilt": 0.0, "real_impact": 0.0, "impact_revert": 0.07}
         for kv in filter(None, (os.environ.get("RITC_STRESS") or "").split(",")):
             k, _, v = kv.partition("=")
             self.stress[k.strip()] = float(v)
@@ -245,12 +250,16 @@ class Market:
         # medium vol / medium-high liquidity, CROC $20 high vol / "varied" liquidity; $0.02 fees; max
         # orders 25k/10k/20k; 250k gross / 100k net. Vol and depth numbers are our guesses at "high" etc.
         real = bool(self.stress["real"])
+        measured = {"CRZY": 4e-6, "TAME": 5e-6, "CROC": 1.3e-5}
         for t, px, sigma, lot, impact, mx in (("CRZY", 10.0, 0.035 if real else 0.02, 1200, 4e-6, 25_000),
                                               ("TAME", 25.0, 0.040 if real else 0.025, 3000, 1.5e-6, 10_000),
                                               ("CROC", 20.0, 0.035 if real else 0.04, 2000, 2.5e-6, 20_000)):
             self.secs[t] = Sec(t, px, spread=self.stress["spread"], lot=int(lot * self.stress["depth"]),
-                               sigma=sigma * self.stress["vol"], fee=0.02, impact=impact / self.stress["depth"],
-                               max_trade=mx)
+                               sigma=sigma * self.stress["vol"], fee=0.02,
+                               impact=(measured[t] * self.stress["real_impact"] if self.stress["real_impact"]
+                                       else impact) / self.stress["depth"], max_trade=mx)
+        self.state["imp_tmp_frac"] = {"CRZY": 0.5, "TAME": 1.0, "CROC": 0.3}
+        self.state["imp_tmp"] = {}
         self.state["base_lot"] = {t: s.lot for t, s in self.secs.items()}
         self.state["tender_log"] = []          # (abs tick, ticker, signed shares the holder must unwind)
         self.state["base_sigma"] = {t: s.sigma for t, s in self.secs.items()}
@@ -344,6 +353,11 @@ class Market:
             for s in self.secs.values():
                 if s.sigma:
                     s.mid = max(0.5, s.mid + self.rng.gauss(0, s.sigma) * (1 - kyle) ** 0.5)
+            if self.case == "liability" and self.stress["real_impact"]:
+                tmp = self.state["imp_tmp"]
+                for t, x in tmp.items():             # the transient part of our impact fades
+                    self.secs[t].mid -= x * self.stress["impact_revert"]
+                    tmp[t] = x * (1 - self.stress["impact_revert"])
             self._book_tenders()
             if self.case == "liability" and self.stress["hold_drift"]:
                 for s in self.secs.values():
@@ -775,6 +789,9 @@ class Market:
         self._settle(s.ccy, -sign * qty * px * s.mult + (-s.fee if maker_pays or not maker else s.rebate) * qty)
         if not maker and s.impact:
             s.mid += sign * s.impact * qty
+            if self.case == "liability" and self.stress["real_impact"]:
+                tmp = self.state["imp_tmp"]
+                tmp[s.ticker] = tmp.get(s.ticker, 0.0) + sign * s.impact * qty * self.state["imp_tmp_frac"][s.ticker]
         if self.case == "liability" and self.stress["mm_inv"]:
             s.mid = max(0.5, s.mid + sign * self.stress["mm_inv"] * qty)
         if s.position == 0:

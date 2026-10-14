@@ -98,6 +98,20 @@ SCENARIOS: dict[str, tuple[str, float, bool, int, str]] = {
     "trend + thin side + rivals": ("real=1,late_award=1,edge_sd=0.24,anchor=1,vol=0.6,kyle=0.97,kyle_phi=0.985,"
                                    "kyle_sd=0.7,kyle_fill_tilt=3,depth=2.5,book_tilt=1.2", 1, False, 4, "trend"),
     "no trend (random walk)":    ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6", 0, False, 4, "trend"),
+    # ---- MEASURED IMPACT (practice 2026-10-14, 8 heats + recorder): our own crossing moves the mid as measured
+    # (sim real_impact=1: ~50k crossed moves TAME +0.25 transient, CROC +0.65 mostly lasting). Both losing heats were
+    # sprints that walked CROC $1.25-1.45; the old impact let a sprint cross CROC for cents.
+    "impact: calibrated":        ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,real_impact=1", 0, False, 4,
+                                  "impact"),
+    "impact: trend":             ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.7,kyle_fill_tilt=3,real_impact=1", 0, False, 4, "impact"),
+    "impact: trend + thin side": ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.7,kyle_fill_tilt=3,depth=2.5,book_tilt=1.2,real_impact=1", 0, False, 4,
+                                  "impact"),
+    "impact: trend + rivals":    ("real=1,late_award=1,edge_sd=0.24,anchor=1,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.7,kyle_fill_tilt=3,real_impact=1", 1, False, 4, "impact"),
+    "impact x2: trend":          ("real=1,late_award=1,edge_sd=0.24,reserve_hi=0.08,vol=0.6,kyle=0.97,kyle_phi=0.985,"
+                                  "kyle_sd=0.7,kyle_fill_tilt=3,real_impact=2", 0, False, 4, "impact"),
     "real-world + hostile":      ("maker_fee=1,spread=0.02,close_slip=0.03,bell=0.10,flow=0.6,anchor=1", 1, True, 2,
                                   "gap"),
 }

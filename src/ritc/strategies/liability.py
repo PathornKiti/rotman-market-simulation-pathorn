@@ -136,6 +136,7 @@ def evaluate_tender(
     flow_rate: float = 0.0,
     drift_symmetric: bool = False,
     offset_credit: float = 0.0,
+    drift_horizon_ticks: float = 0.0,
 ) -> TenderDecision:
     """
     Pure decision function. `tender['action']` is OUR side of the trade:
@@ -147,6 +148,7 @@ def evaluate_tender(
     premium and drift grow with it). 0 = the old static model: walk the visible book x `refill_factor`.
     `offset_credit` ($/share): what unwinding the position we already hold is expected to cost; the part of the
     tender that offsets that position saves it, so that part is worth this much more (NETTING).
+    `drift_horizon_ticks` > 0: charge the drift over at most this many ticks of the unwind (a trend fades).
     """
     action = str(tender.get("action", "BUY")).upper()
     qty = int(tender.get("quantity", 0))
@@ -198,7 +200,8 @@ def evaluate_tender(
     # Adverse drift over the time it takes to unwind (only counts against us).
     unwind_ticks = to_unwind / flow_rate if flow_rate > 0 else to_unwind * unwind_ticks_per_lot
     # TREND (legal use): `drift_symmetric` also credits a trend that runs our way while we unwind.
-    drift_cost = (-sign * drift_per_tick if drift_symmetric else max(0.0, -sign * drift_per_tick)) * unwind_ticks
+    drift_ticks = min(unwind_ticks, drift_horizon_ticks) if drift_horizon_ticks > 0 else unwind_ticks
+    drift_cost = (-sign * drift_per_tick if drift_symmetric else max(0.0, -sign * drift_per_tick)) * drift_ticks
     drift_cost += risk_aversion * price_vol_per_tick * unwind_ticks ** 0.5
     drift_cost += crowd_cost             # learned: how far the price runs against tenders' unwinds
     fees = fee * (to_unwind / qty)       # we pay the taker fee only on what hits the book
@@ -340,6 +343,8 @@ class LiabilityStrategy(Strategy):
         self.stuck_window = int(ex_cfg.get("stuck_window_ticks", 0))   # absorption stop (0 = off)
         self.stuck_horizon = float(ex_cfg.get("stuck_horizon_ticks", 30))
         self.unwind_hist: dict[str, list[tuple[int, int]]] = {}   # ticker -> (tick, shares left) of its block
+        self.sprint_walk = float(ex_cfg.get("sprint_max_walk", 0.0))   # $ a sprint may move from its start mid
+        self.sprint_anchor: dict[tuple[str, int], float] = {}   # (ticker, block start tick) -> mid at its first sprint
         self.algo = BlockExecutor(self.ex, AlgoParams(**{k: v for k, v in ex_cfg.items()
                                                          if k in AlgoParams.__dataclass_fields__}))
         # CROWDED TENDERS: other desks get the same block and unwind it into the same book.
@@ -354,6 +359,8 @@ class LiabilityStrategy(Strategy):
         self.absorb: dict[str, float] = {}       # ticker -> learned shares/tick of our own unwinds
         self.exec_cost: float | None = None       # learned $/share an unwind costs vs the mid at acceptance
         self.mid_hist: dict[str, list[float]] = {}   # TREND: one mid per tick per stock (last 60)
+        self.own_flow: dict[str, list[float]] = {}   # signed shares WE crossed per tick per stock (aligned to mid_hist)
+        self.own_seen = 0                             # tca.fills already counted into own_flow
         # BOOK SIGNAL: features (run, asym, ofi) at the last window per stock, and the sums of x x', x y, y y, n over
         # (features at a window start -> the next window's move), every stock pooled
         self.sig_prev: dict[str, tuple[float, ...]] = {}
@@ -385,6 +392,8 @@ class LiabilityStrategy(Strategy):
         self.bidding: dict[int, tuple[str, int]] = {}    # our open auction bids: id -> (ticker, abs expiry tick)
         self.frozen: set[str] = set()                   # tickers with an undecided tender (respect_windows)
         self.journaled: set[int] = set()                # tenders already written to the run journal
+        self.answers: dict[int, dict] = {}              # tender id -> how it was answered (the HEAT REPORT)
+        self.seen_at: dict[int, int] = {}               # tender id -> abs tick it was first listed
         # FORWARD LIQUIDITY (docs/PRACTICE_LOGS.md): shares/tick the market trades on each side of each stock, from
         # time & sales, as an EWMA started at the practice-measured absorption of our resting unwinds. "SELL" =
         # buyer-initiated volume (it fills a resting sell). Used to price tenders (`liquidity_model = "flow"`).
@@ -431,6 +440,12 @@ class LiabilityStrategy(Strategy):
         self.last_tick = snap.tick
         if self.crowd_learn:
             self._learn_crowd(snap)
+        own: dict[str, float] = {}
+        fills = self.ex.tca.fills
+        for f in fills[self.own_seen:]:
+            if f.style == "aggressive":
+                own[f.ticker] = own.get(f.ticker, 0.0) + (f.qty if f.action.upper() == "BUY" else -f.qty)
+        self.own_seen = len(fills)
         for t in self.tickers:
             m = snap.mid(t)
             if m is None:
@@ -448,6 +463,9 @@ class LiabilityStrategy(Strategy):
             h = self.mid_hist.setdefault(t, [])
             h.append(m)
             del h[:-60]
+            o = self.own_flow.setdefault(t, [])
+            o.append(own.get(t, 0.0))
+            del o[:-60]
             w = int(self.p.get("trend_window", 10))
             if len(h) > 2 * w and snap.tick % w == 0:       # non-overlapping (previous w, next w) pairs
                 a, b = h[-1 - w] - h[-1 - 2 * w], h[-1] - h[-1 - w]
@@ -594,10 +612,26 @@ class LiabilityStrategy(Strategy):
 
     def run_against(self, ticker: str, held: int) -> float:
         """$ the mid moved over the last `trend_window` ticks AGAINST a position of sign `held` (+ = against)."""
-        h, w = self.mid_hist.get(ticker, []), int(self.p.get("trend_window", 10))
-        if len(h) <= w or not held:
+        if not held:
             return 0.0
-        return (-1 if held > 0 else 1) * (h[-1] - h[-1 - w])
+        return (-1 if held > 0 else 1) * self.market_run(ticker)
+
+    def market_run(self, ticker: str) -> float:
+        """
+        $ the mid moved over the last `trend_window` ticks. `run_ex_own`: minus what OUR crossing moved it
+        (`own_impact` $/share x the shares we crossed in the window). Practice 2026-10-14: while we held a block
+        and did not sprint, a 10-tick run continued (r +0.43, t 4.0); during our own sprints it reversed
+        (r -0.33): the sprint read its own impact as a trend against the block and kept crossing (CROC 59.5k
+        walked 20.29 -> 21.54).
+        """
+        h, w = self.mid_hist.get(ticker, []), int(self.p.get("trend_window", 10))
+        if len(h) <= w:
+            return 0.0
+        run = h[-1] - h[-1 - w]
+        if self.p.get("run_ex_own", False):
+            lam = float(self.p.get("own_impact", {}).get(ticker, 0.0))
+            run -= lam * sum(self.own_flow.get(ticker, [])[-w:])
+        return run
 
     def book_asym(self, ticker: str, snap: Snapshot) -> float:
         """
@@ -645,8 +679,7 @@ class LiabilityStrategy(Strategy):
 
     def features(self, ticker: str, snap: Snapshot) -> tuple[float, float, float]:
         """(last run $, depth asymmetry $, OFI) now, the book signal's inputs."""
-        h, w = self.mid_hist.get(ticker, []), int(self.p.get("trend_window", 10))
-        return (h[-1] - h[-1 - w] if len(h) > w else 0.0), self.book_asym(ticker, snap), self.ofi(ticker)
+        return self.market_run(ticker), self.book_asym(ticker, snap), self.ofi(ticker)
 
     # models tried richest first; priors = the 3 recorded heats' fits ($ next 10-tick move per unit of each feature)
     BOOK_MODELS = (((2, 1), (0.0171, 0.6718)), ((0, 1), (0.40, 0.67)))
@@ -943,6 +976,11 @@ class LiabilityStrategy(Strategy):
 
     def decide(self, t: dict, snap: Snapshot, positions: dict[str, int]) -> TenderDecision:
         """The bot's answer to tender `t` against the book of now (also used by `ritc suggest`)."""
+        if not t.get("is_fixed_bid", True) and not self.p.get("auction_bid", True):
+            # NO AUCTIONS (practice: won 2 of 76 real bids, 0 of 32 on 2026-10-14). A bid holds ~55k of the 100k
+            # net room and freezes its stock for its 30-tick window; 6 of 10 late fixed answers on 2026-10-14
+            # waited on a bid that then lost, while the price ran up to 0.385 against the tender.
+            return TenderDecision(False, None, 0.0, 0.0, "auctions off (auction_bid = false)")
         skip = float(self.p.get("auction_skip_adding", 0))
         if skip and not t.get("is_fixed_bid", True):
             # AUCTION FREEZE (practice 2026-10-13, -$15k): an open auction bid freezes its stock for the whole
@@ -992,6 +1030,10 @@ class LiabilityStrategy(Strategy):
                        if use_flow else 0.0),
             drift_symmetric=bool(self.p.get("drift_symmetric", False)),
             offset_credit=self.netting_credit(),
+            # DRIFT HORIZON (practice 2026-10-14, 47 fixed tenders): the EWMA drift x 20 ticks matched the next 20
+            # ticks' move against the unwind (charged 0.118, moved 0.116), but x the full unwind time it charged
+            # 0.232 for a 0.078 move over 40 ticks: the trend fades within 10-20 ticks.
+            drift_horizon_ticks=float(self.p.get("drift_horizon_ticks", 0)),
         )
 
     def scenario_weights(self) -> dict[str, float]:
@@ -1106,9 +1148,8 @@ class LiabilityStrategy(Strategy):
                  f"{rec['rate']:,}", move, f"{rest:,}", f"{cross:,}", edge, f"{made:+,.0f}", f"{exp:+,.0f}")
 
     def write_report(self, path: str | None, nlv: float | None, latency: dict) -> None:
-        """Machine-readable summary of the heat next to the log (<log>.summary.json), for `ritc practice`."""
-        if not path:
-            return
+        """Machine-readable summary of the heat: the journal's `summary` row (for `ritc practice`), and a separate
+        <log>.summary.json only when `path` is given (`run.summary_file = true`)."""
         import json
         doc = {"nlv": nlv, "latency_ms": latency, "profile": self.p.get("profile"),
                "settings": {k: self.p.get(k) for k in ("liquidity_model", "crowd_robust", "auction_skip_adding",
@@ -1117,6 +1158,9 @@ class LiabilityStrategy(Strategy):
                "hold_tests": self.hold_test_log,
                "crowd": {"mean": self.crowd.mean, "sd": self.crowd.sd, "n": self.crowd.n, "crowded": self.crowded()},
                "seen": len(self.seen), "taken": len(self.taken)}
+        self.ex.journal.write("summary", **json.loads(json.dumps(doc, default=str)))
+        if not path:
+            return
         try:
             with open(path, "w") as f:
                 json.dump(doc, f, indent=1, default=str)
@@ -1155,24 +1199,56 @@ class LiabilityStrategy(Strategy):
                     self.crowd_sigma[oid] = self.price_vol(ticker, snap)
 
     def on_stop(self) -> None:
-        """HEAT SUMMARY: every tender taken, what it was expected to make and what its block made."""
-        if not self.ledger:
+        """HEAT REPORT at the end of the log: every tender (taken or not), every block, the crowd and the totals."""
+        if not self.answers and not self.ledger:
             return
-        log.info("HEAT SUMMARY (expected = the bot's estimate when it answered; made = its block's P&L when flat)")
-        for tid, e in self.ledger.items():
-            state = ("lost auction" if e["won"] is False else "won auction" if e["kind"] == "auction" and e["won"]
-                     else "auction pending" if e["kind"] == "auction" else "")
-            made = f"{e['realized']:+,.0f}" if e["realized"] is not None else (
-                "-" if e["won"] is False else "open at the bell")
-            log.info("  #%-4s %-4s %-4s %3dk %-7s expected %+8s  made %s %s", tid, e["side"], e["ticker"],
-                     e["qty"] // 1000, e["kind"], f"{e['expected']:,.0f}" if e["won"] is not False else "-", made,
-                     state)
+        bar = "=" * 100
+        log.info(bar)
+        log.info("HEAT REPORT   edge = tender price vs the mid in our favour ($/share) | value = what the bot expected "
+                 "per share | made = the block's P&L when flat | late = ticks between listing and answer")
+        log.info("  %-5s %-4s %-4s %4s %-7s %7s %7s %-8s %9s %9s  %s", "tid", "side", "stk", "size", "kind", "edge",
+                 "value", "answer", "expected", "made", "note")
+        for tid, a in self.answers.items():
+            e = self.ledger.get(tid)
+            if e and e["won"] is False:
+                ans, exp, made, note = "lost", "-", "-", "auction lost"
+            elif e:
+                ans = "won" if e["kind"] == "auction" else "TAKEN"
+                exp = f"{e['expected']:+,.0f}"
+                made = f"{e['realized']:+,.0f}" if e["realized"] is not None else "open"
+                note = ""
+            elif a["accept"]:          # answered yes but nothing booked: the server refused it
+                ans, exp, made = ("failed" if a["kind"] == "fixed" else "rejected"), "-", "-"
+                note = "accept failed (expired?)" if a["kind"] == "fixed" else "bid refused at once"
+            else:
+                ans, exp, made = "declined", "-", "-"
+                note = "" if a["reason"].startswith("profit") else a["reason"]
+            if a["late"] > 0:
+                note = (note + f" answered {a['late']} ticks late").strip()
+            log.info("  #%-4s %-4s %-4s %3dk %-7s %7s %7s %-8s %9s %9s  %s", tid, a["side"], a["ticker"],
+                     a["qty"] // 1000, a["kind"], f"{a['edge']:+.3f}" if a["edge"] is not None else "-",
+                     f"{a['value']:+.3f}" if a["value"] is not None else "-", ans, exp, made, note)
+        fixed = [a for a in self.answers.values() if a["kind"] == "fixed"]
+        bids = [tid for tid, a in self.answers.items() if a["kind"] != "fixed" and a["accept"]]
         live = [e for e in self.ledger.values() if e["won"] is not False]
-        auctions = [e for e in self.ledger.values() if e["kind"] == "auction"]
-        log.info("  total expected %s, made %s on %d closed blocks; auctions won %d of %d bids",
+        log.info("  fixed tenders: %d seen, %d taken | auctions: %d seen, %d bid, %d won | expected %s, made %s on %d "
+                 "closed blocks", len(fixed), sum(a["accept"] for a in fixed), len(self.answers) - len(fixed),
+                 len(bids), sum(bool(self.ledger.get(t, {}).get("won")) for t in bids),
                  f"{sum(e['expected'] for e in live):+,.0f}",
                  f"{sum(e['realized'] for e in live if e['realized'] is not None):+,.0f}",
-                 sum(e["realized"] is not None for e in live), sum(bool(e["won"]) for e in auctions), len(auctions))
+                 sum(e["realized"] is not None for e in live))
+        if self.blocks_done:
+            log.info("  BLOCKS  %-4s %-4s %4s %5s %8s %8s %8s %9s %9s %9s", "stk", "side", "size", "secs", "rested",
+                     "crossed", "mid", "fills", "expected", "made")
+            for b in self.blocks_done:
+                log.info("          %-4s %-4s %3dk %5d %8s %8s %+8.2f %+9.3f %9s %9s", b["ticker"], b["side"],
+                         b["qty"] // 1000, b["secs"], f"{b['rested']:,}", f"{b['crossed']:,}", b["mid_move"],
+                         b["fill_edge"], f"{b['expected']:+,}", f"{b['made']:+,}")
+            log.info("          (mid = move over the unwind, + = our way; fills = our average fill vs the mid, + = "
+                     "earned)")
+        log.info("  crowd: impact %+.4f $/10k (sd %.4f, %d tenders scored) -> %s", self.crowd.mean, self.crowd.sd,
+                 self.crowd.n, "CROWDED (racing other desks)" if self.crowded() else "no crowd detected")
+        log.info(bar)
 
     def handle_tenders(self, snap: Snapshot) -> None:
         now = snap.abs_tick
@@ -1192,6 +1268,7 @@ class LiabilityStrategy(Strategy):
             if tid in self.seen or ticker is None:
                 continue
             book = snap.book(ticker)
+            self.seen_at.setdefault(tid, now)
             if tid not in self.journaled:
                 self.journaled.add(tid)
                 self.ex.journal.write(
@@ -1214,11 +1291,23 @@ class LiabilityStrategy(Strategy):
             if not d.accept and self.wait_for_room(t, d, snap):
                 continue          # room frees up as other blocks unwind / pending auction bids resolve: re-check
             self.seen.add(tid)
-            log.info("TENDER %s %s %s x%s @ %s -> %s (%s)%s  [mid %s spread %s vol %.3f/s pos %+d%s]", tid,
+            fixed = bool(t.get("is_fixed_bid", True))
+            sg = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
+            px = t.get("price") if fixed else d.price
+            edge = sg * (book.mid - float(px)) if px is not None and book.mid else None   # + = in our favour
+            cap = str(t.get("caption") or "")
+            self.answers[tid] = {
+                "side": str(t.get("action", "")).upper(), "ticker": ticker, "qty": int(t.get("quantity") or 0),
+                "kind": "fixed" if fixed else ("WTA" if "Winner_Take" in cap else "reserve" if "Reserve" in cap
+                                               else "auction"),
+                "edge": edge, "value": d.profit_per_share if d.accept or d.reason.startswith("profit") else None,
+                "accept": d.accept, "reason": d.reason, "late": now - self.seen_at.get(tid, now)}
+            log.info("TENDER %s %s %s x%s @ %s -> %s (%s)%s  [mid %s%s spread %s vol %.3f/s pos %+d%s]", tid,
                      t.get("action"), ticker, t.get("quantity"), t.get("price"), "ACCEPT" if d.accept else "decline",
                      d.reason,
                      f" ~ ${d.profit_per_share * float(t.get('quantity') or 0):,.0f} expected" if d.accept else "",
                      f"{book.mid:.2f}" if book.mid else "?",
+                     f" edge {edge:+.3f}" if edge is not None else "",
                      f"{book.best_ask - book.best_bid:.2f}" if book.best_ask and book.best_bid else "?",
                      self.price_vol(ticker, snap), positions.get(ticker, 0),
                      " crowd ON" if self.crowded() else "")
@@ -1378,6 +1467,8 @@ class LiabilityStrategy(Strategy):
             # rival markets +$8k..+$23k (t 2.4-5.4), solo markets -$13k..-$23k. `initial_sprint_gate` "crowded" (the
             # learned crowd impact > 2 sd) / "leaning" (> 1 sd): race only when other desks dump the same blocks.
             sprint |= {t for t, b in self.algo.blocks.items() if now - b.start_tick < first}
+        if self.sprint_walk:
+            sprint = self.cap_sprint_walk(sprint, snap)
         for t in sprint - self.algo.sprint:
             log.info("SPRINT %s: next %s ticks expected %+.3f against our %+d block (run %+.3f, book asym %+.3f), "
                      "crossing costs %.3f: crossing", t, self.p.get("trend_window", 10),
@@ -1399,6 +1490,38 @@ class LiabilityStrategy(Strategy):
         elif self.algo.active:
             open_ids = None if self.ex.dry_run else {int(o["order_id"]) for o in self.client.orders("OPEN")}
             self.algo.step({t: snap.book(t) for t in self.algo.blocks}, snap.positions, now, open_ids)
+
+    def cap_sprint_walk(self, sprint: set[str], snap: Snapshot) -> set[str]:
+        """
+        SPRINT WALK CAP (`sprint_max_walk`, practice 2026-10-14): a sprint crosses a few % of the depth every loop at
+        the touch + max_slippage, so on a book that refills slowly it walks the price as far as the block lasts:
+        CROC 59.5k bought 20.29 -> 21.54 in 8 s (-$24.8k), 54k 20.94 -> 22.39 (-$23.0k), and its own buying fed
+        the "run against us" that kept it on. A sprint only pays when it saves more than it costs, and it expects
+        to save cents, so it never pays more than `sprint_max_walk` from the mid at the block's first sprint;
+        past that it rests.
+        """
+        keep: set[str] = set()
+        live = {(t, b.start_tick) for t, b in self.algo.blocks.items()}
+        self.sprint_anchor = {k: v for k, v in self.sprint_anchor.items() if k in live}
+        self.algo.sprint_limit = {}
+        for t in sprint:
+            b = self.algo.blocks[t]
+            book = snap.book(t)
+            buy = b.target > snap.positions.get(t, 0)
+            touch = book.best_ask if buy else book.best_bid
+            if touch is None or book.mid is None:
+                continue
+            key = (t, b.start_tick)
+            if key not in self.sprint_anchor:
+                self.sprint_anchor[key] = book.mid
+            cap = self.sprint_anchor[key] + (self.sprint_walk if buy else -self.sprint_walk)
+            if (touch <= cap) if buy else (touch >= cap):
+                keep.add(t)
+                self.algo.sprint_limit[t] = round(cap, 2)
+            elif t in self.algo.sprint:
+                log.info("SPRINT %s capped: touch %.2f is past %.2f (start mid %.2f %s %.2f); resting", t, touch, cap,
+                         self.sprint_anchor[key], "+" if buy else "-", self.sprint_walk)
+        return keep
 
     def unwind_slices(self, snap: Snapshot) -> None:
         urgency = self.p.get("urgent_ticks", 30)

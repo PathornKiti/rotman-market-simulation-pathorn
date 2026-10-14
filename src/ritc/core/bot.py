@@ -237,6 +237,7 @@ class Runner:
         self._slow: list[float] = []          # slow loops since the last summary warning
         self._slow_t = time.monotonic()
         self.interrupted = False             # Ctrl-C (vs the heat ending): `run --forever` stops on it
+        self.heat_started = False            # saw the case ACTIVE (else the run's files hold no heat)
 
     def snapshot(self) -> Snapshot:
         """Case + securities + trader + all prefetch books, in parallel."""
@@ -364,6 +365,7 @@ class Runner:
                     last_tick = snap.tick
                     if not started:
                         started, period = True, snap.period
+                        self.heat_started = True
                         self.s.on_start(snap)
                     elif snap.period != period:
                         period = snap.period
@@ -454,7 +456,8 @@ class Runner:
                 log.info("HEAT RESULT: NLV %s%s%s", f"{float(nlv):,.0f}", per,
                          "  (last NLV seen before the server closed the case)" if self._final_nlv_stale else "")
             if hasattr(self.s, "write_report") and self.journal.path is not None:
-                self.s.write_report(str(self.journal.path).rsplit(".", 1)[0] + ".summary.json", nlv,
+                self.s.write_report(str(self.journal.path).rsplit(".", 1)[0] + ".summary.json"
+                                    if self.s.cfg.get("run", {}).get("summary_file", False) else None, nlv,
                                     {"p50": self.latency.pct(0.5), "p95": self.latency.pct(0.95),
                                      "max": self.latency.pct(1.0), "loops": self.loops,
                                      "throttled_429": getattr(self.client, "throttled", 0)})

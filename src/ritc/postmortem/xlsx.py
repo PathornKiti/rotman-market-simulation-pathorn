@@ -282,8 +282,8 @@ def _live_extras(ws) -> None:
     ws.merge_cells("A70:E70")
     _put(ws, "A71", "Shares that open a new position")
     _put(ws, "B71", 0, BLUE, SHARES, fill=YELLOW)
-    _put(ws, "A72", "Fine ($0.20 first 5,000, $0.40 beyond)")
-    _put(ws, "B72", "=0.2*MIN(B71,5000)+0.4*MAX(0,B71-5000)", fmt=MONEY)
+    _put(ws, "A72", "Fine ($0.20 first 5,000, $0.60 beyond)")
+    _put(ws, "B72", "=0.2*MIN(B71,5000)+0.6*MAX(0,B71-5000)", fmt=MONEY)
 
 
 # ------------------------------------------------------------------------------------------------- data

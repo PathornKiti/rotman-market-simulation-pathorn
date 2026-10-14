@@ -249,4 +249,35 @@ def parse_lines(lines: list[str], path: str | Path = "<memory>") -> Run:
 
 def parse(path: str | Path) -> Run:
     path = Path(path)
-    return parse_lines(path.read_text(errors="replace").splitlines(), path)
+    run = parse_lines(path.read_text(errors="replace").splitlines(), path)
+    if not run.orders and run.t0 is not None:
+        _orders_from_journal(run, path)
+    return run
+
+
+def _orders_from_journal(run: Run, path: Path) -> None:
+    """
+    Since 2026-10-14 the readable .log leaves order-by-order lines out (DEBUG); the journal (logs/data/) has every
+    order. Put them in `run.orders` on the log's clock (seconds of the local day, + 86400 past midnight).
+    """
+    import json
+    import time as _time
+
+    from ..core.journal import find_journal
+    jp = find_journal(path)
+    if jp is None:
+        return
+    mode = "DRY" if run.dry_run else "LIVE"
+    for line in jp.read_text(errors="replace").splitlines():
+        if '"k":"order"' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        lt = _time.localtime(float(o["w"]))
+        w = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + float(o["w"]) % 1
+        while w < run.t0 - 3600:
+            w += 86400
+        if o.get("px") is not None:
+            run.orders.append((w, mode, o["action"], o["ticker"], int(o["qty"]), float(o["px"])))

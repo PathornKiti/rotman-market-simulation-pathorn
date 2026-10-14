@@ -155,8 +155,10 @@ def build_model(path: str | Path, mode: str = "auto", with_counterfactuals: bool
     checks += [execution_check(run, primary), windows_check(primary), closeout_check(primary),
                limits_check(run, primary)]
 
+    from ..core.journal import find_journal
     from .live import analyse
-    journal = analyse(Path(path).with_suffix(".jsonl"))      # written by `ritc run` next to the log
+    jp = find_journal(path)                                   # logs/data/<name>.jsonl (or next to the log)
+    journal = analyse(jp) if jp else None
     if journal:
         progress(f"    journal: {len(journal['series'])} ticks, {len(journal['tenders'])} tenders, "
                  f"{len(journal['struggles'])} struggle types")

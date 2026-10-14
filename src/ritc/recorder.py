@@ -41,52 +41,97 @@ from .core.client import RITClient, RITError
 from .pricing.timeseries import volatility_clusters
 
 
-def record(path: str | None = None, interval: float = 0.5, depth: int = 20) -> str:
+def snapshots(interval: float = 0.5, depth: int = 20, stop=None, quiet: bool = False):
+    """
+    Yield one market snapshot every `interval` s (case, trader, securities, tenders, limits, books, NEW time and
+    sales) until the case stops after being ACTIVE, the API is gone, or `stop` (a threading.Event) is set.
+    """
     c = RITClient(max_retries=1)
+    last_tick, seen_active, errors = None, False, 0
+    tas_after: dict[str, int] = {}
+    while not (stop is not None and stop.is_set()):
+        t0 = time.time()
+        try:
+            case = c.case()
+            snap = {"t": round(t0, 3), "case": case, "trader": c.trader(),
+                    "securities": c.securities(), "tenders": c.tenders(), "limits": c.limits()}
+            stocks = [s["ticker"] for s in snap["securities"] if s.get("type", "STOCK") == "STOCK"]
+            snap["books"] = {t: c.book(t, depth) for t in stocks}
+            snap["tas"] = {}
+            for t in stocks:                     # only trades we have not stored yet
+                rows = c.tas(t, after=tas_after.get(t))
+                rows = [r for r in rows if int(r.get("id", 0)) > tas_after.get(t, -1)]
+                if rows:
+                    tas_after[t] = max(int(r["id"]) for r in rows)
+                    snap["tas"][t] = rows
+        except RITError as exc:
+            errors += 1
+            if not quiet:
+                print(f"API error: {exc}")
+            if seen_active and errors >= 5:          # the case (or the client) is gone
+                return
+            time.sleep(1.0)
+            continue
+        errors = 0
+        yield snap
+        status, tick = case.get("status"), case.get("tick")
+        if status == "ACTIVE":
+            seen_active = True
+        elif seen_active:
+            if not quiet:
+                print("case stopped")
+            return
+        if not quiet and tick != last_tick and tick is not None and tick % 30 == 0:
+            print(f"tick {tick}  tenders listed {len(snap['tenders'])}")
+        last_tick = tick
+        time.sleep(max(0.0, interval - (time.time() - t0)))
+
+
+def record(path: str | None = None, interval: float = 0.5, depth: int = 20) -> str:
     out = Path(path or Path("logs") / f"record-{time.strftime('%Y%m%d-%H%M%S')}.jsonl")
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"recording to {out} (Ctrl+C to stop; stops by itself when the case ends)")
-    last_tick, seen_active, errors = None, False, 0
-    tas_after: dict[str, int] = {}
     with out.open("w") as f:
         try:
-            while True:
-                t0 = time.time()
-                try:
-                    case = c.case()
-                    snap = {"t": round(t0, 3), "case": case, "trader": c.trader(),
-                            "securities": c.securities(), "tenders": c.tenders(), "limits": c.limits()}
-                    stocks = [s["ticker"] for s in snap["securities"] if s.get("type", "STOCK") == "STOCK"]
-                    snap["books"] = {t: c.book(t, depth) for t in stocks}
-                    snap["tas"] = {}
-                    for t in stocks:                     # only trades we have not stored yet
-                        rows = c.tas(t, after=tas_after.get(t))
-                        rows = [r for r in rows if int(r.get("id", 0)) > tas_after.get(t, -1)]
-                        if rows:
-                            tas_after[t] = max(int(r["id"]) for r in rows)
-                            snap["tas"][t] = rows
-                except RITError as exc:
-                    errors += 1
-                    print(f"API error: {exc}")
-                    if seen_active and errors >= 5:          # the case (or the client) is gone
-                        break
-                    time.sleep(1.0)
-                    continue
-                errors = 0
+            for snap in snapshots(interval, depth):
                 f.write(json.dumps(snap) + "\n")
-                status, tick = case.get("status"), case.get("tick")
-                if status == "ACTIVE":
-                    seen_active = True
-                elif seen_active:
-                    print("case stopped")
-                    break
-                if tick != last_tick and tick is not None and tick % 30 == 0:
-                    print(f"tick {tick}  tenders listed {len(snap['tenders'])}")
-                last_tick = tick
-                time.sleep(max(0.0, interval - (time.time() - t0)))
         except KeyboardInterrupt:
             pass
     return str(out)
+
+
+def record_into(journal, stop, interval: float = 0.5, depth: int = 20) -> None:
+    """
+    `ritc run --record`: the same snapshots as `ritc record`, written into the bot's own journal as
+    {"k": "market", ...} rows (ACTIVE heat only), so one heat = one .log + one .jsonl. Runs in a thread
+    until `stop` is set; never raises (a recorder problem must not touch the trading bot).
+    """
+    import logging
+    try:
+        for snap in snapshots(interval, depth, stop=stop, quiet=True):
+            if snap["case"].get("status") == "ACTIVE":
+                journal.write("market", **snap)
+    except Exception as exc:                     # noqa: BLE001
+        logging.getLogger("ritc").warning("recorder stopped: %s", exc)
+
+
+def load_snapshots(path: str) -> list[dict]:
+    """Snapshots from a `ritc record` file, or the `market` rows of a bot journal (`ritc run --record`)."""
+    out = []
+    for line in Path(path).read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue                              # a line cut off by a crash
+        if "k" in r:
+            if r["k"] != "market":
+                continue
+            r = {k: v for k, v in r.items() if k not in ("k", "w")}
+        if "case" in r:
+            out.append(r)
+    return out
 
 
 def _levels(side: list[dict]) -> list[tuple[float, int]]:
@@ -99,8 +144,7 @@ def _depth_within(levels: list[tuple[float, int]], touch: float, cents: float) -
 
 
 def calibrate(path: str) -> dict:
-    rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
-    rows = [r for r in rows if r["case"].get("status") == "ACTIVE"]
+    rows = [r for r in load_snapshots(path) if r["case"].get("status") == "ACTIVE"]
     if not rows:
         raise SystemExit("no ACTIVE snapshots in the recording")
     tpp = int(rows[0]["case"].get("ticks_per_period") or 420)

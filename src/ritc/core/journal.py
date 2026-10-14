@@ -1,5 +1,6 @@
 """
-Run journal: one JSON object per line next to the text log (logs/<strategy>-<time>.jsonl).
+Run journal: one JSON object per line, logs/data/<strategy>-<time>.jsonl next to the readable logs/<...>.log
+(older runs: logs/<strategy>-<time>.jsonl).
 
 The text log is for reading during a heat; the journal is for the post-trade report (`ritc report`), which
 needs the P&L path, positions, quotes, every order and fill, every tender and how it was answered, and every
@@ -33,7 +34,8 @@ class Journal:
         rec.update(fields)
         line = json.dumps(rec, default=str, separators=(",", ":"))
         with self._lock:
-            self._f.write(line + "\n")
+            if self._f is not None:          # another thread (the --record recorder) may have closed it
+                self._f.write(line + "\n")
 
     def close(self) -> None:
         with self._lock:
@@ -43,6 +45,28 @@ class Journal:
 
 
 NULL = Journal(None)
+
+
+def journal_path(log_path: str | Path) -> Path:
+    """Where `ritc run` keeps the journal of a log: logs/data/<log name>.jsonl (the .log stays alone in logs/)."""
+    p = Path(log_path)
+    return p.parent / "data" / ((p.name[:-4] if p.name.endswith(".log") else p.name) + ".jsonl")
+
+
+def find_journal(log_path: str | Path) -> Path | None:
+    """The journal of a log: logs/data/<name>.jsonl, or <name>.jsonl next to it (runs before 2026-10-14)."""
+    p = Path(log_path)
+    for c in (journal_path(p), p.parent / ((p.name[:-4] if p.name.endswith(".log") else p.name) + ".jsonl")):
+        if c.exists():
+            return c
+    return None
+
+
+def journal_files(logs: str | Path = "logs", case: str = "liability") -> list[str]:
+    """Every run journal of a case, old (logs/) and new (logs/data/), oldest first."""
+    d = Path(logs)
+    return sorted({str(p) for p in list(d.glob(f"{case}-*.jsonl")) + list((d / "data").glob(f"{case}-*.jsonl"))},
+                  key=lambda s: Path(s).name)
 
 
 def read(path: str | Path) -> list[dict]:

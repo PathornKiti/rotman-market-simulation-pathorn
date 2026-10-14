@@ -40,7 +40,8 @@ def pick_profile(case: str, name: str, logs: str = "logs") -> tuple[str, dict]:
             raise SystemExit(f"unknown profile {name!r}; have: {', '.join(profiles)}")
         return name, profiles[name]
     used = {k: 0 for k in profiles}
-    for j in Path(logs).glob(f"{case}-*.jsonl"):
+    from .core.journal import journal_files
+    for j in map(Path, journal_files(logs, case)):
         recs = _load(j)
         if not any(r.get("k") == "tick" for r in recs):
             continue                          # started but never traded (Ctrl-C before the heat): not a heat
@@ -203,11 +204,15 @@ def report(paths: list[str]) -> str:
     blocks = []
     for p in paths:
         sj = Path(p).with_suffix("").with_suffix(".summary.json") if p.endswith(".jsonl") else None
+        doc = None
         if sj and sj.exists():
             try:
                 doc = json.loads(sj.read_text())
             except (OSError, json.JSONDecodeError):
-                continue
+                doc = None
+        if doc is None and p.endswith(".jsonl"):        # the journal's own `summary` row (no .summary.json)
+            doc = next((r for r in reversed(_load(Path(p))) if r.get("k") == "summary"), None)
+        if doc:
             blocks += [dict(b, heat=Path(p).stem.split("-", 1)[-1][:15]) for b in doc.get("blocks", [])]
     if blocks:
         out.append("\nunwound blocks, slowest first (rate = shares/s absorbed; mid = move over the unwind, "

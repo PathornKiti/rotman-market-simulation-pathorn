@@ -70,9 +70,29 @@ Save as `.env`, not `.env.txt`. If the RIT client's API icon shows a different k
 
 ## 5. Run
 
+**Practice data collection (one window, every heat, default settings):**
+```powershell
+ritc run liability --live --forever --record
+```
+It waits for each heat, trades it with the default settings, records the market (books, tenders, time & sales),
+then waits for the next heat. **One readable log per heat** in `logs\`:
+
+```
+logs\liability-20261014-0932.log        <- read this one
+logs\data\liability-20261014-0932.jsonl  <- data for the analysis tools (never needs opening)
+```
+
+The `.log` has the story of the heat (every tender with its edge vs the mid and the answer, blocks, sprints, P&L
+every 30 s) and ends with a **HEAT REPORT**: every tender taken or not (edge, the bot's value, expected and
+made, late answers), every block (rested / crossed, mid move, made vs expected), the crowd, then the final NLV.
+Order-by-order lines are only in the data file (`-v` puts them back in the log). A run that never saw a heat
+(started after the last one, or Ctrl-C while waiting) deletes its own empty files. Don't add `--profile`. Don't
+run `ritc record` next to it.
+
 | What | Command |
 |---|---|
-| Bot, default (safe) settings | `ritc run liability --live -v` |
+| **Practice: every heat, default, market recorded** | `ritc run liability --live --forever --record` |
+| Bot, default (safe) settings, one heat | `ritc run liability --live -v` |
 | Bot, **aggressive profile** (see PRACTICE_PLAN.md decision rules) | `ritc run liability --live -v --set strategy.liquidity_model=flow` |
 | Dry run: decisions logged, nothing sent | `ritc run liability -v` |
 | Manual trading with suggestions (read-only, you click) | `ritc suggest` |
@@ -87,10 +107,10 @@ Rules:
 ## 6. After each heat: keep the evidence
 
 1. Screenshot RIT **Trader Info** (final NLV) and the **Transaction Log** (fines, commissions, close-out).
-2. Copy that heat's files from `logs\` to the Mac (USB / drive / chat): `liability-<date>-<time>.log` **and**
-   `liability-<date>-<time>.jsonl`. The `.jsonl` journal has the mid at every tender and bid, which the text log
-   lacks.
-3. On the Mac, put them in `logs/` and run `ritc report` (reports in `reports/`).
+2. Copy `logs\` **including `logs\data\`** to the Mac (USB / drive / chat). The data files hold every order, the
+   mid at every tender and, with `--record`, the whole market (~20 MB a heat).
+3. On the Mac, put them in `logs/` (and `logs/data/`) and run `ritc report` (reports in `reports/`),
+   `ritc practice` (scoreboard) and `ritc calibrate logs/data/liability-*.jsonl` (market, pooled over heats).
 
 ## 7. Troubleshooting
 

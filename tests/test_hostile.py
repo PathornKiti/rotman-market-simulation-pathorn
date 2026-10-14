@@ -404,3 +404,51 @@ def test_start_sprint_races_only_when_a_crowd_is_detected():
     s.crowded = lambda: True
     s.unwind_block(snap)
     assert "X" in s.algo.sprint                                       # crowd: cross the block's first ticks
+
+
+def test_sprint_never_walks_the_price_past_its_cap():
+    # Practice 2026-10-14: a CROC sprint bought 59.5k from 20.29 up to 21.54 in 8 s, re-anchoring its limit on
+    # the touch it had just moved every loop. With sprint_max_walk it pays at most that far from its start mid.
+    from conftest import make_book
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]}, "strategy": {"trend_exec": True},
+           "execution": {"initial_sprint_ticks": 3, "initial_sprint_gate": "always", "hold_risk_budget": 0,
+                         "sprint_max_walk": 0.10}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    s.tickers = ["X"]
+    s.ex.dry_run = True
+
+    def at(bid, ask, tick):
+        snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                        {"X": {"bid": bid, "ask": ask, "position": -50_000}})
+        snap._books["X"] = make_book([(bid, 20000)], [(ask, 2000), (ask + 0.30, 50000)])
+        return snap
+
+    s.unwind_block(at(19.99, 20.01, 5))                 # short block: the sprint buys, start mid 20.00
+    assert "X" in s.algo.sprint and s.algo.sprint_limit["X"] == 20.10
+    b = s.algo.blocks["X"]
+    kids = s.algo._kids("X", b, make_book([(19.99, 20000)], [(20.01, 2000), (20.31, 50000)]), -50_000, 5)
+    assert all(c.price <= 20.10 for c in kids if not c.passive)          # never reaches the 20.31 level
+    s.unwind_block(at(20.14, 20.16, 6))                 # our buying moved the touch 0.16: stop crossing, rest
+    assert "X" not in s.algo.sprint
+    s.unwind_block(at(20.03, 20.05, 7))                 # back inside the cap: the same anchor, sprint again
+    assert "X" in s.algo.sprint and s.algo.sprint_limit["X"] == 20.10
+
+
+def test_calibrate_reads_market_rows_from_a_bot_journal(tmp_path):
+    # `ritc run --record` writes the recorder's snapshots into the bot journal as "market" rows
+    import json
+
+    from ritc.recorder import load_snapshots
+
+    snap = {"t": 1.0, "case": {"tick": 5, "status": "ACTIVE"}, "securities": [], "books": {}}
+    p = tmp_path / "liability-x.jsonl"
+    p.write_text("\n".join([json.dumps({"k": "start", "w": 0}), json.dumps({"k": "market", "w": 1, **snap}),
+                            json.dumps({"k": "tick", "w": 2, "tick": 5}), '{"k": "market", "w": 3, "ca']) + "\n")
+    assert load_snapshots(str(p)) == [snap]                   # other kinds and a cut-off last line skipped
+    old = tmp_path / "record-x.jsonl"                          # a plain `ritc record` file still loads
+    old.write_text(json.dumps(snap) + "\n")
+    assert load_snapshots(str(old)) == [snap]

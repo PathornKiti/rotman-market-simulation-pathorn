@@ -116,8 +116,10 @@ def _run_one_heat(a: argparse.Namespace, heat: int) -> Runner:
         print(f"PROFILE {name}: {prof or '(config defaults)'}")
         logging.getLogger("ritc").info("PROFILE %s %s", name, prof)
     runner, _ = build(a.case, a.config, a.live, overrides=sets)
-    from .core.journal import Journal
-    runner.journal = runner.s.ex.journal = Journal(str(path).rsplit(".", 1)[0] + ".jsonl")
+    from .core.journal import Journal, journal_path
+    jpath = journal_path(path)
+    jpath.parent.mkdir(parents=True, exist_ok=True)
+    runner.journal = runner.s.ex.journal = Journal(jpath)
     print(f"log file: {path}" + (f"  overrides: {sets}" if sets else "")
           + (f"  (heat {heat} of this session, --forever)" if a.forever else ""))
     if not runner.s.ex.dry_run:
@@ -127,7 +129,38 @@ def _run_one_heat(a: argparse.Namespace, heat: int) -> Runner:
         runner.s.risk.update_from_api(lim)
     except RITError:
         pass
-    runner.run(once=a.once)
+    rec = None
+    if a.record and not a.once:
+        # RECORDER INSIDE THE BOT: the market snapshots `ritc record` takes, written into this heat's journal as
+        # "market" rows (read by `ritc calibrate logs/liability-*.jsonl`); one heat = one .log + one .jsonl.
+        import threading
+
+        from .recorder import record_into
+        stop = threading.Event()
+        rec = (threading.Thread(target=record_into, args=(runner.journal, stop, a.record_interval),
+                                name="recorder", daemon=True), stop)
+        rec[0].start()
+        print(f"recording the market into {runner.journal.path} every {a.record_interval} s")
+    try:
+        runner.run(once=a.once)
+    finally:
+        if rec:
+            rec[1].set()
+            rec[0].join(timeout=5)
+        if not runner.heat_started and not a.once:
+            # Started after the last heat ended (or Ctrl-C while waiting for the next one): no heat was traded,
+            # so its .log / .jsonl hold nothing and would show up as a fake heat (practice 2026-10-14, 00:57).
+            runner.journal.close()
+            for h in list(logging.getLogger().handlers):
+                if isinstance(h, logging.FileHandler):
+                    logging.getLogger().removeHandler(h)     # a closed FileHandler reopens on the next record
+                    h.close()
+            for f in (path, jpath):
+                try:
+                    Path(f).unlink()
+                except OSError:
+                    pass
+            print("no heat was traded in this run: its empty .log / .jsonl were removed")
     return runner
 
 
@@ -323,10 +356,10 @@ def cmd_report(a: argparse.Namespace) -> int:
 
 
 def cmd_practice(a: argparse.Namespace) -> int:
-    import glob
 
+    from .core.journal import journal_files
     from .practice import main as practice_main
-    return practice_main(a.journals or sorted(glob.glob("logs/liability-*.jsonl")))
+    return practice_main(a.journals or journal_files("logs", "liability"))
 
 
 def cmd_suggest(a: argparse.Namespace) -> int:
@@ -410,6 +443,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--forever", action="store_true",
                    help="keep going: when a heat ends, wait for the next one and start again (new log + journal; "
                         "with --profile rotate, the next profile). Ctrl-C quits")
+    r.add_argument("--record", action="store_true",
+                   help="also record the market (books, tenders, time & sales) into this heat's .jsonl, as "
+                        "`ritc record` does, so one heat = one .log + one .jsonl")
+    r.add_argument("--record-interval", type=float, default=0.5, help="seconds between --record snapshots")
     r.add_argument("--once", action="store_true", help="run a single loop then exit")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(fn=cmd_run)

@@ -33,7 +33,9 @@ def setup(name: str, verbose: bool = False, tag: str = "") -> str:
     console.setLevel(logging.DEBUG if verbose else logging.INFO)
     console.setFormatter(fmt)
     fh = logging.FileHandler(path)
-    fh.setLevel(logging.DEBUG)
+    # The .log is for reading: order-by-order lines and cancel noise are DEBUG (the journal in logs/data/ has every
+    # order and fill); -v puts them back in both.
+    fh.setLevel(logging.DEBUG if verbose else logging.INFO)
     fh.setFormatter(fmt)
     root.addHandler(console)
     root.addHandler(fh)

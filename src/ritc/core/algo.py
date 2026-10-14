@@ -136,7 +136,7 @@ def plan_children(book: OrderBook, position: int, sched: int, target: int, ticks
             # THIN-BOOK URGENCY (practice 2026-10-13, only the house market maker): sweeping max_order every loop ate
             # each re-quote and chased CRZY $10.12 -> $11.12 while buying back 55k. Take a share of what is shown.
             depth = book.depth("ask" if action == "BUY" else "bid", lim)
-            qty = min(behind, max_order, max(1, int(depth * p.urgent_participation)))
+            qty = min(behind, max_order, max(1 if depth else 0, int(depth * p.urgent_participation)))
         elif ticks_left <= p.urgent_ticks:
             qty = min(behind, max_order)                 # urgent: rely on the protective limit only
         else:
@@ -195,6 +195,7 @@ class BlockExecutor:
         self.passive_from: int | None = None     # abs tick from which nothing crosses (hold to the bell)
         self.passive: set[str] = set()           # tickers that only rest this loop (risk within budget)
         self.sprint: set[str] = set()            # tickers to cross now (a trend runs against the block)
+        self.sprint_limit: dict[str, float] = {}  # ticker -> worst price a sprint may pay (sprint_max_walk)
 
     def work(self, ticker: str, position: int, target: int, now: int, deadline: int,
              limit_price: float | None = None, kappa: float = 0.0) -> Block:
@@ -300,8 +301,13 @@ class BlockExecutor:
         sched = schedule_position(b.start_pos, b.target, b.start_tick, b.deadline, now, self.p.front_load, b.kappa)
         if t in self.sprint:
             # SPRINT (trend against the block): treat the block as due now; the urgent branch crosses at most
-            # urgent_participation x the depth within max_slippage per loop, whatever the schedule says.
-            return plan_children(book, pos, b.target, b.target, 0, self.ex.max_size(t), self.p, b.limit_price)
+            # urgent_participation x the depth within max_slippage per loop, whatever the schedule says, and
+            # never past `sprint_limit` (each loop re-anchors max_slippage on the touch it has just moved).
+            lim, cap = b.limit_price, self.sprint_limit.get(t)
+            if cap is not None:
+                buy = b.target > pos
+                lim = cap if lim is None else (min(lim, cap) if buy else max(lim, cap))
+            return plan_children(book, pos, b.target, b.target, 0, self.ex.max_size(t), self.p, lim)
         return plan_children(book, pos, sched, b.target, b.deadline - now, self.ex.max_size(t), self.p,
                              b.limit_price, passive_only=t in self.passive or (self.passive_from is not None
                                                                                 and now >= self.passive_from))

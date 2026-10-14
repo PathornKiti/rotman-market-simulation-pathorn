@@ -67,7 +67,8 @@ IMPROVEMENTS: dict[str, dict] = {
     "no-overshoot": {
         "title": "Never let resting and crossing orders together take a position through zero",
         "area": "fines", "status": "fixed (QuoteManager never_larger, unwind caps)",
-        "what": "Shares that flip a position open a NEW position: speculation, fined $0.20-$0.40/share.",
+        "what": "Shares that flip a position open a NEW position: speculation, fined $0.20/share for the first "
+                "5,000, then $0.60.",
         "evidence": "v1 run 20261009-224656 overshot CRZY by 2,400 shares (fine ~$480 plus a round trip). The "
                     "current bot opened 0 speculative shares in every replay of these markets.",
     },

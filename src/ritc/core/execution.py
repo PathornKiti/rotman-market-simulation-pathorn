@@ -119,7 +119,7 @@ class Executor:
         arrival = self.arrival(ticker) if self.arrival else None
         for chunk in slice_qty(quantity, self.max_size(ticker)):
             px = RITClient.round_limit(price, action, self.decimals)
-            log.info("%s %s %s %d @ %.*f", self._tag(), action.upper(), ticker, chunk, self.decimals, px)
+            log.debug("%s %s %s %d @ %.*f", self._tag(), action.upper(), ticker, chunk, self.decimals, px)
             if self.dry_run:
                 continue
             try:
@@ -216,7 +216,7 @@ class Executor:
         """Only for emergencies (flattening at the bell). Prefer `limit`."""
         out: list[dict] = []
         for chunk in slice_qty(int(quantity), self.max_size(ticker)):
-            log.info("%s MARKET %s %s %d", self._tag(), action.upper(), ticker, chunk)
+            log.debug("%s MARKET %s %s %d", self._tag(), action.upper(), ticker, chunk)
             if self.dry_run:
                 continue
             try:

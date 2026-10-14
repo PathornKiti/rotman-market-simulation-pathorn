@@ -165,7 +165,7 @@ def analyse(path: str | Path) -> dict | None:
                                                              for r in rows):
                 flips += 1
     add("position through zero", flips, "a position changed sign without a tender booking that tick",
-        "speculation fine $0.20-0.40/share: unwinds must never pass zero", severity="high")
+        "speculation fine $0.20/share up to 5,000 then $0.60: unwinds must never pass zero", severity="high")
     near = sum(1 for t in ticks if sum(abs(v) for v in (t.get("pos") or {}).values()) > 0.9 * GROSS_LIMIT
                or abs(sum((t.get("pos") or {}).values())) > 0.9 * NET_LIMIT)
     add("near the limits", near, "ticks above 90% of the 250k gross or 100k net limit",

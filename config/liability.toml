@@ -101,6 +101,10 @@ trend_prior_n = 20            # with weight trend_prior_n pairs.
 trend_window = 10
 trend_exec = true             # SPRINT: cross (urgent_participation x depth per loop) while r x the run against the block over
 trend_cross_cost = 0.05       # the last trend_window ticks >= this $; rest again under half of it. Profile G_trend.
+run_ex_own = false            # OWN-IMPACT-FREE RUN (2026-10-14): the trend run minus own_impact x the shares WE crossed in the
+own_impact = { CRZY = 4e-6, TAME = 5e-6, CROC = 1.3e-5 }   # window ($/share, measured on our real ~50k sprints). Practice
+                              # 2026-10-14: a run continued while we held and rested (r +0.43, t 4.0) but reversed
+                              # during our own sprints (r -0.33): the sprint fed on its own impact (CROC -$24.8k, -$23.0k).
 book_signal = true            # THIN-SIDE SIGNAL (default since 2026-10-13, passes the testing rule). Predict the next 10 ticks as
 book_gate_t = 2.0             # a x last 10-tick run + b x depth asymmetry (cost to cross book_signal_shares on the ask minus
 book_signal_shares = 25000    # the bid side: the price moves toward the thin side). a, b learned live from the heat's own
@@ -188,6 +192,10 @@ initial_sprint_gate = "crowded"   # detected other desks dumping the same blocks
                               # 3 ticks of every new block (Obizhaeva-Wang-style initial trade), then the usual unwind.
                               # Ungated it lost $13-23k/heat in solo markets. Gated, design 1-24 pooled +$3.6k (t 5.7),
                               # holdout 101-124 +$2.2k (t 4.8): rival markets +$1.2k..+$16.9k, solo markets exactly $0.
+sprint_max_walk = 0           # SPRINT WALK CAP ($ from the mid at the block's first sprint; 0 = off). 2026-10-14 after the two
+                              # CROC sprints that walked $1.25-1.45: costs in every simulated trending market (seeds 1-24,
+                              # pooled 0.05 -$7.7k t -7.5, 0.15 -$3.7k t -5.3, 0.25 -$2.3k t -3.4, 0.50 -$0.9k t -2.0);
+                              # helps only without a trend. Rejected; option kept.
 live_cross_cost = false       # cross only when the predicted move beats the cost of crossing live_cross_shares in the book now
 live_cross_shares = 10000     # + fee (instead of trend_cross_cost): pooled -$0.4k (t -1.2), rejected 2026-10-13.
 stall_and_trend = false       # cross only when a block is BOTH stuck (stuck_window_ticks) and trending against us
