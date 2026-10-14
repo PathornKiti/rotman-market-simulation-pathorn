@@ -156,6 +156,17 @@ crowd_weight = 1.0
 # crowd impact, crowd position cap. Each worsened the worst seed with tenders priced off the visible price (anchor=1).
 # If the practice rounds show a crowd, set crowd_prior_mean to the learned $/10k (prior sd ~ half of it) instead.
 
+
+# PER-TICKER settings: any [strategy] key can be overridden per stock in a [strategy.per_ticker.<TICKER>] table placed
+# here (LiabilityStrategy.tp). CRZY, TAME and CROC behave differently (22 real heats 2026-10-14). ONE change at a time.
+[strategy.per_ticker.CROC]
+edge_floor = 0.15             # VALUATION (2026-10-14): take a fixed CROC tender the cost model declines when its edge vs the
+                              # mid is >= 0.15. The stacked charges (book walk on CROC's thin book + drift x a long unwind
+                              # + crowd) averaged 0.26/share on CROC; taken CROC blocks really gave back 0.036 (day) and
+                              # 0.125 (evening, 3-5 other teams online). 22 real heats, conservative scoring: +12 tenders,
+                              # +$94k (day +$52k, evening +$42k), 1 loser. TAME: evening-only gain (+$56k, 4 losers):
+                              # not yet. CRZY: -$17k: never (its valuation is about right).
+
 [execution]
 unwind_mode = "block"         # "block" (passive-then-aggressive schedule) or "slice" (always cross)
 close_hold_ticks = 90         # HOLD TO THE BELL (2027 brief: open positions close at the last traded price, no fine).

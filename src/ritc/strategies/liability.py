@@ -753,7 +753,7 @@ class LiabilityStrategy(Strategy):
         """$ / share a sprint must save: `live_cross_cost` = what crossing the next slice costs in the book now plus
         the fee (deep book: cheap, thin book: dear); otherwise the fixed `trend_cross_cost`."""
         if not self.cfg.get("execution", {}).get("live_cross_cost", False):
-            return float(self.p.get("trend_cross_cost", 0.03))
+            return float(self.tp(ticker, "trend_cross_cost", 0.03))
         n = min(abs(held), int(self.cfg.get("execution", {}).get("live_cross_shares", 10000)))
         return max(0.01, cross_cost(snap.book(ticker), "SELL" if held > 0 else "BUY", n)
                    + float(self.fees.get(ticker, 0.02)))
@@ -995,45 +995,74 @@ class LiabilityStrategy(Strategy):
                 return TenderDecision(False, None, 0.0, 0.0, f"auction while we unwind our {pos:+d} block")
         if self.liq_model == "ensemble":
             return self.decide_ensemble(t, snap, positions)
-        return self._evaluate(t, snap, positions)
+        return self.edge_floor(t, snap, self._evaluate(t, snap, positions))
+
+    def edge_floor(self, t: dict, snap: Snapshot, d: TenderDecision) -> TenderDecision:
+        """
+        EDGE FLOOR (`strategy.edge_floor`, per ticker via [strategy.per_ticker.<TK>]): take a FIXED tender the cost
+        model declines when its edge vs the mid is at least the floor. 22 real heats 2026-10-14: the stacked charges
+        (book walk + drift x unwind + risk + crowd) averaged 0.16-0.26/share and reached 1.4, while taken blocks really
+        gave back 0.03-0.04/share in calm heats and 0.08-0.14 with 3-5 other teams online. Only adds tenders the model
+        declined ON VALUE: room, time, no-market and auction answers are untouched.
+        """
+        floor = float(self.tp(t.get("ticker"), "edge_floor", 0.0) or 0.0)
+        if d.accept or floor <= 0 or not t.get("is_fixed_bid", True) or not d.reason.startswith("profit/share"):
+            return d
+        mid, px = snap.book(t.get("ticker")).mid, t.get("price")
+        if not mid or px is None:
+            return d
+        edge = (1 if str(t.get("action", "BUY")).upper() == "BUY" else -1) * (mid - float(px))
+        if edge < floor:
+            return d
+        return TenderDecision(True, d.price, d.profit_per_share, d.unwind_vwap,
+                              f"edge floor: edge {edge:+.3f} >= {floor:.2f} (cost model {d.profit_per_share:+.4f})")
+
+    def tp(self, ticker: str | None, key: str, default=None):
+        """
+        PER-TICKER setting: `[strategy.per_ticker.<TICKER>]` overrides any strategy key for that stock (CRZY, TAME and
+        CROC behave differently: 13 real heats 2026-10-14), else the strategy-wide value.
+        """
+        ov = (self.p.get("per_ticker") or {}).get(ticker) or {}
+        return ov[key] if key in ov else self.p.get(key, default)
 
     def _evaluate(self, t: dict, snap: Snapshot, positions: dict[str, int], flow: bool | None = None,
                   crowd: bool = True, room: int | None = None) -> TenderDecision:
         """evaluate_tender with the bot's state. `flow`: force the forward-liquidity exit on / off (None = the
         liquidity_model's choice); `crowd`: include the learned crowd charge; `room`: override the risk room."""
         ticker = t.get("ticker")
-        use_flow = ((self.liq_model == "flow" or (self.liq_model == "auctions" and self.bid_up(t, positions))
-                     or (self.liq_model == "adaptive" and self.no_crowd_seen())) if flow is None else flow)
+        lm = self.tp(ticker, "liquidity_model", self.liq_model)
+        use_flow = ((lm == "flow" or (lm == "auctions" and self.bid_up(t, positions))
+                     or (lm == "adaptive" and self.no_crowd_seen())) if flow is None else flow)
         return evaluate_tender(
             t, snap.book(ticker),
             fee=float(self.fees.get(ticker, 0.0)),
             position=positions.get(ticker, 0),
             room=self.risk.room(ticker, t.get("action", "BUY"), positions) if room is None else room,
             ticks_left=snap.ticks_left,
-            refill_factor=self.p.get("refill_factor", 2.0),
+            refill_factor=self.tp(ticker, "refill_factor", 2.0),
             # In a drawdown, only the best tenders: required margin scales with 1/throttle.
-            min_profit=self.p.get("min_profit_per_share", 0.02) * self.edge_mult(),
-            competitive_margin=self.p.get("competitive_margin", 0.05),
+            min_profit=self.tp(ticker, "min_profit_per_share", 0.02) * self.edge_mult(),
+            competitive_margin=self.tp(ticker, "competitive_margin", 0.05),
             drift_per_tick=(self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0,
             # LIQUIDITY-AWARE: time to unwind = shares / the absorption this stock has shown (feeds sigma x sqrt(T))
             unwind_ticks_per_lot=(1.0 / self.absorption(ticker) if self.p.get("liquidity_aware", False)
-                                  else self.p.get("unwind_ticks_per_share", 0.0)),
-            min_ticks_to_unwind=self.p.get("min_ticks_to_unwind", 10),
+                                  else self.tp(ticker, "unwind_ticks_per_share", 0.0)),
+            min_ticks_to_unwind=self.tp(ticker, "min_ticks_to_unwind", 10),
             price_vol_per_tick=self.price_vol(ticker, snap),
-            risk_aversion=self.p.get("risk_aversion", 0.0),
+            risk_aversion=self.tp(ticker, "risk_aversion", 0.0),
             crowd_cost=((self.crowd_cost(int(t.get("quantity", 0))) if crowd else 0.0)
                         + self.holder_cost(ticker, int(t.get("quantity", 0)))
                         + self.trend_cost(ticker, 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1)),
-            close_hold_ticks=(self.close_hold if self.p.get("hold_valuation", False) and not self.holder_drift()
+            close_hold_ticks=(self.close_hold if self.tp(ticker, "hold_valuation", False) and not self.holder_drift()
                               else 0),     # holding to the bell is not free once holding has a drift
             flow_rate=(self.flow(ticker, "SELL" if str(t.get("action", "BUY")).upper() == "BUY" else "BUY")
                        if use_flow else 0.0),
-            drift_symmetric=bool(self.p.get("drift_symmetric", False)),
+            drift_symmetric=bool(self.tp(ticker, "drift_symmetric", False)),
             offset_credit=self.netting_credit(),
             # DRIFT HORIZON (practice 2026-10-14, 47 fixed tenders): the EWMA drift x 20 ticks matched the next 20
             # ticks' move against the unwind (charged 0.118, moved 0.116), but x the full unwind time it charged
             # 0.232 for a 0.078 move over 40 ticks: the trend fades within 10-20 ticks.
-            drift_horizon_ticks=float(self.p.get("drift_horizon_ticks", 0)),
+            drift_horizon_ticks=float(self.tp(ticker, "drift_horizon_ticks", 0)),
         )
 
     def scenario_weights(self) -> dict[str, float]:
@@ -1452,8 +1481,10 @@ class LiabilityStrategy(Strategy):
         # SPRINT: cross while the expected further move against the block beats the cost of crossing; rest again
         # once it is under half of that (no flapping on the threshold).
         sprint: set[str] = set()
-        if self.p.get("trend_exec", False):
+        if self.p.get("trend_exec", False) or self.p.get("per_ticker"):
             for t, b in self.algo.blocks.items():
+                if not self.tp(t, "trend_exec", False):
+                    continue                       # PER-TICKER: the sprint can be off for one stock
                 held = snap.positions.get(t, 0) - b.target
                 c = self.cross_threshold(t, held, snap)
                 if held and self.predicted_against(t, held, snap) >= (c / 2 if t in self.algo.sprint else c):
