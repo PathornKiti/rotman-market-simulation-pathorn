@@ -22,11 +22,11 @@ First time:
 cd $HOME\Documents
 git clone https://github.com/PathornKiti/rotman-market-simulation-pathorn.git
 cd rotman-market-simulation-pathorn
-git checkout liability-fresh-unwind
+git checkout main
 ```
 Every later time (same folder):
 ```powershell
-git checkout liability-fresh-unwind
+git checkout main
 git pull
 ```
 Check you have today's code: `git log --oneline -3` must show the latest Mac commit.
