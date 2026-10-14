@@ -857,6 +857,61 @@ answers waited on room held by an auction bid that then lost (~$30k of edge over
 | `auction_bid = false` | +$1.8k (t 1.8) | (+cap) -$0.1k vs cap alone | -$4k..-$5k with rival desks: rejected |
 | `crowd_robust = true` (profile B) | -$3.1k (t -3.1) | - | "everything at once" -$40k, impact + rivals -$26k: keep false |
 
+## Ten default heats, valuation and the early probe (2026-10-14 evening): `early_probe_ticks = 5` adopted
+
+**Real heats** (logs/ 12:17-12:57 + logs/data/ 12:57-13:37, code b19e95c = no drift cap): NLV 91.4 97.0 47.7 33.1 62.3
+43.8 56.1 59.0 79.3 82.3k (mean $65.2k, 3 of 10 < $50k), 0 fines, auctions 0/20. 70 fixed tenders, 47 taken.
+
+**What a block makes:** edge + the mid's mean move over the next 25 ticks - 0.014 (sd 0.07, n 46). The bot's valuation
+charged 0.112/share on the taken tenders (expected $498k, made $653k). Which charge predicts the real shortfall
+(slope, 1 = right): book-walk exit 0.04 +- 0.25, drift x the whole unwind 0.06, drift x 20 ticks 0.46, sqrt(T) risk
+0.42 +- 0.61. The post-tender move is predictable only in part: leave-one-heat-out R2 0.39 with drift x 20 + depth
+imbalance within $0.10 (quant review; edge itself 0), residual ~$4k per 50k tender.
+
+**Declined winners:** 13 declined tenders with edge > 0.10 = +$106k counterfactual over 10 heats; all 3 sub-$50k heats
+had 2-3. Causes: drift x 113-163 unwind ticks (flow forecast 2-4x too low), the early-heat book walk (adaptive gate
+closed: CROC 0.10-0.22/share), one crowd false positive (heat 12:33, a CRZY trend flagged CROWDED).
+
+**Simulator realism (replay):** "trend (measured)" matches the real heats (move25 -0.033 vs -0.032, sd 0.145 vs 0.136,
+drift slope 0.60 vs 0.43, $75k vs $65k a heat); "practice calibrated" has no momentum (-0.07); rival markets run
+-0.31 against every tender (10x anything seen in practice). A crowd shows within 5 ticks: rival markets -0.21 by tick
+5 (bad tenders -0.36, good +0.12); real heats: the 16% that ran > 0.15 against had run -0.14 by tick 5, others -0.003.
+
+| change (paired, 30-35 markets) | real heats (counterfactual) | seeds 1-16 | holdout 101-116 | verdict |
+|---|---|---|---|---|
+| `adaptive_min_obs = 0` | +$5.6k/heat over the cap | +$1.6k (t 2.2), rivals -$3..-19k, worst -102k -> -174k | +$0.2k (t 0.4) | rejected |
+| `early_flow_weight = 0.5` (blend before evidence) | +$4.8k | +$1.2k (t 2.2), rivals -$4..-7k | - | rejected |
+| `value_model = "calibrated"` (quant formula) | +$2.1k | +$0.6k (t 1.3), hostile -$3.6k, "everything at once" -$9.1k | - | rejected |
+| calibrated + early 0.5 | +$9.0k | +$2.4k (t 2.9), rivals -$3..-7k, hostile worst -7.5k -> -46.6k | - | rejected |
+| **`early_probe_ticks = 5`** | **est. +$8.5k, no new losers** | **+$3.1k (t 6.2), trend +$3.9..12.6k, rivals ~0** | **+$1.0k (t 5.0), no worst heat worse** | **adopted** |
+| probe + calibrated | +$11.3k | +$3.8k (t 5.1), hostile -$3..-9.7k (worst -7.5k -> -46.6k) | - | rejected |
+| probe + `crowd_mode = "fast"` (5-tick detector, quant) | 0/10 false alarms | -$2.7k (t -3.8), rivals -$3..-12k, "everything at once" -$29k | - | rejected |
+| probe + `close_hold_ticks = 25` | +$1k (one CROC grind, n 1) | +$0.1k (t 0.4), rivals -$1..-3k | - | rejected |
+| shorter drift caps 10 / 5 (+ min_obs 0) | admit -$10k / -$12k losers | - | - | rejected |
+
+**Waiting before accepting GOOD tenders** (3-10 ticks, decline if the mid ran against): -$1k..-9k/heat on the real
+tenders: a 0.25-0.70 edge absorbs early dips, declining throws the whole step away. The probe is only for tenders the
+book walk declines.
+
+**P&L steps:** of $772k of edge at acceptance (46 blocks) we kept 85%: 21 blocks rose above the step (price +0.10 our
+way, all rested), 21 kept part (-0.09, 15 sprinted), 4 fell below the start (-0.44). The give-back ($163k) is the price
+running 0.2-0.7 against within 7-30 s; the sprint already fires in 18 of 25 such blocks and is right to (after a
+sprint the mid kept running against: -0.12 in 20 ticks, t -2.8, n 18): trend, not our impact.
+
+**Post-block rebound and RIDE:** after a RESTED block's last fill the mid moved our way +0.07 / +0.13 / +0.24 / +0.32
+at +5 / +10 / +20 / +40 ticks (t 4.6-6.2, n 28), +0.067 during the whole unwind; the old sim showed none (+0.02).
+New sim knob `passive_impact` (our resting fills move the mid against us, transient, `passive_revert`/tick);
+`passive_impact=1e-5,passive_revert=0.09,flow=1.5` reproduces it (+0.111 / +0.169 / +0.252) -> stress group
+`passive`. Caveat (quant): part of the rebound is look-ahead (blocks end when buyers arrive), so the sim test is
+partly circular. `execution.ride_ticks = k` (+ `ride_min`): rest k ticks behind the touch, never cross, while the
+predicted move is our way: 1 tick +$0.6k (t 3.2, passive markets +$1.2..4.5k, rivals ~0); 2 ticks +$0.3k (t 1.3);
+always 1 tick +$0.7k (t 1.5) but -$10k in markets without the rebound. **`ride_ticks = 1` adopted:** holdout 101-116
+on top of the probe +$1.1k (t 7.3), trend +$1.8..2.6k, passive +$3.8..6.6k, rivals -$0.3..+0.9k; the worst heat of 4
+rival markets $0.2-1.4k worse (on -$50k..-$243k; design seeds: unchanged). Riding always stays a live-heat question.
+
+**Not changed:** auctions (0/52 over two days; the calibrated value says bids within 0.15 of the mid would earn
+~$2.5k a win; not testable in the sim), step give-back (no rule beats the sprint), low-edge accepts (n 5).
+
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out

@@ -356,3 +356,12 @@ def test_fresh_unwind_cancels_its_own_unmanaged_orders():
     algo.step_fresh({"TAME": BOOK}, {"TAME": -3000}, 1, lambda: (rest, {"TAME": -3000}), lambda t, p: 0)
     assert stray in c.cancelled and 9 not in c.cancelled
     assert sum(q for _, a, q, _ in c.posted[1:] if a == "BUY") <= 1500     # both still count this loop
+
+
+def test_ride_rests_behind_the_touch_and_never_crosses():
+    # Behind schedule (would cross) and a 4-tick spread (would step inside): riding 1 tick does neither.
+    kids = plan_children(BOOK, 20000, sched=12000, target=0, ticks_left=50, max_order=10000, p=P, behind_ticks=1)
+    assert len(kids) == 1 and kids[0].passive and kids[0].action == "SELL"
+    assert kids[0].price == pytest.approx(BOOK.best_ask + 0.01)
+    short = plan_children(BOOK, -20000, sched=-20000, target=0, ticks_left=50, max_order=10000, p=P, behind_ticks=2)
+    assert short[0].action == "BUY" and short[0].price == pytest.approx(BOOK.best_bid - 0.02)

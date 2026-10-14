@@ -355,6 +355,8 @@ class LiabilityStrategy(Strategy):
         self.crowd = BayesImpact(float(s.get("crowd_prior_mean", 0.0)), float(s.get("crowd_prior_sd", 0.10)),
                                  float(s.get("crowd_noise_sd", 0.10)))
         self.crowd_obs: list[tuple[int, str, int, float, float, int]] = []  # (tick, ticker, sign, x, mid, id)
+        self.fast_obs: list[tuple[int, str, int, float]] = []   # FAST CROWD: (tick, ticker, sign, mid) per fixed tender
+        self.fast_moves: list[float] = []                        # FAST CROWD: 5-tick moves against each unwind
         self._tas_t = 0.0                        # last time & sales prefetch (monotonic s)
         self.absorb: dict[str, float] = {}       # ticker -> learned shares/tick of our own unwinds
         self.exec_cost: float | None = None       # learned $/share an unwind costs vs the mid at acceptance
@@ -394,6 +396,7 @@ class LiabilityStrategy(Strategy):
         self.journaled: set[int] = set()                # tenders already written to the run journal
         self.answers: dict[int, dict] = {}              # tender id -> how it was answered (the HEAT REPORT)
         self.seen_at: dict[int, int] = {}               # tender id -> abs tick it was first listed
+        self.probe_mid: dict[int, float] = {}           # EARLY PROBE: tender id -> mid when we first valued it
         # FORWARD LIQUIDITY (docs/PRACTICE_LOGS.md): shares/tick the market trades on each side of each stock, from
         # time & sales, as an EWMA started at the practice-measured absorption of our resting unwinds. "SELL" =
         # buyer-initiated volume (it fills a resting sell). Used to price tenders (`liquidity_model = "flow"`).
@@ -440,6 +443,8 @@ class LiabilityStrategy(Strategy):
         self.last_tick = snap.tick
         if self.crowd_learn:
             self._learn_crowd(snap)
+        if self.fast_obs:
+            self._learn_fast_crowd(snap)
         own: dict[str, float] = {}
         fills = self.ex.tca.fills
         for f in fills[self.own_seen:]:
@@ -563,14 +568,46 @@ class LiabilityStrategy(Strategy):
                      " CROWDED" if self.crowded() else "")
         self.crowd_obs = keep
 
+    def fast_mode(self) -> bool:
+        return self.p.get("crowd_mode", "learner") == "fast"
+
+    def _learn_fast_crowd(self, snap: Snapshot) -> None:
+        """FAST CROWD: score each fixed tender's 5-tick move against its unwind (taken or not)."""
+        lag, keep = int(self.p.get("crowd_fast_ticks", 5)), []
+        for tick, t, sign, m0 in self.fast_obs:
+            m = snap.mid(t)
+            if snap.abs_tick - tick < lag or m is None:
+                keep.append((tick, t, sign, m0))
+                continue
+            self.fast_moves.append(sign * (m - m0))
+            log.info("CROWD fast %s moved %+.3f against in %d ticks -> mean %+.3f (n=%d)%s", t, sign * (m - m0), lag,
+                     sum(self.fast_moves) / len(self.fast_moves), len(self.fast_moves),
+                     " CROWDED" if self.crowded() else "")
+        self.fast_obs = keep
+
+    def fast_mean(self) -> float:
+        return sum(self.fast_moves) / len(self.fast_moves) if self.fast_moves else 0.0
+
     def crowd_cost(self, qty: int) -> float:
         """Expected $/share the crowd's unwind costs us on a tender of `qty` shares."""
+        if self.fast_mode():
+            # the 5-tick move maps to the 25-tick move about x1.5 (sim rival markets: -0.21 -> -0.31)
+            return float(self.p.get("crowd_fast_charge", 1.5)) * max(0.0, self.fast_mean()) if self.crowded() else 0.0
         if not self.crowd_learn or (self.p.get("crowd_gate", False) and not self.crowded()):
             return 0.0
         return self.p.get("crowd_weight", 1.0) * max(0.0, self.crowd.mean) * qty / 10_000
 
     def crowded(self) -> bool:
-        """The learned crowd impact is significantly positive (posterior mean > 2 sd)."""
+        """
+        The learned crowd impact is significantly positive (posterior mean > 2 sd). `crowd_mode = "fast"` (quant
+        review 2026-10-14): the mean 5-tick move against the unwind over every fixed tender so far is at least
+        max(`crowd_fast_floor`, `crowd_fast_thr` / sqrt(n)). Real crowd-free heats: 5-tick move +0.024 (sd 0.06-0.09),
+        0 of 10 heats flagged; sim rival markets -0.21 by tick 5: flagged after the first tender in 9 of 10.
+        """
+        if self.fast_mode():
+            n = len(self.fast_moves)
+            return n >= 1 and self.fast_mean() >= max(float(self.p.get("crowd_fast_floor", 0.08)),
+                                                      float(self.p.get("crowd_fast_thr", 0.15)) / n ** 0.5)
         return (self.crowd_learn and self.crowd.n >= max(1, int(self.p.get("crowd_min_obs", 1)))
                 and self.crowd.mean > 2 * self.crowd.sd)
 
@@ -594,6 +631,8 @@ class LiabilityStrategy(Strategy):
         (evidence leaning to no crowd); until then, and whenever a crowd shows, the pessimistic book walk.
         """
         n = int(self.p.get("adaptive_min_obs", 3))
+        if self.fast_mode():
+            return len(self.fast_moves) >= int(self.p.get("crowd_fast_min_obs", 1)) and not self.crowded()
         return self.crowd_learn and self.crowd.n >= n and self.crowd.mean < self.crowd.sd
 
     def trend_r(self) -> float:
@@ -737,6 +776,26 @@ class LiabilityStrategy(Strategy):
 
     def book_signal_on(self) -> bool:
         return self.book_model() is not None
+
+    def rides(self, snap: Snapshot, sprint: set[str]) -> dict[str, int]:
+        """
+        RIDE (`execution.ride_ticks`, practice 2026-10-14): after a RESTED block's last fill the mid moved our way
+        +0.13 in 10 ticks and +0.24 in 20 (t 6.2, 28 blocks), against +0.07 during the whole unwind: our resting
+        side absorbs the flow that moves the price our way. While the expected next move is our way by at least
+        `ride_min` (momentum / book model, as for the sprint; `ride_min` < 0 = always), rest `ride_ticks` behind the
+        touch and never cross, so the price comes to us. Never while sprinting or within `ride_end_ticks` of the bell.
+        """
+        ex = self.cfg.get("execution", {})
+        k = int(ex.get("ride_ticks", 0))
+        if not k or snap.ticks_left <= int(ex.get("ride_end_ticks", 60)):
+            return {}
+        lo = float(ex.get("ride_min", 0.02))
+        out = {}
+        for t, b in self.algo.blocks.items():
+            held = snap.positions.get(t, 0) - b.target
+            if held and t not in sprint and (lo < 0 or -self.predicted_against(t, held, snap) >= lo):
+                out[t] = k
+        return out
 
     def predicted_against(self, ticker: str, held: int, snap: Snapshot) -> float:
         """$ the next window is expected to move against a position of sign `held` (book model or momentum)."""
@@ -995,7 +1054,88 @@ class LiabilityStrategy(Strategy):
                 return TenderDecision(False, None, 0.0, 0.0, f"auction while we unwind our {pos:+d} block")
         if self.liq_model == "ensemble":
             return self.decide_ensemble(t, snap, positions)
-        return self._evaluate(t, snap, positions)
+        d = self._evaluate(t, snap, positions)
+        cal = self.p.get("value_model", "cost") == "calibrated" and t.get("is_fixed_bid", True)
+        w = float(self.p.get("early_flow_weight", 0.0))
+        if not (cal or w > 0 or self.p.get("early_probe_ticks", 0)) or not d.unwind_vwap or self.crowded():
+            return d     # options off, rejected before pricing (room, time, no market), or a crowd: the book walk
+        if self.liq_model == "adaptive" and not self.no_crowd_seen():
+            probe = int(self.p.get("early_probe_ticks", 0))
+            if probe > 0 and t.get("is_fixed_bid", True) and not d.accept:
+                return self._probe(t, snap, positions, d, probe, cal)
+            if w <= 0:
+                return d
+            # EARLY FLOW WEIGHT: before the crowd learner has evidence, blend the book walk with the no-crowd value
+            alt = self.calibrated(t, snap) if cal else self._evaluate(t, snap, positions, flow=True)
+            return self._blend(t, d, alt, w)
+        return self.calibrated(t, snap) if cal else d
+
+    def calibrated(self, t: dict, snap: Snapshot) -> TenderDecision:
+        """
+        CALIBRATED VALUE (10 real heats 2026-10-14, 70 fixed tenders): a block made edge + the mid's mean move over
+        the next 25 ticks - 0.014 (sd 0.07); the move is predicted by the drift x 20 ticks and the depth imbalance
+        within $0.10 of the touch (leave-one-heat-out R2 0.39, calibration slope 0.96). The book walk, drift x the
+        whole unwind and the sqrt(T) risk premium predicted nothing. Only while no crowd is detected.
+        """
+        ticker, book = t.get("ticker"), snap.book(t.get("ticker"))
+        sg = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
+        mid, px = book.mid, t.get("price")
+        if not mid or px is None or not book.best_bid or not book.best_ask:
+            return TenderDecision(False, None, 0.0, 0.0, "no market to value against")
+        drift = (self.drift[ticker].mean or 0.0) if ticker in self.drift else 0.0
+        bd, ad = book.depth("bid", book.best_bid - 0.10), book.depth("ask", book.best_ask + 0.10)
+        cap = float(self.p.get("cal_move_cap", 0.25))
+        move = (float(self.p.get("cal_drift_coef", 0.35)) * sg * drift * 20
+                + float(self.p.get("cal_imb_coef", 0.13)) * sg * (bd - ad) / max(1, bd + ad))
+        pps = sg * (mid - float(px)) - float(self.p.get("cal_const", 0.06)) + max(-cap, min(cap, move))
+        ok = pps >= float(self.p.get("cal_min_profit", 0.02)) * self.edge_mult()
+        return TenderDecision(ok, float(px), pps, mid, f"calibrated profit/share {pps:+.4f} (move {move:+.3f})")
+
+    def _probe(self, t: dict, snap: Snapshot, positions: dict[str, int], book: TenderDecision, probe: int,
+               cal: bool) -> TenderDecision:
+        """
+        EARLY PROBE: a fixed tender the book walk declines but the no-crowd value takes, before the crowd learner has
+        evidence. Rival desks unwinding the same tender show within ~5 ticks (sim rival markets: -0.21 by tick 5, the
+        bad tenders -0.36; real heats: the 16% that ran > 0.15 against had run -0.14 by tick 5, the others -0.003).
+        Wait `probe` ticks of the window, then take it at the no-crowd value unless the mid has run more than
+        `early_probe_max_move` against the unwind.
+        """
+        alt = self.calibrated(t, snap) if cal else self._evaluate(t, snap, positions, flow=True)
+        tid, mid = int(t.get("tender_id", -1)), snap.mid(t.get("ticker"))
+        if not alt.accept or mid is None:
+            return book
+        if tid not in self.probe_mid:
+            log.info("PROBE %s %s %s: book walk %+.3f declines, flow %+.3f takes: watching %d ticks for a crowd", tid,
+                     t.get("action"), t.get("ticker"), book.profit_per_share, alt.profit_per_share, probe)
+        m0 = self.probe_mid.setdefault(tid, mid)
+        seen = self.seen_at.get(tid, snap.abs_tick)
+        try:
+            left = int(t["expires"]) - snap.tick
+        except (KeyError, TypeError, ValueError):
+            left = 0
+        if snap.abs_tick - seen < probe and left > probe + 2:
+            return TenderDecision(False, None, 0.0, 0.0, "probe wait")
+        sg = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
+        against = sg * (m0 - mid)                 # + = the mid ran against our unwind since we saw the tender
+        if against > float(self.p.get("early_probe_max_move", 0.05)):
+            return TenderDecision(False, book.price, book.profit_per_share, book.unwind_vwap,
+                                  f"probe: ran {against:+.3f} against in {snap.abs_tick - seen} ticks; {book.reason}")
+        return TenderDecision(True, alt.price, alt.profit_per_share, alt.unwind_vwap,
+                              f"probe ok ({against:+.3f} in {snap.abs_tick - seen} ticks); {alt.reason}")
+
+    def _blend(self, t: dict, book: TenderDecision, alt: TenderDecision, w: float) -> TenderDecision:
+        """w x the no-crowd value + (1 - w) x the book walk (bids blend the same way)."""
+        if not alt.unwind_vwap:
+            return book
+        pps = w * alt.profit_per_share + (1 - w) * book.profit_per_share
+        if t.get("is_fixed_bid", True):
+            ok = pps >= float(self.p.get("min_profit_per_share", 0.02)) * self.edge_mult()
+            return TenderDecision(ok, book.price, pps, book.unwind_vwap, f"early blend profit/share {pps:+.4f}")
+        if book.price is None or alt.price is None:
+            return book
+        bid = round(w * alt.price + (1 - w) * book.price, 2)
+        return TenderDecision(book.accept or alt.accept, bid, pps, book.unwind_vwap,
+                              f"early blend bid {bid:.2f}, profit/share {pps:+.4f}")
 
     def _evaluate(self, t: dict, snap: Snapshot, positions: dict[str, int], flow: bool | None = None,
                   crowd: bool = True, room: int | None = None) -> TenderDecision:
@@ -1288,6 +1428,8 @@ class LiabilityStrategy(Strategy):
             if self.wait_to_decide(t, tid, snap):
                 continue          # keep the option open: answer `decide_late_ticks` before the window closes
             d = self.decide(t, snap, positions)
+            if d.reason == "probe wait":
+                continue          # EARLY PROBE: watch the first ticks of the window for a crowd before answering
             if not d.accept and self.wait_for_room(t, d, snap):
                 continue          # room frees up as other blocks unwind / pending auction bids resolve: re-check
             self.seen.add(tid)
@@ -1311,6 +1453,8 @@ class LiabilityStrategy(Strategy):
                      f"{book.best_ask - book.best_bid:.2f}" if book.best_ask and book.best_bid else "?",
                      self.price_vol(ticker, snap), positions.get(ticker, 0),
                      " crowd ON" if self.crowded() else "")
+            if fixed and self.fast_mode() and book.mid:
+                self.fast_obs.append((now, ticker, -sg, book.mid))   # + = the mid ran against the unwind
             if d.accept and ticker not in self.pnl_base:
                 self.pnl_base[ticker] = (snap.stock_pnl(ticker), tid)     # BLOCK P&L is measured from here
             self.ex.journal.write("tender_decision", tid=tid, accept=d.accept, price=d.price, pps=d.profit_per_share,
@@ -1481,6 +1625,7 @@ class LiabilityStrategy(Strategy):
                 log.info("SPRINT %s off: resting again", t)
         self.algo.sprint = sprint
         self.algo.passive -= self.algo.sprint
+        self.algo.ride = self.rides(snap, sprint)
         if self.algo.active and self.fresh_unwind and not self.ex.dry_run:
             def refresh():
                 orders = self.client.orders("OPEN")         # orders FIRST, then positions (see step_fresh)

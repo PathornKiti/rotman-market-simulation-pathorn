@@ -436,3 +436,36 @@ def test_netting_credit_values_the_offset_of_an_open_block():
     assert netted.price == round(plain.price + 0.20, 2)
     # Nothing to offset: the credit changes nothing.
     assert evaluate_tender(t, DEEP, 0.02, offset_credit=0.20).price == evaluate_tender(t, DEEP, 0.02).price
+
+
+def test_early_probe_waits_then_takes_a_book_declined_tender_unless_the_price_ran_against():
+    from types import SimpleNamespace
+
+    from ritc.strategies.liability import LiabilityStrategy, TenderDecision
+
+    def strat():
+        s = LiabilityStrategy.__new__(LiabilityStrategy)
+        s.p, s.liq_model, s.crowd_learn = {"early_probe_ticks": 5, "early_probe_max_move": 0.05}, "adaptive", False
+        s.seen_at, s.probe_mid = {7: 100}, {}
+        s._evaluate = lambda t, snap, positions, flow=None: (
+            TenderDecision(True, 20.0, 0.10, 20.30, "profit/share +0.10") if flow
+            else TenderDecision(False, 20.0, -0.02, 20.10, "profit/share -0.02"))
+        return s
+
+    t = {"tender_id": 7, "ticker": "CROC", "action": "BUY", "quantity": 50000, "price": 20.0,
+         "is_fixed_bid": True, "expires": 130}
+
+    def snap(tick, mid):
+        return SimpleNamespace(abs_tick=tick, tick=tick, mid=lambda tk: mid)
+
+    s = strat()
+    assert s.decide(t, snap(100, 20.25), {}).reason == "probe wait"          # watch the first ticks of the window
+    assert s.decide(t, snap(104, 20.24), {}).reason == "probe wait"
+    assert s.decide(t, snap(105, 20.23), {}).accept                          # ran only 0.02 against: take it
+    s = strat()
+    s.decide(t, snap(100, 20.25), {})
+    d = s.decide(t, snap(105, 20.15), {})                                   # ran 0.10 against (a crowd?): decline
+    assert not d.accept and d.reason.startswith("probe: ran")
+    s = strat()
+    s.p["early_probe_ticks"] = 0                                             # off: the book walk decides at once
+    assert not s.decide(t, snap(100, 20.25), {}).accept
