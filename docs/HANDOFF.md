@@ -1,14 +1,50 @@
-# Handoff: 2026-10-14 (START HERE)
+# Handoff: end of 2026-10-14 (START HERE; older notes below are history)
 
-8 practice heats reviewed (RESEARCH.md "Sprint walk cap and own-impact run"). Default unchanged; new code, all OFF by
-default: `execution.sprint_max_walk` (sprint price cap), `strategy.run_ex_own` + `own_impact` (trend run without our
-own impact), sim knob `real_impact` + stress group `impact`. All three fail the testing rule (sim says sprinting pays).
-Fine text/Excel now $0.20 first 5,000 / $0.60 beyond (sim + replay already were). 178 tests pass. Uncommitted.
-Later 2026-10-14: **`strategy.drift_horizon_ticks = 20` adopted** (+$2.5k t 4.3 / holdout +$2.0k t 4.8);
-`auction_bid = false` rejected (rivals -$4-5k); crowd_robust -$3.1k (keep default). Practice = one command
-`ritc run liability --live --forever --record` (Windows on branch main): one readable .log per heat in logs/,
-data journal in logs/data/. First 2 default heats on Windows: both >= $80k (old code, before the drift cap).
-Next: default-only heats; measure the mid's reversion after each CROC sprint from logs/data/.
+> **CASE RULE (organisers; keep this note in EVERY handoff):** The speculation fine will increase from $0.40 to
+> $0.60 per share for speculation exceeding 5,000 shares. The fine for speculation of 5,000 shares or fewer remains
+> unchanged at $0.20 per share. (Code: sim `_apply_fill`, `postmortem/replay.py` + `live.py` FINE1/FINE2, Excel
+> template: all $0.20 / $0.60.)
+
+**Git.** `main` on GitHub = `b19e95c` (the user's `5ba1446 test case` plus a doc fix); Windows runs it. **`a2e0e89`
+(drift cap default) is committed on the Mac, NOT pushed**: ask, push, then Windows `git pull` (`git log -1` = a2e0e89).
+Windows must be on branch `main` (WINDOWS_SETUP.md used to say `liability-fresh-unwind`: the old branch, no
+`--record`). 180 tests pass (`PYTHONPATH=src .venv/bin/python -m pytest -q`), ruff clean.
+
+**How practice runs now (user's choice: default only, one readable log per heat).**
+`ritc run liability --live --forever --record` waits for each heat, trades it with the defaults, records the market
+into the journal, and repeats. Per heat: `logs/liability-<time>.log` (readable: tender lines with `edge` vs mid,
+blocks, sprints, PnL; ends with a HEAT REPORT table of every tender / block / crowd, then NLV; order lines are
+DEBUG) and `logs/data/liability-<time>.jsonl` (orders, fills, tenders, `market` rows = books / tenders / time &
+sales, `summary` row). No `.summary.json` (`run.summary_file = true` restores it), no `record-*.jsonl`. A run that
+never saw a heat deletes its own empty files. `ritc report` / `practice` / `calibrate logs/data/*.jsonl` read it.
+The user copies `logs\` + `logs\data\` to the Mac.
+
+**Results.** 8 rotate heats 2026-10-13/14 (logs/, old layout): $71k 85k 40k -9k 61k 63k 40k -19k; default A $71k /
+$63k; 0 fines, 0/32 auctions. Both losses = a SPRINT that crossed a whole CROC block and walked the ask $1.25-1.45.
+Then 2 default heats on Windows (old code): both >= $80k (logs not yet on the Mac: ask for them).
+
+**Decisions today (every table in RESEARCH.md, last two 2026-10-14 sections).**
+- ADOPTED `strategy.drift_horizon_ticks = 20` (commit a2e0e89): the tender drift charge over at most 20 ticks.
+  47 real tenders: drift x 20 ticks = the next 20 ticks' move; x the full unwind it overcharged (0.23 vs 0.08) and
+  declined tenders at 24-37c of edge. +$2.5k (t 4.3), holdout +$2.0k (t 4.8), no market worse than -$1.0k.
+- KEEP default, not profile B: `crowd_robust` -$3.1k (t -3.1), "everything at once" -$40k. The default already
+  detects crowds (2-sd gate -> race / fast horizon / crowd charge / book pricing); never false-fired in default heats.
+- Momentum sprint stays (user agrees): real r +0.43 while holding and not sprinting; sim: sprint off -$10k.
+- REJECTED, kept as options (off): `execution.sprint_max_walk` (cap 0.05-0.50: -$0.9k..-$7.7k), `strategy.run_ex_own`
+  + `own_impact` (-$0.5k t -2.2), `strategy.auction_bid = false` (+$1.8k t 1.8 but -$4-5k with rivals).
+- Fine: $0.20 first 5,000 / $0.60 beyond everywhere (report text and Excel fixed).
+- Simulator: `real_impact=1` (our crossing moves the mid as measured), stress group `impact` (5 markets).
+
+**Open questions / next.**
+1. Push a2e0e89 after the user's OK; Windows pull.
+2. Default-only heats with `--record`; per heat check the HEAT REPORT: declined tenders with edge >= 0.24, late
+   answers, CROC sprints.
+3. CROC sprint: our impact or the trend? From the `market` rows, the mid's reversion 10-40 ticks after each sprint
+   (scratchpad scripts `sprint_eval.py`, `momentum2.py` from 2026-10-14 are gone; logic is in RESEARCH.md).
+4. Auctions: no API data on rivals' bids or the reserve; our lost bids bound it (lost even 6.5c from the mid).
+   Re-bidding is untested (a second POST at the same price would show if it is allowed).
+5. A/B harness: `PYTHONPATH=src .venv/bin/python scripts/ab.py practice,trend,impact,hostile 1 16 '{}' '{...}'`
+   (paired over `stress.SCENARIOS` groups; design seeds 1-16, holdout 101-116; ~15 min for 3 arms x 21 markets).
 
 ---
 
