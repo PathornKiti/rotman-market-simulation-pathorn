@@ -1,36 +1,25 @@
-# PRACTICE PROFILES for `python -m ritc run liability --live -v --profile rotate` (docs/RUNBOOK.md, section 6).
-# Each profile is a set of --set overrides on top of config/liability.toml. `--profile rotate` runs the profile
-# with the fewest heats in logs/ so far (ties: the order below), and the journal records which one ran, so
-# `python -m ritc practice logs/liability-*.jsonl` can compare them on the REAL server.
+# PRACTICE PROFILES for `python -m ritc run liability --live -v --forever --record --profile rotate` (docs/RUNBOOK.md,
+# section 6). Each profile is a set of --set overrides on top of config/liability.toml. `--profile rotate` runs the
+# profile with the fewest heats in logs/ so far (ties: the order below), so two profiles ALTERNATE heat by heat, and
+# the journal records which one ran: `python -m ritc practice logs` compares them on the REAL server.
 #
-# Why these three: the simulator cannot judge the auction reserve or real crowds (RESEARCH.md, 2026-10-12), and
-# in the five practice heats of 2026-10-12 we won 0 of 19 auctions and raised 3 crowd alarms that were noise.
+# ONE FEATURE AT A TIME (2026-10-15): the frozen bot vs ONE change. Adopt or drop it before adding the next profile.
 
-[A_default]                           # the tested default: adaptive pricing, gated crowd learner
+[A_default]                           # the FROZEN bot (b19e95c logic, config of b04253e): no overrides
 
-[B_robust_crowd]                      # crowd evidence judged against each stock's own volatility (fewer false
-"strategy.crowd_robust" = true        # alarms; the practice server has no other teams, so any "crowd" is noise)
+[B_drift_cap20]                       # T CAP: charge the adverse drift over at most 20 ticks of the unwind instead of the
+"strategy.drift_horizon_ticks" = 20   # whole unwind time (up to 113-163 ticks when flow is thin). Braver on fixed tenders,
+                                      # auction bids slightly closer. 17 real evening journals (replay + recorded path):
+                                      # 3 answers flip, +$1.0k/heat (t 0.6); daytime 10-14 estimate +$66k / 10 heats.
 
-[C_auctions]                          # B + bid auctions at the forward-liquidity value while the net limit stays
-"strategy.crowd_robust" = true        # free (real heats: the limit bound once in five heats; auctions are the
-"strategy.liquidity_model" = "auctions"   # biggest pool we do not win)
-
-[D_solo_netting]                       # solo practice server (no other teams): the part of a tender that offsets our
-"strategy.netting_credit" = true      # open block is credited the unwind cost it saves (learned per heat), off once a
-"strategy.netting_gate" = "crowded"   # crowd shows. Sim: solo +$3.4k/heat (t 1.1), rivals -$0.1k..-2.5k (RESEARCH.md)
-
-[F_root_cause]                         # ROOT-CAUSE EXPERIMENT (practice only, 2026-10-13): after the first 2 fixed tenders
-"execution.hold_test_ticks" = 30      # in a flat stock, do NOT trade that block for 30 s (HOLD TEST DONE lines). Run
-                                      # `python -m ritc record` next to it. Drift with zero fills = holding moves the
-                                      # price; ~0 = our fills or trends did (RESEARCH.md "Root cause").
-
-# [G_trend] trend_learn + trend_exec (cross $0.05): DEFAULT since 2026-10-13, so A_default runs it.
-
-# Only after evidence (RUNBOOK section 6): add them here and they join the rotation.
-# [D_trend]                           # if `ritc practice` shows variance ratio > 1.2 in most heats
+# Retired 2026-10-15 (rejected, or experiments that are done). Uncomment one only to re-test it ALONE vs A_default.
+# [B_robust_crowd]                    # crowd_robust: holdout hostile worst heats much worse
 # "strategy.crowd_robust" = true
-# "execution.trend_unwind_z" = 2.0
-# [E_flat_bell]                       # if a heat showed a bell fine of ~$0.45/share or more
-# "execution.hold_budget_min_ticks" = 30
-# "execution.close_hold_ticks" = 0
-# "strategy.hold_valuation" = false
+# [C_auctions]                        # bid auctions at forward-liquidity value: 0/94 real auctions won at any tested
+# "strategy.crowd_robust" = true      # distance; a won block at a reachable bid is worth about -$0.07/share
+# "strategy.liquidity_model" = "auctions"
+# [D_solo_netting]                    # solo +$3.4k (t 1.1), rivals -$0.1k..-2.5k
+# "strategy.netting_credit" = true
+# "strategy.netting_gate" = "crowded"
+# [F_root_cause]                      # hold test, done 2026-10-13 (root cause = trend)
+# "execution.hold_test_ticks" = 30

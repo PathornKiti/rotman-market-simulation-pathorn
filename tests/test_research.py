@@ -76,7 +76,7 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     from ritc.practice import load_profiles, pick_profile, variance_ratio
 
     profiles = load_profiles("liability")
-    assert list(profiles)[:3] == ["A_default", "B_robust_crowd", "C_auctions"]
+    assert list(profiles) == ["A_default", "B_drift_cap20"]          # one feature at a time: frozen vs one change
     assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
     (tmp_path / "liability-0.jsonl").write_text(json.dumps(                              # Ctrl-C before the heat
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n")
@@ -84,9 +84,9 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     (tmp_path / "liability-1.jsonl").write_text(json.dumps(
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n"
         + json.dumps({"k": "tick", "tick": 1}) + "\n")
-    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "B_robust_crowd"     # least-tried next
-    name, prof = pick_profile("liability", "C_auctions", str(tmp_path))
-    assert prof["strategy.liquidity_model"] == "auctions"
+    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "B_drift_cap20"      # least-tried next
+    name, prof = pick_profile("liability", "B_drift_cap20", str(tmp_path))
+    assert prof["strategy.drift_horizon_ticks"] == 20
     rng = random.Random(1)
     walk = [0.0]
     for _ in range(2000):

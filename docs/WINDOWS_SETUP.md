@@ -86,12 +86,32 @@ The `.log` has the story of the heat (every tender with its edge vs the mid and 
 every 30 s) and ends with a **HEAT REPORT**: every tender taken or not (edge, the bot's value, expected and
 made, late answers), every block (rested / crossed, mid move, made vs expected), the crowd, then the final NLV.
 Order-by-order lines are only in the data file (`-v` puts them back in the log). A run that never saw a heat
-(started after the last one, or Ctrl-C while waiting) deletes its own empty files. Don't add `--profile`. Don't
-run `ritc record` next to it.
+(started after the last one, or Ctrl-C while waiting) deletes its own empty files. Don't run `ritc record` next
+to it.
+
+**Practice A/B experiment (one window, heats alternate between two profiles, market recorded):**
+```powershell
+ritc run liability --live --forever --record --profile rotate
+```
+Same as above, but each heat runs the profile from `config\liability_profiles.toml` with the fewest heats in
+`logs\` so far: `A_default` (the frozen bot), then `B_drift_cap20` (the one change under test), then A again,
+and so on. The heat's first lines print `PROFILE <name>`, and the file names carry it:
+
+```
+logs\liability-20261015-140512__B_drift_cap20__drift_horizon_ticks=20.log
+logs\data\liability-20261015-140512__B_drift_cap20__drift_horizon_ticks=20.jsonl
+```
+
+Before the session, after copying the old logs to the Mac: move the old `logs\` folder away (e.g. rename it
+`logs_2026-10-14`). `rotate` counts every journal in `logs\`, so old `A_default` heats would make it run B
+several heats in a row instead of alternating. Check the config first: `python scripts\review_batch.py check`
+must print `OK` (the profile is added on top of it). To run one profile only: `--profile A_default`.
 
 | What | Command |
 |---|---|
 | **Practice: every heat, default, market recorded** | `ritc run liability --live --forever --record` |
+| **Practice A/B: alternate A_default / B_drift_cap20, market recorded** | `ritc run liability --live --forever --record --profile rotate` |
+| Practice, one profile only, market recorded | `ritc run liability --live --forever --record --profile A_default` |
 | Bot, default (safe) settings, one heat | `ritc run liability --live -v` |
 | Bot, **aggressive profile** (see PRACTICE_PLAN.md decision rules) | `ritc run liability --live -v --set strategy.liquidity_model=flow` |
 | Dry run: decisions logged, nothing sent | `ritc run liability -v` |
@@ -110,7 +130,9 @@ Rules:
 2. Copy `logs\` **including `logs\data\`** to the Mac (USB / drive / chat). The data files hold every order, the
    mid at every tender and, with `--record`, the whole market (~20 MB a heat).
 3. On the Mac, put them in `logs/` (and `logs/data/`) and run `ritc report` (reports in `reports/`),
-   `ritc practice` (scoreboard) and `ritc calibrate logs/data/liability-*.jsonl` (market, pooled over heats).
+   `ritc practice` (scoreboard, one line per heat with its profile and a by-profile summary),
+   `python scripts/review_batch.py review logs/data` (guards per heat) and
+   `ritc calibrate logs/data/liability-*.jsonl` (market, pooled over heats).
 
 ## 7. Troubleshooting
 

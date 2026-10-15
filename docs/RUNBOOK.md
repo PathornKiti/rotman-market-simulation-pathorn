@@ -125,12 +125,18 @@ is fined (RESEARCH.md, 2026-10-12). Those are settled on the practice server. Th
 no other teams logged in: its own bots keep the books liquid and still send private tenders and auctions. With no
 other teams there is no real crowd, so any "crowd" the bot sees there is noise; keep that in mind for profile B.
 
-**What to run, every practice heat.** One command, the same each time:
+**What to run, every practice heat.** One command, the same each time (Windows: WINDOWS_SETUP.md section 5):
 
 ```bash
-git fetch origin && git checkout claude/ensemble-trend && git pull     # once, before the first heat
-python -m ritc run liability --live -v --profile rotate --forever
+git pull                                                     # once, before the first heat
+python scripts/review_batch.py check                         # OK = config/liability.toml is the frozen bot
+python -m ritc run liability --live -v --forever --record --profile rotate
 ```
+
+`--record` writes the whole market (books, tenders, time & sales) into each heat's journal, so the heats can be
+replayed later (`docs/results/journal_replay.py`). Before a new A/B session, move the old `logs/` (including
+`logs/data/`) into an archive folder: `rotate` counts every journal in `logs/`, so old `A_default` heats from
+an earlier rotation would make it run the new profile several heats in a row instead of alternating.
 
 `--forever` keeps the bot running across heats: when a heat ends (case STOPPED, or the clock jumps back to a
 new heat) it closes that heat's log and journal, waits for the next heat to go ACTIVE and starts a fresh bot,
@@ -149,17 +155,19 @@ speculation fines; a -$45k heat on 2026-10-12 is the suspected case). A second l
 while unwinding, so "slow loops" during unwinds are expected above ~120 ms per round trip.
 
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
-far, prints `PROFILE <name>` and records it in the journal. Start it before the heat opens, as always. To force
-one: `--profile C_auctions`. An explicit `--set` still wins over the profile.
+far, prints `PROFILE <name>` and records it in the journal and the file names. With two profiles the heats
+alternate A, B, A, B. Start it before the heat opens, as always. To force one: `--profile A_default`. An
+explicit `--set` still wins over the profile.
 
-| Profile | What changes vs the default | The question it answers |
+**One feature at a time** (2026-10-15): the rotation is the frozen bot against ONE change. Adopt or drop the
+change before a new profile joins (`config/liability_profiles.toml` keeps the retired ones as comments).
+
+| Profile | What changes vs the frozen bot | The question it answers |
 |---|---|---|
-| `A_default` | nothing (adaptive pricing, gated crowd learner, 90 s hold to the bell) | the baseline |
-| `B_robust_crowd` | `crowd_robust = true`: a price move only counts as crowd evidence relative to the stock's own volatility | do false crowd alarms (3 of 5 heats on 2026-10-12) cost us tenders? |
-| `C_auctions` | B + `liquidity_model = "auctions"`: bid auctions at the forward-liquidity value while the net limit stays free | can we win auctions (0 of 19 so far) without crowding out fixed tenders? |
+| `A_default` | nothing (b19e95c logic, config of commit b04253e) | the baseline |
+| `B_drift_cap20` | `strategy.drift_horizon_ticks = 20`: the adverse drift is charged over at most 20 ticks of the unwind, not the whole unwind time (up to 113-163 ticks when flow is thin) | does a less pessimistic valuation take more profitable fixed tenders without adding losers? Evidence so far: 17 real evening journals +$1.0k/heat (t 0.6, 3 answers flip); sim 49 markets +$2.1k (t 7.7), rival / hostile markets +$0.1k, no worst heat worse by more than $2.5k |
 
-Optional and harmless: `python -m ritc record` in a second window (a 0.5 s recording of every book for
-`calibrate`). The scoreboard below does not need it; the journal already has every tick's quotes.
+Don't run `ritc record` in a second window next to `--record`: the bot already records into its journal.
 
 **Reading a heat's log** (liability): `TENDER ... ACCEPT (...) ~ $X expected` per tender answered;
 `PNL t=210  NLV ... (+... in 30 s) | CROC -62,306 sh +27,564` every 30 s (RIT's realized + unrealized per stock);
@@ -183,12 +191,12 @@ client after every heat and note it next to the heat: the journal cannot see fin
 
 | After | If | Then |
 |---|---|---|
-| 3+ heats of each profile | `C_auctions` wins auctions (>= 1 per 2 heats) and takes as many fixed tenders per heat as A | make C the competition default |
-| 3+ heats of each profile | B's crowd column is 0 where A's is not, and B takes more fixed tenders | make B the default (C includes it) |
-| any heat | Total Fines jumped at the bell with an open position | switch the end-game: uncomment `E_flat_bell` in `config/liability_profiles.toml` |
-| 5+ heats | `ritc practice` says "Trends look real" (median variance ratio > 1.2) | uncomment `D_trend` and add it to the rotation |
-| any heat | fines for speculation / front-running, or a crash | stop rotating, run `A_default`, send the `.log` + `.jsonl` |
+| each batch | send `logs/data/*.jsonl` | `python scripts/review_batch.py review logs/data` (guards per heat) + the replay check: which tenders B took that A would have declined, and what each made |
+| 5+ heats of each profile | B's extra tenders made money on balance (paired t >= 2 pooled with the 17 evening journals) and no B heat breaks a guard (worst block, one block per stock) | make B the default: copy its line into `config/liability.toml` |
+| 5+ heats of each profile | B's extra tenders lost on balance, or a B heat's worst block is the heat's big loss | drop B; back to `A_default` only |
+| any heat | fines for speculation / front-running, or a crash | stop rotating, run `--profile A_default`, send the `.log` + `.jsonl` |
 
-To make a winner the default for the competition, either run it by name (`--profile C_auctions`) or copy its
-lines into `config/liability.toml`. Upload the `.log` **and** `.jsonl` files of every practice heat: the
+Heat P&L swings $15-50k, so do not judge B on NLV alone: the difference is in the few tenders where its answer
+differs from A's. To make a winner the default for the competition, either run it by name
+(`--profile B_drift_cap20`) or copy its lines into `config/liability.toml`. Upload the `.log` **and** `.jsonl` files of every practice heat: the
 journals let the simulator be recalibrated to the real market, which is what makes its tests worth trusting.
