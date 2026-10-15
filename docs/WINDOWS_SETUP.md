@@ -89,13 +89,13 @@ Order-by-order lines are only in the data file (`-v` puts them back in the log).
 (started after the last one, or Ctrl-C while waiting) deletes its own empty files. Don't run `ritc record` next
 to it.
 
-**Practice A/B experiment (one window, heats alternate between two profiles, market recorded):**
+**Practice experiment (one window, heats take turns between the profiles, market recorded):**
 ```powershell
 ritc run liability --live --forever --record --profile rotate
 ```
 Same as above, but each heat runs the profile from `config\liability_profiles.toml` with the fewest heats in
-`logs\` so far: `A_default` (the frozen bot), then `B_drift_cap20` (the one change under test), then A again,
-and so on. The heat's first lines print `PROFILE <name>`, and the file names carry it:
+`logs\` so far: `A_default` (the frozen bot), then `B_drift_cap20`, `C_flow`, ... `H_sprint003` (each one change,
+listed in `config\liability_profiles.toml` and RUNBOOK.md section 6), then A again, and so on. The heat's first lines print `PROFILE <name>`, and the file names carry it:
 
 ```
 logs\liability-20261015-140512__B_drift_cap20__drift_horizon_ticks=20.log
@@ -110,7 +110,7 @@ must print `OK` (the profile is added on top of it). To run one profile only: `-
 | What | Command |
 |---|---|
 | **Practice: every heat, default, market recorded** | `ritc run liability --live --forever --record` |
-| **Practice A/B: alternate A_default / B_drift_cap20, market recorded** | `ritc run liability --live --forever --record --profile rotate` |
+| **Practice experiment: profiles take turns, market recorded** | `ritc run liability --live --forever --record --profile rotate` |
 | Practice, one profile only, market recorded | `ritc run liability --live --forever --record --profile A_default` |
 | Bot, default (safe) settings, one heat | `ritc run liability --live -v` |
 | Bot, **aggressive profile** (see PRACTICE_PLAN.md decision rules) | `ritc run liability --live -v --set strategy.liquidity_model=flow` |

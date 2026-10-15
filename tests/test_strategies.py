@@ -413,6 +413,20 @@ def test_trend_against_is_a_z_score_of_adverse_drift():
     assert s.trend_against("X", 0, None) == 0.0
 
 
+def test_drift_zero_start_does_not_let_the_first_tick_set_the_drift():
+    from ritc.strategies.liability import LiabilityStrategy
+
+    s = LiabilityStrategy.__new__(LiabilityStrategy)
+    s.p = {"drift_halflife": 15}
+    old = s.new_drift()
+    old.update(-0.05)                                  # one 5-cent tick
+    assert old.mean == -0.05                           # default: the first tick IS the drift
+    s.p = {"drift_halflife": 15, "drift_zero_start": True}
+    new = s.new_drift()
+    new.update(-0.05)
+    assert abs(new.mean - new.alpha * -0.05) < 1e-12   # zero start: it gets only its EWMA weight (~4.5%)
+
+
 def test_auction_skip_adding_declines_auctions_that_grow_an_unwinding_block():
     from types import SimpleNamespace
 

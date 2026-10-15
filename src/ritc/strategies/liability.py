@@ -324,7 +324,7 @@ class LiabilityStrategy(Strategy):
         self.tickers: list[str] = list(c.get("tickers", []))
         self.fees: dict[str, float] = c.get("fee", {})
         self.p = s
-        self.drift: dict[str, EWMA] = {t: EWMA(s.get("drift_halflife", 15)) for t in self.tickers}
+        self.drift: dict[str, EWMA] = {t: self.new_drift() for t in self.tickers}
         self.last_mid: dict[str, float] = {}
         self.garch = {t: OnlineGarch() for t in self.tickers}
         self.last_tick = -1
@@ -403,6 +403,18 @@ class LiabilityStrategy(Strategy):
         self.tas_after: dict[str, int] = {}
         self.liq_tick: dict[str, int] = {}
 
+    def new_drift(self) -> EWMA:
+        """
+        Drift estimate (EWMA of 1-tick mid changes). `drift_zero_start` (2026-10-15): start the mean at 0 instead of the
+        heat's FIRST 1-tick change, which otherwise still carries ~30% of the weight at the first tender (tick ~27).
+        Valuation charges only adverse drift, so that one random tick made early tenders one-sidedly pessimistic, and
+        the same tender's value depended on the tick the bot started on (live vs replay: +0.199 vs -0.032).
+        """
+        e = EWMA(self.p.get("drift_halflife", 15))
+        if self.p.get("drift_zero_start", False):
+            e.mean = 0.0
+        return e
+
     @property
     def book_tickers(self) -> list[str]:
         return self.tickers
@@ -429,7 +441,7 @@ class LiabilityStrategy(Strategy):
             if t not in self.ex.max_order_size and row.get("max_trade_size"):
                 self.ex.max_order_size[t] = int(row["max_trade_size"])
             self.risk.add_ticker(t)
-            self.drift[t] = EWMA(self.p.get("drift_halflife", 15))
+            self.drift[t] = self.new_drift()
             self.garch[t] = OnlineGarch()
         log.info("tickers: %s", ", ".join(tickers))
         self.tickers = tickers

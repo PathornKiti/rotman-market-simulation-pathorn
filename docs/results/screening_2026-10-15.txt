@@ -1,0 +1,24 @@
+2026-10-15 screening: each change ALONE vs the frozen bot (config b04253e), ritc stress, 49 markets x seeds 1601-1616
+(784 paired heats per arm). 'crowded' = the 12 rival / hostile / anchored / crowd scenarios (192 heats).
+Real-journal column: 17 evening journals 2026-10-14, replay + recorded-path value (docs/results/journal_replay.py,
+evening_2026-10-14/path_cf.py minus 0.054), counting only flips where the frozen replay matches the live answer.
+
+change                                all: diff     t  crowded: diff     t  crowded P(loss)  crowded 5% worst   real journals
+A  frozen (absolute)                     40,730               12,876                    24%           -21,672
+B  drift_horizon_ticks=20                +2,124   7.7           +100   0.5              26%           -21,374     +1.0k t 0.6
+C  liquidity_model=flow                     -41  -0.1         -4,928  -2.6              32%           -33,500     +2.3k t 0.9
+-  refill_factor=1.5                       -566  -2.8            +93   0.2              18%           -18,243     +0.5k t 1.0
+D  risk_aversion=0.15                    +1,032   3.1         -1,352  -2.7              29%           -24,738    -0.5k t -0.3
+E  hold_risk_budget=20000                -1,883  -7.4           -121  -0.7              24%           -22,381  not replayable
+F  ac_risk_aversion=1e-6                    +20   0.3            +80   1.5              24%           -22,381  not replayable
+G  horizon 15-40                            -32  -0.9            +44   2.5              24%           -21,998  not replayable
+H  trend_cross_cost=0.03                 -1,381  -4.2           +730   2.6              21%           -19,891  not replayable
+-  crowd_weight=0.5                        +208   1.1         +1,606   2.6              23%           -21,672    -0.5k t -1.0
+-  hold_risk_budget=1e9 (hold all)         +112   1.1           -157  -0.7              24%           -24,946  not replayable
+-  drift_zero_start=true                   +463   3.9           +198   0.9              22%           -21,374    0 (no flips)
+
+Also on the 17 real journals: drift removed entirely (drift_per_tick = 0) -$3.1k/heat (t -1.0, 9 winners / 12 losers
+flip); crowd_weight = 0 -$1.0k (t -0.7, 1 winner / 3 losers). Tender edge offered per heat (all positive fixed tenders,
+vs the mid at arrival): mean $92k, max $108k, so $200k heats are price-move luck, not tender edge. Mid after a DECLINED
+fixed tender runs against the block -0.21 at 30 s, -0.32 at 90 s (no rebound); after a TAKEN one it recovers by 90 s
+(our own unwind's temporary impact).

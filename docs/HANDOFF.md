@@ -1,3 +1,36 @@
+# Handoff: 2026-10-15 (START HERE)
+
+**Goal and scoring (user):** the graded heats on Sunday 2026-10-18 are ranked on AVERAGE heat P&L; the target is top 3
+consistently. Expect a crowded market (rivals unwind the same tenders). Leaderboard is admin-only. Speculation fine:
+$0.20/share for the first 5,000 shares, $0.60 beyond.
+
+**Frozen bot unchanged** (`config/liability.toml` = config of b04253e, `scripts/review_batch.py check` says OK).
+Feedback "the valuation is too pessimistic" was screened: 11 single changes, each alone vs the frozen bot, on the 17
+real evening journals (replay) and in the sim (49 markets x 16 seeds). Full table: docs/results/screening_2026-10-15.txt + screening_2026-10-15/.
+- Across-the-board cuts in pessimism (`flow`, lower `risk_aversion`, softer or no crowd charge, no drift) bring back
+  tenders that lose in crowded markets: the crowd charge and the drift term decline mostly losers in real crowded heats.
+- Targeted fixes pass: `drift_horizon_ticks = 20` (B; real +$1.0k t 0.6, sim +$2.1k t 7.7, crowded +$0.1k) and the new
+  `drift_zero_start` flag (EWMA starts at 0, not the heat's first tick; sim +$0.5k t 3.9, crowded +$0.2k, real 0).
+- Unwind: crossing more (`hold_risk_budget` 20k) -$1.9k t -7.4; front-load / shorter horizon / hold-all: no effect
+  (the rest-only budget governs most unwinds). Sprint at $0.03 (H): crowded +$0.7k t 2.6 but quiet markets -$3-9k.
+- Tender edge is capped at ~$100k a heat (17 journals: mean $92k, max $108k offered), so rivals' $200k heats are
+  price-move luck; the crowd's push after a tender does not revert within 2 minutes.
+
+**Live rotation** (`config/liability_profiles.toml`, RUNBOOK section 6, WINDOWS_SETUP section 5):
+`ritc run liability --live --forever --record --profile rotate` cycles A_default, B_drift_cap20, C_flow, D_risk015,
+H_sprint003 (move the old logs folder away first: rotate counts every journal). On a quiet practice server C and D will
+look good and H worse than on Sunday; judge C/D/H on the sim's crowded rows, B on its flips + blocks.
+
+**Uncommitted (user handles git):** liability_profiles.toml, RUNBOOK.md, WINDOWS_SETUP.md, HANDOFF.md,
+`drift_zero_start` in strategies/liability.py + its test, tests/test_research.py, scripts/review_batch.py,
+docs/results/screening_2026-10-15.txt. Harnesses: docs/results/screening_2026-10-15/ (valcf.py = replay flips for any override, pair.py = paired sim arms, arms.sh).
+
+**Next:** review the rotation heats (`review_batch.py review`, `ritc practice`, per-profile flips and blocks). Sunday
+candidates: A + B, then drift_zero_start; H only if Sunday is crowded and its live sprints look right.
+Open: how many graded heats on Sunday (luck vs average).
+
+---
+
 # Handoff: 2026-10-14 (START HERE)
 
 8 practice heats reviewed (RESEARCH.md "Sprint walk cap and own-impact run"). Default unchanged; new code, all OFF by

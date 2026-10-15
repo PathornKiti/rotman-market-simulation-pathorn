@@ -76,7 +76,8 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     from ritc.practice import load_profiles, pick_profile, variance_ratio
 
     profiles = load_profiles("liability")
-    assert list(profiles) == ["A_default", "B_drift_cap20"]          # one feature at a time: frozen vs one change
+    assert list(profiles)[:2] == ["A_default", "B_drift_cap20"]
+    assert profiles["A_default"] == {} and all(len(v) <= 2 for v in profiles.values())   # one change per profile
     assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
     (tmp_path / "liability-0.jsonl").write_text(json.dumps(                              # Ctrl-C before the heat
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n")

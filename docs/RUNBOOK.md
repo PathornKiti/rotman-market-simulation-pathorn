@@ -155,17 +155,26 @@ speculation fines; a -$45k heat on 2026-10-12 is the suspected case). A second l
 while unwinding, so "slow loops" during unwinds are expected above ~120 ms per round trip.
 
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
-far, prints `PROFILE <name>` and records it in the journal and the file names. With two profiles the heats
-alternate A, B, A, B. Start it before the heat opens, as always. To force one: `--profile A_default`. An
+far, prints `PROFILE <name>` and records it in the journal and the file names. The profiles take turns: A, B, C,
+... then A again. Start it before the heat opens, as always. To force one: `--profile A_default`. An
 explicit `--set` still wins over the profile.
 
-**One feature at a time** (2026-10-15): the rotation is the frozen bot against ONE change. Adopt or drop the
-change before a new profile joins (`config/liability_profiles.toml` keeps the retired ones as comments).
+**One change per profile** (2026-10-15): every profile is the frozen bot plus ONE change, so a difference can be
+traced to its cause. Retired profiles stay in `config/liability_profiles.toml` as comments. With N profiles each
+runs about once every N heats, so judge on per-block numbers (made vs expected, rested vs crossed), not NLV alone.
+A quiet practice server (few teams) flatters the braver profiles: a crowd-sensitive profile also needs the
+simulator's rival-desk rows before it goes into a competition.
 
-| Profile | What changes vs the frozen bot | The question it answers |
+| Profile | The one change vs the frozen bot | Evidence before the live test |
 |---|---|---|
 | `A_default` | nothing (b19e95c logic, config of commit b04253e) | the baseline |
-| `B_drift_cap20` | `strategy.drift_horizon_ticks = 20`: the adverse drift is charged over at most 20 ticks of the unwind, not the whole unwind time (up to 113-163 ticks when flow is thin) | does a less pessimistic valuation take more profitable fixed tenders without adding losers? Evidence so far: 17 real evening journals +$1.0k/heat (t 0.6, 3 answers flip); sim 49 markets +$2.1k (t 7.7), rival / hostile markets +$0.1k, no worst heat worse by more than $2.5k |
+| `B_drift_cap20` | `strategy.drift_horizon_ticks = 20`: drift charged over at most 20 ticks of the unwind | real journals +$1.0k/heat (t 0.6); sim +$2.1k (t 7.7), rival markets +$0.1k |
+| `C_flow` | `strategy.liquidity_model = "flow"`: every tender priced off resting at the touch | real journals +$2.3k (t 0.9); sim rival markets -$4.9k (t -2.6), worst heat -$240k: not for a crowded competition |
+| `D_risk015` | `strategy.risk_aversion = 0.15` (was 0.3) | real journals -$0.5k (t -0.3); sim +$1.0k (t 3.1) but rival markets -$1.4k (t -2.7): not for a crowded competition |
+| ~~`E_budget20k`~~ retired | `execution.hold_risk_budget = 20000` (was 40000): crosses more | sim -$1.9k/heat (t -7.4), solo market maker -$11.5k (t -3.1); real 10-14: crossed blocks missed their estimate |
+| ~~`F_aclam1e6`~~ retired | `execution.ac_risk_aversion = 1e-6` (was 3e-7): front-loaded schedule | sim: no effect (the rest-only budget governs most unwinds) |
+| ~~`G_horizon1540`~~ retired | `execution.horizon_min_ticks = 15`, `horizon_max_ticks = 40` (was 30-90) | sim: no effect (-$32/heat) |
+| `H_sprint003` | `strategy.trend_cross_cost = 0.03` (was 0.05): sprints sooner | sim crowded markets +$0.7k (t 2.6), quiet markets -$2.8k..-$9.4k: looks worse on a quiet practice server; judge its sprinted blocks (did the price keep running after the sprint?) |
 
 Don't run `ritc record` in a second window next to `--record`: the bot already records into its journal.
 
@@ -191,9 +200,9 @@ client after every heat and note it next to the heat: the journal cannot see fin
 
 | After | If | Then |
 |---|---|---|
-| each batch | send `logs/data/*.jsonl` | `python scripts/review_batch.py review logs/data` (guards per heat) + the replay check: which tenders B took that A would have declined, and what each made |
-| 5+ heats of each profile | B's extra tenders made money on balance (paired t >= 2 pooled with the 17 evening journals) and no B heat breaks a guard (worst block, one block per stock) | make B the default: copy its line into `config/liability.toml` |
-| 5+ heats of each profile | B's extra tenders lost on balance, or a B heat's worst block is the heat's big loss | drop B; back to `A_default` only |
+| each batch | send `logs/data/*.jsonl` | `python scripts/review_batch.py review logs/data` (guards per heat) + per profile: the tenders it answered differently from A (replay) and its blocks' made vs expected |
+| 5+ heats of a profile | its difference from A made money on balance (paired t >= 2, pooled with the replayed journals), no heat breaks a guard (worst block, one block per stock), and the simulator's rival-desk rows are not worse | make it the default: copy its line into `config/liability.toml` |
+| 5+ heats of a profile | its difference lost on balance, or its worst block is the heat's big loss | drop it: comment it out in `config/liability_profiles.toml` |
 | any heat | fines for speculation / front-running, or a crash | stop rotating, run `--profile A_default`, send the `.log` + `.jsonl` |
 
 Heat P&L swings $15-50k, so do not judge B on NLV alone: the difference is in the few tenders where its answer
