@@ -1,4 +1,29 @@
-# Handoff: 2026-10-15 (START HERE)
+# Handoff: 2026-10-15 late — S PROMOTED TO DEFAULT (START HERE)
+
+**User decision:** S_staging is the default. `config/liability.toml` now has `drift_horizon_ticks = 20`,
+`drift_zero_start = true`, `liquidity_model = "flow_guarded"` (was "adaptive"). `review_batch.py check` = frozen b04253e +
+these three (`PROMOTED` in the script). Profiles: `A_default` = the new default; `P_previous` = the old frozen bot
+(`--profile alternate` = A, P, A, P; `scripts\staging.bat` = default every heat). `paired.py` pins its baseline to the old
+bot (`PREV`), since journal replays build from the current config: other harnesses (valcf.py, pair.py, sim arms) now
+measure against S. Evidence + open risk (never tested in a CROWDED live heat; sim crowded -$7.5k/heat): see below and
+RUNBOOK section 6 (now a demotion rule: revert to `--profile P_previous` if S fails crowded heats). 181 tests pass.
+Speculation fine: $0.20/share for the first 5,000 shares, $0.60 beyond.
+
+**ML out-of-time test (shadow only; the bot does not use it):** `docs/results/ml_2026-10-15/` = features.py, train.py
+(needs scikit-learn), models.json (trained on the 47 heats up to 20261015-190722; pure-Python predictor), score.py (no
+sklearn: scores every journal NOT in the training list). Training CV, held-out heats: 10-tick price move R2 trees 0.36 vs
+linear 0.23 (robust when flat / no book features / evening only); tender model R2 0.53 but it only learns "accept more",
+which lost in the crowded evening. Pass rules are in score.py's docstring (>= 10 new heats). Run after each batch:
+`PYTHONPATH=src .venv/bin/python docs/results/ml_2026-10-15/score.py`. LIVE ML A/B (practice only): profile `M_ml_sprint` sets `strategy.sprint_model` = models.json, so the tree gives the
+SPRINT rule's expected move (`predicted_against`; computed once per tick at the first loop, `ritc.mlmodel` shared with
+training). Windows: `scripts\ab_ml_sprint.bat` (= `--profile alternate:A_default,M_ml_sprint`). Verified: a journal
+replay of the bot gives the offline predictions on 100% of 1,140 ticks; replay of 12 heats: sprint starts 39 -> 61; sim
+rehearsal clean. `--profile alternate` now takes a list (plain `alternate` = every profile, now 3); ab_default_staging.bat
+pinned to `alternate:A_default,P_previous`. Judge M on live heats: NLV + block P&L of M vs A heats, and score.py.
+
+---
+
+# Handoff: 2026-10-15 (earlier)
 
 **Goal and scoring (user):** the graded heats on Sunday 2026-10-18 are ranked on AVERAGE heat P&L; the target is top 3
 consistently. Expect a crowded market (rivals unwind the same tenders). Leaderboard is admin-only. Speculation fine:
@@ -33,11 +58,18 @@ Details: docs/results/screening_2026-10-15.txt (bottom). The 14 evening journals
 
 **STAGING (end of 2026-10-15):** `S_staging` = drift cap 20 + `drift_zero_start` + `liquidity_model = "flow_guarded"`
 (new: flow pricing unless the crowd alarm is on). Real paired replay, 29 heats: +$6.9k/heat (t 3.6, 13 better / 1 worse,
-worst -$6.4k). Open risk: the sim's rival markets reject flow pricing (flow_guarded alone -$6.7k, t -3.6, worst -$240k).
+worst -$6.4k). Open risk: the sim's rival markets reject it (bundle -$7.5k/heat t -3.9, crowded P(loss) 24% -> 36%, worst -$240k; sim
+all markets +$2.4k t 3.6). H (sprint 0.03) not added: S+H crowded +$1.1k but all markets -$1.5k vs S.
 Run on Windows: `scripts\staging.bat` (S every heat) or `scripts\ab_default_staging.bat` (A, S, A, S). Promotion rule: RUNBOOK section 6
 (S must hold up in CROWDED live heats). Evaluate with `docs/results/screening_2026-10-15/paired.py`.
 
-**Next:** review the rotation heats (`review_batch.py review`, `ritc practice`, per-profile flips and blocks). Sunday
+**A/S LIVE BATCH (evening 10-15, 17 complete heats, quiet: crowd alarm on in 2 A heats only):** unpaired A $56.1k vs
+S $57.4k (S no losing heat, ~1 more block/heat). Paired holdout on these heats: S +$3.3k/heat (t 1.2) with the 0.054
+haircut, +$5.1k (t 1.9) using live P&L of the blocks S took; pooled 47 heats +$5.4k (t 3.5). Gain is flow_guarded on
+TAME/CRZY; S's extra CROC accepts lost (4 of 7). The replay haircut is crowd-dependent (this batch 0.008/sh, evening 0.054).
+Still open: S has never run in a CROWDED heat. Details: docs/results/screening_2026-10-15.txt (bottom).
+
+**Next:** run S in a busy (evening) session to settle the crowded gate; review the rotation heats (`review_batch.py review`, `ritc practice`, per-profile flips and blocks). Sunday
 candidates: A + B, then drift_zero_start; H only if Sunday is crowded and its live sprints look right.
 Open: how many graded heats on Sunday (luck vs average).
 

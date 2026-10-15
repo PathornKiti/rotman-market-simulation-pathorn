@@ -1,0 +1,154 @@
+47 real heats with recorded markets
+
+B drift cap 20   flips counted 7 of 9 | mean +1,177/heat  t +1.15  better 3 worse 2  worst -12,430  best +37,489
+     20261015-134511 (C) #509  TAME -> ACCEPT  path +0.023/sh    +1,212  replay != live
+     20261015-150439 (A) #9    TAME -> ACCEPT  path +0.275/sh   +14,311  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+     20261015-164946 (A) #109  CROC -> ACCEPT  path -0.244/sh   -12,430  counted
+     20261015-170557 (A) #9    TAME -> ACCEPT  path +0.714/sh   +38,573  counted
+     20261015-170557 (A) #409  CROC -> decline path +0.020/sh    -1,084  counted
+     20261015-170557 (A) #509  CRZY -> decline path +0.157/sh    -8,453  replay != live
+     20261015-174626 (S) #209  TAME -> ACCEPT  path -0.133/sh    -6,930  counted
+C flow           flips counted 34 of 36 | mean +4,825/heat  t +2.85  better 20 worse 6  worst -24,117  best +38,573
+     20261014-222356 (A) #2    TAME -> ACCEPT  path -0.231/sh   -12,498  counted
+     20261014-222356 (A) #102  CROC -> ACCEPT  path +0.117/sh    +6,069  counted
+     20261014-222356 (A) #402  CROC -> ACCEPT  path -0.146/sh    -7,889  replay != live
+     20261014-232037 (A) #202  TAME -> ACCEPT  path +0.087/sh    +4,622  counted
+     20261014-232037 (A) #402  TAME -> ACCEPT  path -0.532/sh   -28,738  counted
+     20261014-233647 (A) #102  CRZY -> ACCEPT  path +0.071/sh    +3,908  counted
+     20261014-235258 (A) #2    CROC -> ACCEPT  path +0.140/sh    +7,569  counted
+     20261014-235258 (A) #402  CRZY -> ACCEPT  path +0.187/sh    +9,517  counted
+     20261015-104905 (A) #209  TAME -> decline path -0.138/sh    +7,595  counted
+     20261015-134511 (C) #209  CRZY -> decline path +0.069/sh    -3,532  replay != live
+     20261015-135145 (D) #309  TAME -> ACCEPT  path +0.494/sh   +26,668  counted
+     20261015-141602 (D) #409  TAME -> ACCEPT  path -0.248/sh   -12,380  counted
+     20261015-142408 (H) #9    TAME -> ACCEPT  path +0.428/sh   +23,104  counted
+     20261015-144020 (C) #109  CROC -> ACCEPT  path +0.616/sh   +33,289  counted
+     20261015-144826 (D) #209  CROC -> ACCEPT  path +0.249/sh   +12,931  counted
+     20261015-150439 (A) #9    TAME -> ACCEPT  path +0.275/sh   +14,311  counted
+     20261015-151245 (B) #9    CRZY -> ACCEPT  path +0.240/sh   +12,230  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #109  CROC -> ACCEPT  path -0.154/sh    -8,147  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+     20261015-153705 (H) #109  CROC -> ACCEPT  path +0.247/sh   +12,847  counted
+     20261015-154511 (A) #9    CROC -> ACCEPT  path +0.155/sh    +8,205  counted
+     20261015-164946 (A) #9    TAME -> ACCEPT  path +0.303/sh   +16,342  counted
+     20261015-165751 (S) #209  CROC -> ACCEPT  path +0.409/sh   +20,435  counted
+     20261015-165751 (S) #309  CRZY -> decline path +0.157/sh    -8,174  counted
+     20261015-165751 (S) #409  CROC -> ACCEPT  path -0.191/sh   -10,491  counted
+     20261015-170557 (A) #9    TAME -> ACCEPT  path +0.714/sh   +38,573  counted
+     20261015-172209 (A) #209  CRZY -> ACCEPT  path -0.105/sh    -5,690  counted
+     20261015-172209 (A) #509  TAME -> ACCEPT  path +0.483/sh   +24,137  counted
+     20261015-173015 (S) #9    CROC -> ACCEPT  path -0.315/sh   -17,000  counted
+     20261015-173821 (A) #209  CROC -> ACCEPT  path +0.093/sh    +4,952  counted
+     20261015-174626 (S) #209  TAME -> ACCEPT  path -0.133/sh    -6,930  counted
+     20261015-180237 (S) #209  TAME -> ACCEPT  path +0.052/sh    +2,804  counted
+     20261015-181043 (A) #109  CRZY -> ACCEPT  path -0.034/sh    -1,732  counted
+     20261015-181848 (S) #209  CROC -> ACCEPT  path +0.307/sh   +15,641  counted
+     20261015-185111 (S) #9    TAME -> ACCEPT  path +0.195/sh    +9,964  counted
+D risk 0.15      flips counted 11 of 13 | mean +2,594/heat  t +2.17  better 7 worse 1  worst -7,331  best +37,489
+     20261015-134511 (C) #509  TAME -> ACCEPT  path +0.023/sh    +1,212  replay != live
+     20261015-135145 (D) #309  TAME -> ACCEPT  path +0.494/sh   +26,668  counted
+     20261015-142408 (H) #9    TAME -> ACCEPT  path +0.428/sh   +23,104  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+     20261015-153705 (H) #109  CROC -> ACCEPT  path +0.247/sh   +12,847  counted
+     20261015-170557 (A) #9    TAME -> ACCEPT  path +0.714/sh   +38,573  counted
+     20261015-170557 (A) #409  CROC -> decline path +0.020/sh    -1,084  counted
+     20261015-170557 (A) #509  CRZY -> decline path +0.157/sh    -8,453  replay != live
+     20261015-174626 (S) #209  TAME -> ACCEPT  path -0.133/sh    -6,930  counted
+     20261015-174626 (S) #409  TAME -> ACCEPT  path -0.007/sh      -401  counted
+     20261015-184305 (A) #509  TAME -> ACCEPT  path +0.069/sh    +3,820  counted
+     20261015-185916 (A) #509  CROC -> ACCEPT  path +0.046/sh    +2,477  counted
+G flow_guarded   flips counted 32 of 35 | mean +5,110/heat  t +3.52  better 20 worse 4  worst -17,000  best +37,489
+     20261014-222356 (A) #2    TAME -> ACCEPT  path -0.231/sh   -12,498  counted
+     20261014-222356 (A) #102  CROC -> ACCEPT  path +0.117/sh    +6,069  counted
+     20261014-222356 (A) #402  CROC -> ACCEPT  path -0.146/sh    -7,889  replay != live
+     20261014-232037 (A) #202  TAME -> ACCEPT  path +0.087/sh    +4,622  counted
+     20261014-233647 (A) #102  CRZY -> ACCEPT  path +0.071/sh    +3,908  counted
+     20261014-235258 (A) #2    CROC -> ACCEPT  path +0.140/sh    +7,569  counted
+     20261014-235258 (A) #402  CRZY -> ACCEPT  path +0.187/sh    +9,517  counted
+     20261015-104905 (A) #209  TAME -> decline path -0.138/sh    +7,595  counted
+     20261015-134511 (C) #209  CRZY -> decline path +0.069/sh    -3,532  replay != live
+     20261015-142408 (H) #9    TAME -> ACCEPT  path +0.428/sh   +23,104  counted
+     20261015-144020 (C) #109  CROC -> ACCEPT  path +0.616/sh   +33,289  counted
+     20261015-144826 (D) #209  CROC -> ACCEPT  path +0.249/sh   +12,931  counted
+     20261015-150439 (A) #9    TAME -> ACCEPT  path +0.275/sh   +14,311  counted
+     20261015-151245 (B) #9    CRZY -> ACCEPT  path +0.240/sh   +12,230  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #109  CROC -> ACCEPT  path -0.154/sh    -8,147  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+     20261015-153705 (H) #109  CROC -> ACCEPT  path +0.247/sh   +12,847  counted
+     20261015-154511 (A) #9    CROC -> ACCEPT  path +0.155/sh    +8,205  counted
+     20261015-164946 (A) #9    TAME -> ACCEPT  path +0.303/sh   +16,342  counted
+     20261015-165751 (S) #209  CROC -> ACCEPT  path +0.409/sh   +20,435  counted
+     20261015-165751 (S) #309  CRZY -> decline path +0.157/sh    -8,174  counted
+     20261015-165751 (S) #409  CROC -> ACCEPT  path -0.191/sh   -10,491  counted
+     20261015-170557 (A) #9    TAME -> ACCEPT  path +0.714/sh   +38,573  counted
+     20261015-170557 (A) #409  CROC -> decline path +0.020/sh    -1,084  counted
+     20261015-170557 (A) #509  CRZY -> decline path +0.157/sh    -8,453  replay != live
+     20261015-172209 (A) #209  CRZY -> ACCEPT  path -0.105/sh    -5,690  counted
+     20261015-172209 (A) #509  TAME -> ACCEPT  path +0.483/sh   +24,137  counted
+     20261015-173015 (S) #9    CROC -> ACCEPT  path -0.315/sh   -17,000  counted
+     20261015-173821 (A) #209  CROC -> ACCEPT  path +0.093/sh    +4,952  counted
+     20261015-174626 (S) #209  TAME -> ACCEPT  path -0.133/sh    -6,930  counted
+     20261015-180237 (S) #209  TAME -> ACCEPT  path +0.052/sh    +2,804  counted
+     20261015-181043 (A) #109  CRZY -> ACCEPT  path -0.034/sh    -1,732  counted
+     20261015-181848 (S) #209  CROC -> ACCEPT  path +0.307/sh   +15,641  counted
+     20261015-185111 (S) #9    TAME -> ACCEPT  path +0.195/sh    +9,964  counted
+S staging B+Z+G  flips counted 38 of 42 | mean +5,502/heat  t +3.48  better 20 worse 5  worst -17,000  best +39,155
+     20261014-222356 (A) #2    TAME -> ACCEPT  path -0.231/sh   -12,498  counted
+     20261014-222356 (A) #102  CROC -> ACCEPT  path +0.117/sh    +6,069  counted
+     20261014-222356 (A) #402  CROC -> ACCEPT  path -0.146/sh    -7,889  replay != live
+     20261014-232037 (A) #202  TAME -> ACCEPT  path +0.087/sh    +4,622  counted
+     20261014-233647 (A) #102  CRZY -> ACCEPT  path +0.071/sh    +3,908  counted
+     20261014-233647 (A) #502  CROC -> ACCEPT  path +0.109/sh    +5,541  counted
+     20261014-235258 (A) #2    CROC -> ACCEPT  path +0.140/sh    +7,569  counted
+     20261014-235258 (A) #402  CRZY -> ACCEPT  path +0.187/sh    +9,517  counted
+     20261015-104905 (A) #309  CRZY -> ACCEPT  path +0.324/sh   +16,213  counted
+     20261015-134511 (C) #509  TAME -> ACCEPT  path +0.023/sh    +1,212  replay != live
+     20261015-135145 (D) #9    TAME -> ACCEPT  path +0.102/sh    +5,297  counted
+     20261015-135145 (D) #109  TAME -> ACCEPT  path +0.120/sh    +6,003  counted
+     20261015-142408 (H) #9    TAME -> ACCEPT  path +0.428/sh   +23,104  counted
+     20261015-142408 (H) #109  CROC -> ACCEPT  path +0.315/sh   +16,051  counted
+     20261015-144020 (C) #109  CROC -> ACCEPT  path +0.616/sh   +33,289  counted
+     20261015-144826 (D) #209  CROC -> ACCEPT  path +0.249/sh   +12,931  counted
+     20261015-150439 (A) #9    TAME -> ACCEPT  path +0.275/sh   +14,311  counted
+     20261015-151245 (B) #9    CRZY -> ACCEPT  path +0.240/sh   +12,230  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #109  CROC -> ACCEPT  path -0.154/sh    -8,147  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+     20261015-153705 (H) #109  CROC -> ACCEPT  path +0.247/sh   +12,847  counted
+     20261015-154511 (A) #9    CROC -> ACCEPT  path +0.155/sh    +8,205  counted
+     20261015-164946 (A) #9    TAME -> ACCEPT  path +0.303/sh   +16,342  counted
+     20261015-164946 (A) #109  CROC -> ACCEPT  path -0.244/sh   -12,430  counted
+     20261015-165751 (S) #209  CROC -> ACCEPT  path +0.409/sh   +20,435  counted
+     20261015-165751 (S) #309  CRZY -> decline path +0.157/sh    -8,174  counted
+     20261015-165751 (S) #409  CROC -> ACCEPT  path -0.191/sh   -10,491  counted
+     20261015-170557 (A) #9    TAME -> ACCEPT  path +0.714/sh   +38,573  counted
+     20261015-170557 (A) #409  CROC -> decline path +0.020/sh    -1,084  counted
+     20261015-170557 (A) #509  CRZY -> decline path +0.157/sh    -8,453  replay != live
+     20261015-172209 (A) #209  CRZY -> ACCEPT  path -0.105/sh    -5,690  counted
+     20261015-172209 (A) #509  TAME -> ACCEPT  path +0.483/sh   +24,137  counted
+     20261015-173015 (S) #9    CROC -> ACCEPT  path -0.315/sh   -17,000  counted
+     20261015-173821 (A) #209  CROC -> ACCEPT  path +0.093/sh    +4,952  counted
+     20261015-174626 (S) #209  TAME -> ACCEPT  path -0.133/sh    -6,930  counted
+     20261015-180237 (S) #209  TAME -> ACCEPT  path +0.052/sh    +2,804  counted
+     20261015-181043 (A) #109  CRZY -> ACCEPT  path -0.034/sh    -1,732  counted
+     20261015-181848 (S) #209  CROC -> ACCEPT  path +0.307/sh   +15,641  counted
+     20261015-182654 (A) #9    TAME -> ACCEPT  path +0.374/sh   +20,566  replay != live
+     20261015-185111 (S) #9    TAME -> ACCEPT  path +0.195/sh    +9,964  counted
+     20261015-185111 (S) #109  CROC -> ACCEPT  path -0.201/sh   -10,646  counted
+
+H extra sprints (H starts, A does not): 67
+   mid kept running against the block + 5 ticks: mean +0.030  t +2.92  n 67
+   mid kept running against the block +10 ticks: mean +0.036  t +2.28  n 67
+   mid kept running against the block +20 ticks: mean +0.078  t +3.00  n 67
+
+NLV by the profile each heat RAN (unpaired, different tenders and paths: noisy)
+   A: n 14  mean +56,938  min -5,627  max +122,309
+   B: n 4  mean +47,866  min +24,623  max +73,372
+   C: n 4  mean +38,582  min -3,784  max +75,472
+   D: n 4  mean +43,531  min -4,370  max +93,654
+   H: n 4  mean +41,571  min +1,505  max +93,804

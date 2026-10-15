@@ -90,6 +90,7 @@ import math
 import time
 from dataclasses import dataclass
 
+from .. import mlmodel
 from ..core.algo import AlgoParams, BlockExecutor, ac_kappa, book_eta
 from ..core.book import Level, OrderBook
 from ..core.bot import Snapshot, Strategy
@@ -359,6 +360,15 @@ class LiabilityStrategy(Strategy):
         self.absorb: dict[str, float] = {}       # ticker -> learned shares/tick of our own unwinds
         self.exec_cost: float | None = None       # learned $/share an unwind costs vs the mid at acceptance
         self.mid_hist: dict[str, list[float]] = {}   # TREND: one mid per tick per stock (last 60)
+        self.vol_hist: dict[str, list[float]] = {}   # ML: cumulative traded volume per tick per stock (last 60)
+        self.ml_pred: dict[str, float] = {}          # ML: this tick's predicted 10-tick move per stock
+        # ML SPRINT (`sprint_model`, 2026-10-15, practice only): the trained 10-tick price model (ritc.mlmodel) gives
+        # the SPRINT rule's expected move against the block instead of the run + book model. Off when unset.
+        self.ml_model = mlmodel.load(s["sprint_model"], s.get("sprint_model_key", "price_trees")) \
+            if s.get("sprint_model") else None
+        if self.ml_model:
+            log.info("ML SPRINT model: %s (%s, %d trees)", s["sprint_model"], s.get("sprint_model_key", "price_trees"),
+                     len(self.ml_model.get("trees", [])))
         self.own_flow: dict[str, list[float]] = {}   # signed shares WE crossed per tick per stock (aligned to mid_hist)
         self.own_seen = 0                             # tca.fills already counted into own_flow
         # BOOK SIGNAL: features (run, asym, ofi) at the last window per stock, and the sums of x x', x y, y y, n over
@@ -475,6 +485,15 @@ class LiabilityStrategy(Strategy):
             h = self.mid_hist.setdefault(t, [])
             h.append(m)
             del h[:-60]
+            v = self.vol_hist.setdefault(t, [])
+            v.append(float((snap.securities.get(t) or {}).get("volume") or 0.0))
+            del v[:-60]
+            if self.ml_model is not None:          # once per tick, at its first loop: the moment training data uses
+                x = self.ml_move(t, snap)
+                if x is None:
+                    self.ml_pred.pop(t, None)
+                else:
+                    self.ml_pred[t] = x
             o = self.own_flow.setdefault(t, [])
             o.append(own.get(t, 0.0))
             del o[:-60]
@@ -750,10 +769,19 @@ class LiabilityStrategy(Strategy):
     def book_signal_on(self) -> bool:
         return self.book_model() is not None
 
+    def ml_move(self, ticker: str, snap: Snapshot) -> float | None:
+        """ML SPRINT: the model's expected mid move over the next 10 ticks ($); None until 21 ticks of history."""
+        bid, ask = snap.quote(ticker)
+        f = mlmodel.price_features(self.mid_hist.get(ticker, []), self.vol_hist.get(ticker, []), snap.book(ticker),
+                                   (ask - bid) if bid and ask else 0.0, snap.tick, ticker)
+        return mlmodel.predict(self.ml_model, f) if f else None
+
     def predicted_against(self, ticker: str, held: int, snap: Snapshot) -> float:
-        """$ the next window is expected to move against a position of sign `held` (book model or momentum)."""
+        """$ the next window is expected to move against a position of sign `held` (ML, book model or momentum)."""
         if not held:
             return 0.0
+        if self.ml_model is not None and ticker in self.ml_pred:
+            return (-1 if held > 0 else 1) * self.ml_pred[ticker]
         m = self.book_model()
         if m is not None:
             idx, beta = m
@@ -1493,11 +1521,11 @@ class LiabilityStrategy(Strategy):
             sprint = self.cap_sprint_walk(sprint, snap)
         for t in sprint - self.algo.sprint:
             log.info("SPRINT %s: next %s ticks expected %+.3f against our %+d block (run %+.3f, book asym %+.3f), "
-                     "crossing costs %.3f: crossing", t, self.p.get("trend_window", 10),
+                     "crossing costs %.3f: crossing%s", t, self.p.get("trend_window", 10),
                      self.predicted_against(t, snap.positions.get(t, 0), snap), snap.positions.get(t, 0),
                      self.run_against(t, snap.positions.get(t, 0)),
                      self.book_asym(t, snap) if self.book_signal_on() else 0.0,
-                     self.cross_threshold(t, snap.positions.get(t, 0), snap))
+                     self.cross_threshold(t, snap.positions.get(t, 0), snap), " [ML model]" if self.ml_model else "")
         for t in self.algo.sprint - sprint:
             if t in self.algo.blocks:
                 log.info("SPRINT %s off: resting again", t)

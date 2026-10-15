@@ -23,12 +23,16 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 OVER = 0.054
 FILES = sorted(glob.glob(os.path.expanduser("~/Downloads/log_transfer/*.jsonl"))) + \
     sorted(glob.glob(os.path.join(ROOT, "logs", "data", "*.jsonl")))
+# The replay builds the bot from the CURRENT config/liability.toml. Since 2026-10-15 that is S, so "A" (the baseline every
+# flip is measured against) is the previous bot spelled out, and each profile is one change on top of it.
+PREV = {"strategy.drift_horizon_ticks": 0, "strategy.drift_zero_start": False, "strategy.liquidity_model": "adaptive"}
 PROFILES = {"B": {"strategy.drift_horizon_ticks": 20}, "C": {"strategy.liquidity_model": "flow"},
             "D": {"strategy.risk_aversion": 0.15}, "G": {"strategy.liquidity_model": "flow_guarded"},
             "S": {"strategy.drift_horizon_ticks": 20, "strategy.drift_zero_start": True,
                   "strategy.liquidity_model": "flow_guarded"},
             "H": {"strategy.trend_cross_cost": 0.03}}
-OWN = {"A_default": "A", "B_drift_cap20": "B", "C_flow": "C", "D_risk015": "D", "H_sprint003": "H", "S_staging": "S"}
+PROFILES = {k: PREV | v for k, v in PROFILES.items()}
+OWN = {"P_previous": "A", "B_drift_cap20": "B", "C_flow": "C", "D_risk015": "D", "H_sprint003": "H", "S_staging": "S"}
 TEN = re.compile(r"t\s*(\d+) TENDER (\d+) (BUY|SELL) (\w+) x[\d.]+ @ (\S+) -> (ACCEPT|decline)")
 SPR = re.compile(r"t\s*(\d+) SPRINT (\w+): next .*? against our ([+-]\d+) block")
 
@@ -40,12 +44,15 @@ def run(f):
     if not any(r["k"] == "market" for r in rows):
         return None
     start = next(r for r in rows if r["k"] == "start")
-    own = OWN.get(((start.get("cfg") or {}).get("strategy") or {}).get("profile"), "A")
+    scfg = (start.get("cfg") or {}).get("strategy") or {}
+    own = OWN.get(scfg.get("profile"), "A")
+    if own == "A" and scfg.get("liquidity_model") == "flow_guarded" and scfg.get("drift_zero_start"):
+        own = "S"                                    # A_default after the promotion = S
     ticks = {r["tick"]: r for r in rows if r["k"] == "tick"}
     seen = {r["tid"]: r for r in rows if r["k"] == "tender_seen"}
     live = {r["tid"]: r["accept"] for r in rows if r["k"] == "tender_decision"}
     out = {}
-    for name, ov in [("A", {})] + list(PROFILES.items()):
+    for name, ov in [("A", PREV)] + list(PROFILES.items()):
         lines = replay(f, dict(ov))
         out[name] = ({int(m.group(2)): m.group(6) == "ACCEPT" for m in map(TEN.match, lines) if m},
                      {(int(m.group(1)), m.group(2), int(m.group(3))) for m in map(SPR.match, lines) if m})
@@ -104,7 +111,7 @@ if __name__ == "__main__":
         if len(xs) > 2:
             print(f"   mid kept running against the block +{k:>2} ticks: mean {st.mean(xs):+.3f}  t {st.mean(xs) / (st.stdev(xs) / len(xs) ** 0.5):+.2f}  n {len(xs)}")
     print("\nNLV by the profile each heat RAN (unpaired, different tenders and paths: noisy)")
-    for p in "ABCDH":
+    for p in "ABCDHS":
         xs = [r["nlv"] for r in R if r["own"] == p and r["heat"].startswith("20261015")]
         if xs:
             print(f"   {p}: n {len(xs)}  mean {st.mean(xs):+,.0f}  min {min(xs):+,.0f}  max {max(xs):+,.0f}")

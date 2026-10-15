@@ -36,11 +36,16 @@ def pick_profile(case: str, name: str, logs: str = "logs", heat: int = 1) -> tup
     """
     A named profile; for 'rotate' the one with the fewest LIVE heats in `logs` (ties: file order); for 'alternate' the
     profiles in file order by this session's heat number (heat 1 = the first profile, 2 = the second, ...), whatever
-    older journals `logs` holds: a strict A/B alternation within one `--forever` session.
+    older journals `logs` holds: a strict A/B alternation within one `--forever` session. 'alternate:X,Y' alternates
+    the named profiles only.
     """
     profiles = load_profiles(case)
-    if name == "alternate":
-        best = list(profiles)[(max(heat, 1) - 1) % len(profiles)]
+    if name == "alternate" or name.startswith("alternate:"):         # "alternate:A_default,M_ml_sprint" = these only
+        names = name.partition(":")[2].split(",") if ":" in name else list(profiles)
+        unknown = [n for n in names if n not in profiles]
+        if unknown:
+            raise SystemExit(f"unknown profile(s) {', '.join(unknown)}; have: {', '.join(profiles)}")
+        best = names[(max(heat, 1) - 1) % len(names)]
         return best, profiles[best]
     if name != "rotate":
         if name not in profiles:

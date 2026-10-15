@@ -76,9 +76,9 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     from ritc.practice import load_profiles, pick_profile, variance_ratio
 
     profiles = load_profiles("liability")
-    assert list(profiles)[:2] == ["A_default", "S_staging"]          # staging bundle vs the frozen bot
+    assert list(profiles)[:2] == ["A_default", "P_previous"]         # the default (= S since 10-15) vs the previous bot
     assert profiles["A_default"] == {}
-    assert profiles["S_staging"]["strategy.liquidity_model"] == "flow_guarded"
+    assert profiles["P_previous"]["strategy.liquidity_model"] == "adaptive"
     assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
     (tmp_path / "liability-0.jsonl").write_text(json.dumps(                              # Ctrl-C before the heat
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n")
@@ -86,11 +86,11 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     (tmp_path / "liability-1.jsonl").write_text(json.dumps(
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n"
         + json.dumps({"k": "tick", "tick": 1}) + "\n")
-    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "S_staging"          # least-tried next
-    name, prof = pick_profile("liability", "S_staging", str(tmp_path))
-    assert prof["strategy.drift_horizon_ticks"] == 20
-    assert [pick_profile("liability", "alternate", str(tmp_path), heat=h)[0] for h in (1, 2, 3, 4)] == \
-        ["A_default", "S_staging", "A_default", "S_staging"]                             # old logs do not matter
+    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "P_previous"         # least-tried next
+    name, prof = pick_profile("liability", "P_previous", str(tmp_path))
+    assert prof["strategy.drift_horizon_ticks"] == 0
+    assert [pick_profile("liability", "alternate:A_default,P_previous", str(tmp_path), heat=h)[0]
+            for h in (1, 2, 3, 4)] == ["A_default", "P_previous", "A_default", "P_previous"]  # old logs do not matter
     rng = random.Random(1)
     walk = [0.0]
     for _ in range(2000):

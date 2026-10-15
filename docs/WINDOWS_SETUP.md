@@ -89,28 +89,28 @@ Order-by-order lines are only in the data file (`-v` puts them back in the log).
 (started after the last one, or Ctrl-C while waiting) deletes its own empty files. Don't run `ritc record` next
 to it.
 
-**Staging run (one window, every heat with the candidate default `S_staging`, market recorded):** double-click
+**Default run (one window, every heat with the default = S since 2026-10-15, market recorded):** double-click
 `scripts\staging.bat`, or in the activated terminal:
 ```powershell
 scripts\staging.bat
 ```
 It checks the config (`review_batch.py check` must say OK), then runs
-`ritc run liability --live --forever --record --profile S_staging` until Ctrl-C. Each heat's log and data file carry
-`__S_staging__` in the name. Every heat is still compared with the frozen bot afterwards on the Mac (the replay runs
+`ritc run liability --live --forever --record --profile A_default` until Ctrl-C. Each heat's log and data file carry
+`__A_default` in the name. Every heat is still compared with the previous bot afterwards on the Mac (the replay runs
 each recorded heat under both), so a staging-only session is a fair test.
 
-**A/B run (one window, default and staging take turns: A, S, A, S, ... counted from this session, market recorded):**
-`scripts\ab_default_staging.bat` (`--profile alternate`, old logs do not matter), or the older least-tried rotation:
+**A/B run (one window, the default and the previous bot take turns: A, P, A, P, ... counted from this session, market recorded):**
+`scripts\ab_default_staging.bat` (`--profile alternate:A_default,P_previous`, old logs do not matter), or the older least-tried rotation:
 ```powershell
 ritc run liability --live --forever --record --profile rotate
 ```
 Same as above, but each heat runs the profile from `config\liability_profiles.toml` with the fewest heats in
-`logs\` so far: `A_default` (the frozen bot) and `S_staging` (the candidate new default, RUNBOOK.md section 6) take
-turns: A, S, A, S, ... The heat's first lines print `PROFILE <name>`, and the file names carry it:
+`logs\` so far: `A_default` (the default, = S since 2026-10-15) and `P_previous` (the old frozen bot, RUNBOOK.md section 6) take
+turns: A, P, A, P, ... The heat's first lines print `PROFILE <name>`, and the file names carry it:
 
 ```
-logs\liability-20261015-140512__S_staging__drift_horizon_ticks=20+drift_zero_start=True+liquidity_model=flow_guarded.log
-logs\data\liability-20261015-140512__S_staging__drift_horizon_ticks=20+drift_zero_start=True+liquidity_model=flow_guarded.jsonl
+logs\liability-20261016-140512__P_previous__drift_horizon_ticks=0+drift_zero_start=False+liquidity_model=adaptive.log
+logs\data\liability-20261016-140512__P_previous__drift_horizon_ticks=0+drift_zero_start=False+liquidity_model=adaptive.jsonl
 ```
 
 Before the session, after copying the old logs to the Mac: move the old `logs\` folder away (e.g. rename it
@@ -121,8 +121,9 @@ must print `OK` (the profile is added on top of it). To run one profile only: `-
 | What | Command |
 |---|---|
 | **Practice: every heat, default, market recorded** | `ritc run liability --live --forever --record` |
-| **Staging: every heat with `S_staging`, forever, market recorded** | `scripts\staging.bat` (= `ritc run liability --live --forever --record --profile S_staging`) |
-| **A/B: default and staging take turns (A, S, A, S...), forever, market recorded** | `scripts\ab_default_staging.bat` (= `ritc run liability --live --forever --record --profile alternate`) |
+| **Default (= S) every heat, forever, market recorded** | `scripts\staging.bat` (= `ritc run liability --live --forever --record --profile A_default`) |
+| **A/B: default and previous bot take turns (A, P, A, P...), forever, market recorded** | `scripts\ab_default_staging.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,P_previous`) |
+| **ML sprint A/B (practice only): default and default + ML price model take turns (A, M, A, M...)** | `scripts\ab_ml_sprint.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,M_ml_sprint`) |
 | Practice, one profile only, market recorded | `ritc run liability --live --forever --record --profile A_default` |
 | Bot, default (safe) settings, one heat | `ritc run liability --live -v` |
 | Bot, **aggressive profile** (see PRACTICE_PLAN.md decision rules) | `ritc run liability --live -v --set strategy.liquidity_model=flow` |

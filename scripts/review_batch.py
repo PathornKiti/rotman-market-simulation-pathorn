@@ -1,5 +1,6 @@
 """
-Liability bot: the FROZEN version (b19e95c logic = config of commit b04253e) and its three guards, heat by heat.
+Liability bot: the FROZEN version (b19e95c logic = config of commit b04253e, + S_staging promoted 2026-10-15) and its
+three guards, heat by heat.
 
     python scripts/review_batch.py check [--set SECTION.KEY=VALUE ...]   # BEFORE a batch: is this the frozen bot?
     python scripts/review_batch.py review logs/data                      # AFTER a batch: journals (files, dirs, globs)
@@ -23,7 +24,9 @@ import tomllib
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # the repo
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-FROZEN = "b04253e"          # commit whose config/liability.toml is the frozen bot
+FROZEN = "b04253e"          # commit whose config/liability.toml was the frozen bot until 2026-10-15
+PROMOTED = {"strategy.drift_horizon_ticks": 20, "strategy.drift_zero_start": True,     # S_staging, made the default
+            "strategy.liquidity_model": "flow_guarded"}                                # 2026-10-15 (user decision)
 SECTIONS = ("case", "strategy", "execution", "risk")
 OVERSTATE = 0.054           # the recorded-path estimate overstates real blocks by this much/share (17 evening heats)
 FEE = 0.02
@@ -57,7 +60,7 @@ def frozen() -> dict | None:
                                        stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError):
         return None
-    return effective(tomllib.loads(text))
+    return effective(tomllib.loads(text)) | PROMOTED
 
 
 def diff(cfg: dict, base: dict) -> list[str]:
@@ -82,7 +85,7 @@ def cmd_check(args: list[str]) -> int:
     if d:
         print("NOT the frozen bot - these trading settings differ:\n  " + "\n  ".join(d))
         return 1
-    print(f"OK: config/liability.toml{' + ' + ' '.join(sets) if sets else ''} = the frozen bot ({FROZEN})")
+    print(f"OK: config/liability.toml{' + ' + ' '.join(sets) if sets else ''} = the frozen bot ({FROZEN} + S_staging)")
     return 0
 
 

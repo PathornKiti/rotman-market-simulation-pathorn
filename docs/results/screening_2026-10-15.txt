@@ -35,3 +35,24 @@ the replay of the heat's OWN config gives the live answer.
 Raw NLV by profile run today (unpaired, noisy): A $58.5k (5), B $47.9k (4), D $43.5k (4), H $41.6k (4), C $38.6k (4).
 CONFLICT: real heats favour C (flow); the simulator's rival markets (a stress assumption) reject it (-$4.9k, worst heat
 -$240k). Decision left to the user; next: rotate A, B, C, H in busy sessions and watch C's crowded heats.
+
+STAGING BUNDLE (S_staging = drift cap 20 + drift_zero_start + flow_guarded), same sim (49 markets x seeds 1601-1616):
+  vs A: all markets +$2.4k/heat (t 3.6); CROWDED -$7.5k (t -3.9); crowded P(loss) 24% -> 36%, 5% worst -$21.7k -> -$49.5k,
+  worst heat -$94.6k -> -$239.9k. flow_guarded alone: crowded -$6.7k (t -3.6) (the alarm learns only from untaken tenders,
+  so taking more starves it). S2 = S + sprint 0.03: vs S crowded +$1.1k (t 2.5), all -$1.5k (t -3.7): H not added.
+  Real paired replay (29 heats): S +$6.9k/heat (t 3.6, 13 better / 1 worse, worst -$6.4k).
+  => the live test must include CROWDED heats (RUNBOOK section 6 promotion rule).
+
+A/S LIVE BATCH (evening 10-15, 16:49-19:07, --profile alternate): 9 A + 8 S complete (19:07 S cut at tick 64). QUIET session:
+crowd alarm on in 2 heats, both A -> the crowded promotion test is still open.
+  Unpaired NLV: A $56.1k (min -$5.6k), S $57.4k (min +$29.3k, no losing heat). S 5.0 blocks/heat vs A 4.0, thinner (6 losing blocks vs 2).
+  Paired replay on the 18 new heats (holdout for S): S +$3.3k/heat (t 1.2, 7 better / 4 worse, worst -$17.0k) with the 0.054 haircut;
+    with LIVE realized P&L for the blocks S took: +$5.1k (t 1.9). G alone +$4.5k (t 1.6), C +$4.6k, D +$2.0k, B +$1.0k (t 0.4).
+  Pooled 47 heats: S +$5.4k/heat (t 3.5); live-realized variant +$6.1k (t 3.9).
+  S's own extra accepts (8, taken live): 5 won, live +0.73/sh summed (~+$38k) vs replay estimate ~+$6.5k (replay too harsh here).
+  Path-estimate overstatement: before 16:49 +0.043/sh (t 3.0, n 120); this batch +0.008 (t 0.6, n 76) -> crowd-dependent; 0.054
+    (crowded evening) penalises accept-flips in quiet sessions.
+  CROC is the weak part: S's extra CROC accepts in this batch -$9.5k on path (4 of 7 lost); the gain is TAME/CRZY.
+  Typical A miss: 170557 #9 TAME edge 0.385 declined at +0.0045/sh (early-heat drift) -> heat -$5.6k; S accepts it (+$38.6k path).
+  H extra sprints (67): mid kept running against the block +0.078 at 20 ticks (t 3.0).
+  Harness: screening_2026-10-15/calib.py (path vs live), paired_real_47heats.txt.

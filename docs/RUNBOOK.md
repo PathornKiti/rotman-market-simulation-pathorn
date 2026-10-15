@@ -129,9 +129,10 @@ other teams there is no real crowd, so any "crowd" the bot sees there is noise; 
 
 ```bash
 git pull                                                     # once, before the first heat
-python scripts/review_batch.py check                         # OK = config/liability.toml is the frozen bot
-python -m ritc run liability --live -v --forever --record --profile alternate   # A/B: A, S, A, S... this session
-python -m ritc run liability --live -v --forever --record --profile S_staging   # staging every heat
+python scripts/review_batch.py check                         # OK = config/liability.toml is the frozen bot (+ S, 10-15)
+python -m ritc run liability --live -v --forever --record --profile alternate:A_default,P_previous   # A/B: A, P, A, P... this session
+python -m ritc run liability --live -v --forever --record --profile alternate:A_default,M_ml_sprint  # ML sprint A/B (practice only)
+python -m ritc run liability --live -v --forever --record --profile A_default   # the default every heat
 python -m ritc run liability --live -v --forever --record --profile rotate      # least-tried profile in logs/
 ```
 
@@ -158,30 +159,30 @@ while unwinding, so "slow loops" during unwinds are expected above ~120 ms per r
 
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
 far, prints `PROFILE <name>` and records it in the journal and the file names. The profiles take turns:
-A_default, S_staging, A_default, ... Start it before the heat opens, as always. To force one: `--profile A_default`. An
+A_default, P_previous, A_default, ... Start it before the heat opens, as always. To force one: `--profile A_default`. An
 explicit `--set` still wins over the profile.
 
-**Staging (2026-10-15):** the changes that each held up alone are bundled into `S_staging`, which takes turns with the
-frozen `A_default`. `S_staging` becomes the competition default only if it beats A live. Single-change profiles stay in
+**Promoted (2026-10-15, user decision):** `S_staging` is now the default in `config/liability.toml` (`A_default` = S).
+`P_previous` is the old frozen bot, kept so `--profile alternate:A_default,P_previous` can keep comparing them, above all in CROWDED heats. Single-change profiles stay in
 `config/liability_profiles.toml` as comments with their evidence (uncomment one to re-test it alone).
 
 | Profile | What it is | Evidence before the live test |
 |---|---|---|
-| `A_default` | the frozen bot (b19e95c logic, config of commit b04253e) | baseline: 14 crowded evening heats mean $37k, never negative |
-| `S_staging` | `drift_horizon_ticks = 20` + `drift_zero_start = true` + `liquidity_model = "flow_guarded"` (flow pricing unless the crowd alarm is on) | real Rotman heats, paired replay (29 heats): +$6.9k/heat (t 3.6, 13 better / 1 worse, worst -$6.4k). Open risk: the simulator's rival markets reject flow pricing (-$6.7k/heat, worst heat -$240k) |
+| `P_previous` | the previous frozen bot (b19e95c logic, config of commit b04253e) | baseline: 14 crowded evening heats mean $37k, never negative |
+| `A_default` (= S) | `drift_horizon_ticks = 20` + `drift_zero_start = true` + `liquidity_model = "flow_guarded"` (flow pricing unless the crowd alarm is on) | real Rotman heats, paired replay (29 heats): +$6.9k/heat (t 3.6, 13 better / 1 worse, worst -$6.4k); live A/S holdout 18 heats +$3.3k..+$5.1k (t 1.2-1.9); 47 pooled +$5.4k (t 3.5). Open risk: the simulator's crowded markets reject it (-$7.5k/heat, worst heat -$240k) |
 
-Windows launchers (WINDOWS_SETUP.md section 5): `scripts\staging.bat` runs every heat with `S_staging`
-(`--profile S_staging --forever --record`); `scripts\ab_default_staging.bat` alternates A_default / S_staging heat by heat (`--profile alternate`). Either way the Mac
-replays each recorded heat under both A and S (`docs/results/screening_2026-10-15/paired.py`), so staging-only heats
+Windows launchers (WINDOWS_SETUP.md section 5): `scripts\staging.bat` runs every heat with the default
+(`--profile A_default --forever --record`); `scripts\ab_default_staging.bat` alternates A_default / P_previous heat by heat (`--profile alternate:A_default,P_previous`). Either way the Mac
+replays each recorded heat under both the previous bot and S (`docs/results/screening_2026-10-15/paired.py`), so staging-only heats
 are still a paired comparison.
 
-**Promotion rule for `S_staging`** (judge the tenders it answers differently from A, not NLV alone):
+**Demotion rule for S (promoted 2026-10-15 by decision before the crowded test)** (judge the tenders it answers differently from P, not NLV alone):
 
 | After | If | Then |
 |---|---|---|
 | each batch | send `logs/data/*.jsonl` | `review_batch.py review` + `docs/results/screening_2026-10-15/paired.py` (every heat replayed under A and S) |
-| 4+ CROWDED heats of S (crowd alarm on, or 5+ traders) | S's extra tenders made money on balance there and no S block lost more than ~$30k | copy the three lines into `config/liability.toml`: the new default |
-| any crowded heat | an S block taken because of flow pricing loses more than ~$30k, or S trails A by > $20k in crowded heats | drop S; go to the competition with A (or A + the drift cap, which passes the sim's rival gate) |
+| 4+ CROWDED heats of S (crowd alarm on, or 5+ traders) | S's extra tenders made money on balance there and no S block lost more than ~$30k | keep S |
+| any crowded heat | an S block taken because of flow pricing loses more than ~$30k, or S trails A by > $20k in crowded heats | revert to `--profile P_previous` (or P + the drift cap, which passes the sim's rival gate) |
 
 Don't run `ritc record` in a second window next to `--record`: the bot already records into its journal.
 

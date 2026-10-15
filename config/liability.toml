@@ -22,6 +22,10 @@ min_profit_per_share = 0.01   # accept only if expected profit/share after costs
 refill_factor = 2.0           # visible depth is ~this fraction of what you can unwind into
 competitive_margin = 0.05     # $/share kept when bidding on non-fixed tenders
 drift_halflife = 15           # ticks, for the adverse-drift estimate
+drift_horizon_ticks = 20      # PROMOTED 2026-10-15 (user decision, S_staging): charge the drift over at most 20 ticks of the
+                              # unwind (was the whole unwind time). Real 17 journals +$1.0k (t 0.6); sim +$2.1k (t 7.7)
+drift_zero_start = true       # PROMOTED 2026-10-15 (S_staging): drift EWMA starts at 0, not the heat's first 1-tick change
+                              # (early tenders were declined on a one-tick fluke). Sim +$0.5k (t 3.9), real 0
 unwind_ticks_per_share = 0.0005  # expected unwind time per share (drift exposure)
 min_ticks_to_unwind = 5       # 2027 brief: no end-of-case fine (closed at last price). 15 -> 5: +$1.1-1.8k (t 2.2-3.0), holdout +$0.4-0.6k (t 1.9-2.2), hostile +$0.5-2.0k (t 1.5-1.8)
 risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind ticks)
@@ -82,7 +86,11 @@ decline_explicitly = true     # official rule: trading a ticker while one of its
 #   ...and only when |net after the win| <= auction_max_net (shares; unset = always). Tested 2026-10-12: always
 #   = wins 1% -> 14% but -$4.1k..-7.3k/heat (the 55k block crowds fixed tenders out of the net limit); 45000 =
 #   no loss but no gain (96 fresh seeds -$0.8k, t -1.4). Not adopted.
-liquidity_model = "adaptive"  # ADAPTIVE (default since 2026-10-12): start each heat on "book"; once `adaptive_min_obs` untaken
+liquidity_model = "flow_guarded"  # PROMOTED 2026-10-15 (user decision, S_staging): "flow" pricing unless the crowd alarm
+                              # is on, then the book walk. Bundle S on real heats (paired replay): 29 heats +$6.9k/heat (t 3.6),
+                              # 18-heat live A/S holdout +$3.3k..+$5.1k (t 1.2-1.9), 47 pooled +$5.4k (t 3.5). RISK: the sim's
+                              # crowded markets reject it (bundle -$7.5k/heat t -3.9, worst heat -$240k); untested live crowded.
+# previous default (2026-10-12 .. 10-15): liquidity_model = "adaptive"  # ADAPTIVE: start each heat on "book"; once `adaptive_min_obs` untaken
                               # tenders are scored and the learned crowd impact is under 1 sd, price with "flow"; back to
                               # "book" as soon as a crowd shows. Design 501-532: default sim +$3.9k (t 3.1), calibrated
                               # -$0.2k, Kyle +$0.1k, hostile identical. Holdout 601-632: default +$4.0k (t 2.5, worst

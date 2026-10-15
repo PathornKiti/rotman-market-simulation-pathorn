@@ -437,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--config", help="path to a TOML config (default config/<case>.toml)")
     r.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE",
                    help="override one config value for this run, e.g. --set strategy.min_profit_per_share=0.05")
-    r.add_argument("--profile", metavar="NAME|rotate|alternate",
+    r.add_argument("--profile", metavar="NAME|rotate|alternate[:A,B]",
                    help="liability practice: apply a profile from config/<case>_profiles.toml; 'rotate' runs the "
                         "least-tried one in logs/; 'alternate' takes the profiles in turn by this session's heat "
                         "number (A, S, A, S with --forever), ignoring older logs")

@@ -3,20 +3,26 @@
 # profile with the fewest heats in logs/ so far (ties: the order below), so the profiles take turns heat by heat, and
 # the journal records which one ran: `python -m ritc practice` compares them.
 #
-# STAGING (2026-10-15, user's plan): the pieces that each held up alone are bundled into S_staging and run against the
-# frozen A_default. S_staging becomes the default (its lines copied into config/liability.toml) only if it beats A live.
-# Single-change profiles: one change vs A_default each, so a difference can be traced to its cause.
+# PROMOTED 2026-10-15 (user decision): S_staging (drift cap 20 + drift_zero_start + flow_guarded) is now the default in
+# config/liability.toml, so A_default = S. P_previous is the old frozen bot (b19e95c logic, config of b04253e), kept so
+# `--profile alternate` (A, P, A, P...) can still compare them, above all in CROWDED heats (S's open risk: the simulator's
+# crowded markets reject it, bundle -$7.5k/heat t -3.9, worst heat -$240k; live, S has not yet run with the crowd alarm on).
+# Single-change profiles below were screened against the OLD default; re-test any of them against the new A_default.
 
-[A_default]                           # the FROZEN bot (b19e95c logic, config of b04253e): no overrides
+[A_default]                           # THE DEFAULT (= S_staging since 2026-10-15): no overrides
 
-[S_staging]                           # STAGING DEFAULT = B + Z + G, each passed alone on real heats:
-"strategy.drift_horizon_ticks" = 20   # B: drift charged over at most 20 ticks of the unwind
-"strategy.drift_zero_start" = true    # Z: drift EWMA starts at 0, not at the heat's first 1-tick change
-"strategy.liquidity_model" = "flow_guarded"   # G: price exits off forward liquidity unless the crowd alarm is on
-# Real Rotman heats (paired replay, 29 heats incl. the 5-trader afternoon of 10-15): S +$6.9k/heat (t 3.6, 13 better /
-# 1 worse, worst -$6.4k); G alone +$5.5k (t 3.3), B +$1.3k (t 1.4), Z 0. OPEN RISK: the simulator's rival markets reject
-# flow pricing (G alone -$6.7k/heat t -3.6, worst heat -$240k; the alarm learns only from untaken tenders, so it fires late
-# when we take more). Judge S on CROWDED live heats (crowd alarm on, many traders): promote only if it holds up there.
+[P_previous]                          # the previous frozen bot (default until 2026-10-15)
+"strategy.drift_horizon_ticks" = 0
+"strategy.drift_zero_start" = false
+"strategy.liquidity_model" = "adaptive"
+# S vs P, real Rotman heats (paired replay): 29 heats +$6.9k/heat (t 3.6); 18-heat live A/S holdout (evening 10-15, quiet)
+# +$3.3k (t 1.2, 0.054 haircut) .. +$5.1k (t 1.9, live P&L for S-taken blocks); 47 pooled +$5.4k (t 3.5).
+
+[M_ml_sprint]                         # ML SPRINT (2026-10-15, practice only): the trained 10-tick price model (boosted
+"strategy.sprint_model" = "docs/results/ml_2026-10-15/models.json"   # trees, ritc.mlmodel) gives the SPRINT rule's
+# expected move against the block instead of the run + book model. Held-out heats: R2 0.35 vs 0.23 for the linear model,
+# top-10% signals 90% right. Replay of 12 heats: sprint starts 39 -> 61. Unwind P&L is NOT measurable offline: judge it
+# live with scripts\ab_ml_sprint.bat (A_default, M_ml_sprint, A, M...) + docs/results/ml_2026-10-15/score.py.
 
 # ---- single changes (screened 2026-10-15; commented out while staging runs; uncomment one to re-test it alone)
 
