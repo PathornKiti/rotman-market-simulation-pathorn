@@ -107,7 +107,7 @@ def _run_one_heat(a: argparse.Namespace, heat: int) -> Runner:
     name, prof = None, {}
     if a.profile:
         from .practice import pick_profile
-        name, prof = pick_profile(a.case, a.profile)
+        name, prof = pick_profile(a.case, a.profile, heat=heat)
         sets = {**prof, "strategy.profile": name, **sets}          # an explicit --set still wins
     # The log / journal name says what this run changed, e.g.
     # logs/liability-20261012-171840__C_auctions__crowd_robust=True+liquidity_model=auctions.log
@@ -437,12 +437,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--config", help="path to a TOML config (default config/<case>.toml)")
     r.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE",
                    help="override one config value for this run, e.g. --set strategy.min_profit_per_share=0.05")
-    r.add_argument("--profile", metavar="NAME|rotate",
+    r.add_argument("--profile", metavar="NAME|rotate|alternate",
                    help="liability practice: apply a profile from config/<case>_profiles.toml; 'rotate' runs the "
-                        "least-tried one (compare them with `ritc practice`)")
+                        "least-tried one in logs/; 'alternate' takes the profiles in turn by this session's heat "
+                        "number (A, S, A, S with --forever), ignoring older logs")
     r.add_argument("--forever", action="store_true",
                    help="keep going: when a heat ends, wait for the next one and start again (new log + journal; "
-                        "with --profile rotate, the next profile). Ctrl-C quits")
+                        "with --profile rotate / alternate, the next profile). Ctrl-C quits")
     r.add_argument("--record", action="store_true",
                    help="also record the market (books, tenders, time & sales) into this heat's .jsonl, as "
                         "`ritc record` does, so one heat = one .log + one .jsonl")

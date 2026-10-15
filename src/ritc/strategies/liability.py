@@ -497,11 +497,11 @@ class LiabilityStrategy(Strategy):
                     self.sig_n += 1
                 self.sig_prev[t] = self.features(t, snap)
         self.last_pos = dict(snap.positions)
-        if self.liq_model in ("flow", "auctions", "adaptive"):
+        if self.liq_model in ("flow", "auctions", "adaptive", "flow_guarded"):
             self._update_liquidity(snap)
         if snap.tick % 60 == 0:      # practice check: compare with `calibrate`'s measured sigma/tick per stock
             log.info("VOL " + "  ".join(f"{t} ${self.price_vol(t, snap):.4f}/tick" for t in self.tickers))
-            if self.liq_model in ("flow", "auctions", "adaptive"):
+            if self.liq_model in ("flow", "auctions", "adaptive", "flow_guarded"):
                 log.info("LIQ " + "  ".join(f"{t} sell {self.flow(t, 'SELL'):,.0f} buy {self.flow(t, 'BUY'):,.0f}/tick"
                                             for t in self.tickers)
                          + (f"  adaptive -> {'flow' if self.no_crowd_seen() else 'book'}"
@@ -514,7 +514,7 @@ class LiabilityStrategy(Strategy):
 
     def prefetch(self) -> dict:
         """Time & sales for the forward-liquidity models, in the snapshot's parallel batch (no extra round trip)."""
-        if self.liq_model not in ("flow", "auctions", "adaptive"):
+        if self.liq_model not in ("flow", "auctions", "adaptive", "flow_guarded"):
             return {}
         if time.monotonic() - self._tas_t < 0.9:          # trade flow is read once per tick: skip in between
             return {}
@@ -1009,13 +1009,23 @@ class LiabilityStrategy(Strategy):
             return self.decide_ensemble(t, snap, positions)
         return self._evaluate(t, snap, positions)
 
+    def flow_pricing(self, t: dict, positions: dict[str, int]) -> bool:
+        """Price this tender's exit off forward liquidity (resting at the touch) rather than the visible book walk?"""
+        m = self.liq_model
+        if m == "flow_guarded":
+            # FLOW GUARDED (2026-10-15): forward liquidity unless the crowd alarm is on (crowded(): impact > 2 sd).
+            # "adaptive" waits for evidence of NO crowd before trusting flow. Real Rotman heats paid +$4.4k/heat for
+            # flow (t 2.6, 43 heats) while the simulator's rival markets lost with it, which is when crowded() fires.
+            return not self.crowded()
+        return (m == "flow" or (m == "auctions" and self.bid_up(t, positions))
+                or (m == "adaptive" and self.no_crowd_seen()))
+
     def _evaluate(self, t: dict, snap: Snapshot, positions: dict[str, int], flow: bool | None = None,
                   crowd: bool = True, room: int | None = None) -> TenderDecision:
         """evaluate_tender with the bot's state. `flow`: force the forward-liquidity exit on / off (None = the
         liquidity_model's choice); `crowd`: include the learned crowd charge; `room`: override the risk room."""
         ticker = t.get("ticker")
-        use_flow = ((self.liq_model == "flow" or (self.liq_model == "auctions" and self.bid_up(t, positions))
-                     or (self.liq_model == "adaptive" and self.no_crowd_seen())) if flow is None else flow)
+        use_flow = self.flow_pricing(t, positions) if flow is None else flow
         return evaluate_tender(
             t, snap.book(ticker),
             fee=float(self.fees.get(ticker, 0.0)),

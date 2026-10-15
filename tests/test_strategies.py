@@ -427,6 +427,24 @@ def test_drift_zero_start_does_not_let_the_first_tick_set_the_drift():
     assert abs(new.mean - new.alpha * -0.05) < 1e-12   # zero start: it gets only its EWMA weight (~4.5%)
 
 
+def test_flow_guarded_prices_off_flow_until_the_crowd_alarm():
+    from ritc.strategies.commodity import BayesImpact
+    from ritc.strategies.liability import LiabilityStrategy
+
+    s = LiabilityStrategy.__new__(LiabilityStrategy)
+    s.p = {"crowd_gate": True}
+    s.crowd_learn = True
+    s.crowd = BayesImpact(0.0, 0.10, 0.10)
+    t = {"action": "BUY", "quantity": 50_000, "is_fixed_bid": True}
+    s.liq_model = "adaptive"
+    assert not s.flow_pricing(t, {})                  # adaptive: book until evidence of NO crowd
+    s.liq_model = "flow_guarded"
+    assert s.flow_pricing(t, {})                      # flow_guarded: flow from the start of the heat...
+    s.crowd = BayesImpact(0.05, 0.01, 0.10)
+    s.crowd.n = 5
+    assert s.crowded() and not s.flow_pricing(t, {})  # ...and the cautious book walk once the crowd alarm is on
+
+
 def test_auction_skip_adding_declines_auctions_that_grow_an_unwinding_block():
     from types import SimpleNamespace
 

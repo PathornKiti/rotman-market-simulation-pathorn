@@ -22,3 +22,16 @@ flip); crowd_weight = 0 -$1.0k (t -0.7, 1 winner / 3 losers). Tender edge offere
 vs the mid at arrival): mean $92k, max $108k, so $200k heats are price-move luck, not tender edge. Mid after a DECLINED
 fixed tender runs against the block -0.21 at 30 s, -0.32 at 90 s (no rebound); after a TAKEN one it recovers by 90 s
 (our own unwind's temporary impact).
+
+LIVE ROTATION, Rotman practice server 2026-10-15 (20 heats: morning quiet, afternoon 5 traders) + late night 10-14.
+Paired replay on every real journal (docs/results/screening_2026-10-15/paired.py; raw: paired_real_29heats.txt),
+pooled with the 14 evening 10-14 heats replayed earlier (those journals are no longer on disk). Flip counted only when
+the replay of the heat's OWN config gives the live answer.
+  B drift cap 20  ALL 43  +$1.3k/heat t 1.4 | crowded evening (14) +$1.2k t 0.6 | afternoon 5 traders (16) +$2.3k t 1.4
+  C flow          ALL 43  +$4.4k/heat t 2.6 | crowded evening (14) +$3.2k t 1.1 (4 better / 4 worse) | afternoon +$9.1k t 3.1
+  D risk 0.15     ALL 43  +$1.8k/heat t 1.5 | crowded evening (14) -$0.6k t -0.3 | afternoon +$5.3k t 2.2
+  H sprint 0.03   45 extra sprints (vs A) on 29 heats: the mid kept running against the block +0.037 at 5 ticks (t 2.7),
+                  +0.041 at 10 (t 2.0), +0.083 at 20 (t 2.8): the extra crossing was mostly right.
+Raw NLV by profile run today (unpaired, noisy): A $58.5k (5), B $47.9k (4), D $43.5k (4), H $41.6k (4), C $38.6k (4).
+CONFLICT: real heats favour C (flow); the simulator's rival markets (a stress assumption) reject it (-$4.9k, worst heat
+-$240k). Decision left to the user; next: rotate A, B, C, H in busy sessions and watch C's crowded heats.

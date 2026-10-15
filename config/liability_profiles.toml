@@ -1,26 +1,41 @@
 # PRACTICE PROFILES for `python -m ritc run liability --live -v --forever --record --profile rotate` (docs/RUNBOOK.md,
 # section 6). Each profile is a set of --set overrides on top of config/liability.toml. `--profile rotate` runs the
-# profile with the fewest heats in logs/ so far (ties: the order below), so the profiles take turns heat by heat
-# (A, B, C, ... then A again), and the journal records which one ran: `python -m ritc practice` compares them.
+# profile with the fewest heats in logs/ so far (ties: the order below), so the profiles take turns heat by heat, and
+# the journal records which one ran: `python -m ritc practice` compares them.
 #
-# Every profile is ONE change vs A_default (never two at once), so a difference can be traced to its cause.
+# STAGING (2026-10-15, user's plan): the pieces that each held up alone are bundled into S_staging and run against the
+# frozen A_default. S_staging becomes the default (its lines copied into config/liability.toml) only if it beats A live.
+# Single-change profiles: one change vs A_default each, so a difference can be traced to its cause.
 
 [A_default]                           # the FROZEN bot (b19e95c logic, config of b04253e): no overrides
 
-[B_drift_cap20]                       # T CAP: charge the adverse drift over at most 20 ticks of the unwind instead of the
-"strategy.drift_horizon_ticks" = 20   # whole unwind time (up to 113-163 ticks when flow is thin). Braver on fixed tenders,
-                                      # auction bids slightly closer. 17 real evening journals (replay + recorded path):
-                                      # 3 answers flip, +$1.0k/heat (t 0.6); sim 49 markets +$2.1k (t 7.7), rivals +$0.1k.
+[S_staging]                           # STAGING DEFAULT = B + Z + G, each passed alone on real heats:
+"strategy.drift_horizon_ticks" = 20   # B: drift charged over at most 20 ticks of the unwind
+"strategy.drift_zero_start" = true    # Z: drift EWMA starts at 0, not at the heat's first 1-tick change
+"strategy.liquidity_model" = "flow_guarded"   # G: price exits off forward liquidity unless the crowd alarm is on
+# Real Rotman heats (paired replay, 29 heats incl. the 5-trader afternoon of 10-15): S +$6.9k/heat (t 3.6, 13 better /
+# 1 worse, worst -$6.4k); G alone +$5.5k (t 3.3), B +$1.3k (t 1.4), Z 0. OPEN RISK: the simulator's rival markets reject
+# flow pricing (G alone -$6.7k/heat t -3.6, worst heat -$240k; the alarm learns only from untaken tenders, so it fires late
+# when we take more). Judge S on CROWDED live heats (crowd alarm on, many traders): promote only if it holds up there.
+
+# ---- single changes (screened 2026-10-15; commented out while staging runs; uncomment one to re-test it alone)
+
+# [B_drift_cap20]                       # T CAP: charge the adverse drift over at most 20 ticks of the unwind instead of the
+# "strategy.drift_horizon_ticks" = 20   # whole unwind time (up to 113-163 ticks when flow is thin). Braver on fixed tenders,
+#                                       # auction bids slightly closer. 17 real evening journals (replay + recorded path):
+#                                       # 3 answers flip, +$1.0k/heat (t 0.6); sim 49 markets +$2.1k (t 7.7), rivals +$0.1k.
 
 # 2026-10-15 SCREENING (user's choice: many profiles on a quiet practice server, 1-2 heats each). Each is ONE change vs
 # A_default. A quiet market flatters the braver ones: judge crowd-sensitive profiles on the sim's rival rows too.
 # ---- entry (accept more tenders)
-[C_flow]                              # price every tender off forward liquidity (rest at the touch), never the book walk.
-"strategy.liquidity_model" = "flow"   # 17 real journals +$2.3k (t 0.9, 13 flips 4 better / 5 worse heats); sim all
-                                      # markets $0, RIVAL markets -$4.9k (t -2.6), worst heat -$95k -> -$240k: NOT for Sunday.
-[D_risk015]                           # risk premium 0.3 -> 0.15 x GARCH vol x sqrt(T).
-"strategy.risk_aversion" = 0.15       # 17 real journals -$0.5k (t -0.3): 1 winner, 2 losers flip. Sim all markets
-                                      # +$1.0k (t 3.1), RIVAL markets -$1.4k (t -2.7), hostile anchored worst -$27k -> -$77k.
+# [C_flow]                              # price every tender off forward liquidity (rest at the touch), never the book walk.
+# "strategy.liquidity_model" = "flow"   # 17 real journals +$2.3k (t 0.9, 13 flips 4 better / 5 worse heats); sim all
+#                                       # markets $0, RIVAL markets -$4.9k (t -2.6), worst heat -$95k -> -$240k: NOT for Sunday.
+# [D_risk015]                           # risk premium 0.3 -> 0.15 x GARCH vol x sqrt(T).
+# "strategy.risk_aversion" = 0.15       # 17 real journals -$0.5k (t -0.3): 1 winner, 2 losers flip. Sim all markets
+#                                       # +$1.0k (t 3.1), RIVAL markets -$1.4k (t -2.7), hostile anchored worst -$27k -> -$77k.
+# [G_flow_guarded]                      # flow pricing unless the crowd alarm is on: real 29 heats +$5.5k (t 3.3, worst
+# "strategy.liquidity_model" = "flow_guarded"   # -$6.4k vs C's -$24.1k); sim rival markets -$6.7k (t -3.6). In S_staging.
 # ---- exit (unwind faster)
 # [E_budget20k]                       # RETIRED 2026-10-15 before any live heat: sim -$1.9k/heat (t -7.4, 157 better / 273
 # "execution.hold_risk_budget" = 20000  # worse), solo market maker -$11.5k (t -3.1), calibrated impact -$6.8k (t -2.8).
@@ -30,10 +45,10 @@
 # [G_horizon1540]  RETIRED 2026-10-15, no effect: sim all markets -$32 (t -0.9), crowded +$44.
 # "execution.horizon_min_ticks" = 15
 # "execution.horizon_max_ticks" = 40
-[H_sprint003]                         # sprint when the predicted move against the block >= $0.03 (was $0.05): crosses
-"strategy.trend_cross_cost" = 0.03    # sooner. Sim CROWDED markets +$0.7k (t 2.6), P(loss) 24% -> 21%; all markets -$1.4k
-                                      # (t -4.2), quiet markets -$2.8k..-$9.4k: expect it to look WORSE on a quiet practice
-                                      # server. Watch CROC: sprints walked its thin book on 10-14 (-$24.8k, -$23.0k).
+# [H_sprint003]                         # sprint when the predicted move against the block >= $0.03 (was $0.05): crosses
+# "strategy.trend_cross_cost" = 0.03    # sooner. Sim CROWDED markets +$0.7k (t 2.6), P(loss) 24% -> 21%; all markets -$1.4k
+#                                       # (t -4.2), quiet markets -$2.8k..-$9.4k: expect it to look WORSE on a quiet practice
+#                                       # server. Watch CROC: sprints walked its thin book on 10-14 (-$24.8k, -$23.0k).
 
 # Tested 2026-10-15, NOT in the rotation (full table: docs/results/screening_2026-10-15.txt):
 # - strategy.crowd_weight = 0.5: sim crowded +$1.6k (t 2.6), but 17 real journals -$0.5k (its one flip lost $8.5k) and the

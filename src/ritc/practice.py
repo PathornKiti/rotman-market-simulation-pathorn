@@ -32,9 +32,16 @@ def load_profiles(case: str = "liability") -> dict[str, dict]:
         return {k: dict(v) for k, v in tomllib.load(fh).items()}
 
 
-def pick_profile(case: str, name: str, logs: str = "logs") -> tuple[str, dict]:
-    """A named profile, or for 'rotate' the one with the fewest LIVE heats in `logs` (ties: file order)."""
+def pick_profile(case: str, name: str, logs: str = "logs", heat: int = 1) -> tuple[str, dict]:
+    """
+    A named profile; for 'rotate' the one with the fewest LIVE heats in `logs` (ties: file order); for 'alternate' the
+    profiles in file order by this session's heat number (heat 1 = the first profile, 2 = the second, ...), whatever
+    older journals `logs` holds: a strict A/B alternation within one `--forever` session.
+    """
     profiles = load_profiles(case)
+    if name == "alternate":
+        best = list(profiles)[(max(heat, 1) - 1) % len(profiles)]
+        return best, profiles[best]
     if name != "rotate":
         if name not in profiles:
             raise SystemExit(f"unknown profile {name!r}; have: {', '.join(profiles)}")

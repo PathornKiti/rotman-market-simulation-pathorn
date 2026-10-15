@@ -25,6 +25,18 @@ look good and H worse than on Sunday; judge C/D/H on the sim's crowded rows, B o
 `drift_zero_start` in strategies/liability.py + its test, tests/test_research.py, scripts/review_batch.py,
 docs/results/screening_2026-10-15.txt. Harnesses: docs/results/screening_2026-10-15/ (valcf.py = replay flips for any override, pair.py = paired sim arms, arms.sh).
 
+**Live rotation results (20 heats today + 9 late 10-14, pooled with 14 evening heats = 43 real heats, paired replay):**
+C flow +$4.4k/heat (t 2.6; afternoon with 5 traders +$9.1k t 3.1; crowded evening +$3.2k t 1.1) but the sim's rival
+markets reject it (-$4.9k, worst -$240k): the user decides real vs the sim gate. B +$1.3k (t 1.4, passes both). D
++$1.8k (t 1.5, sim rival fail). H's extra sprints were followed by more adverse move (+0.08 at 20 ticks, t 2.8).
+Details: docs/results/screening_2026-10-15.txt (bottom). The 14 evening journals (~/Downloads/log_transfer) are gone.
+
+**STAGING (end of 2026-10-15):** `S_staging` = drift cap 20 + `drift_zero_start` + `liquidity_model = "flow_guarded"`
+(new: flow pricing unless the crowd alarm is on). Real paired replay, 29 heats: +$6.9k/heat (t 3.6, 13 better / 1 worse,
+worst -$6.4k). Open risk: the sim's rival markets reject flow pricing (flow_guarded alone -$6.7k, t -3.6, worst -$240k).
+Run on Windows: `scripts\staging.bat` (S every heat) or `scripts\ab_default_staging.bat` (A, S, A, S). Promotion rule: RUNBOOK section 6
+(S must hold up in CROWDED live heats). Evaluate with `docs/results/screening_2026-10-15/paired.py`.
+
 **Next:** review the rotation heats (`review_batch.py review`, `ritc practice`, per-profile flips and blocks). Sunday
 candidates: A + B, then drift_zero_start; H only if Sunday is crowded and its live sprints look right.
 Open: how many graded heats on Sunday (luck vs average).

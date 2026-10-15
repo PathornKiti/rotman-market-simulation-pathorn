@@ -1,0 +1,49 @@
+29 real heats with recorded markets
+
+B drift cap 20   flips counted 3 of 4 | mean +1,282/heat  t +1.40  better 2 worse 0  worst +0  best +22,859
+     20261015-134511 (C) #509  TAME -> ACCEPT  path +0.023/sh    +1,212  replay != live
+     20261015-150439 (A) #9    TAME -> ACCEPT  path +0.275/sh   +14,311  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+C flow           flips counted 20 of 22 | mean +4,964/heat  t +2.31  better 12 worse 3  worst -24,117  best +33,289
+     20261014-222356 (A) #2    TAME -> ACCEPT  path -0.231/sh   -12,498  counted
+     20261014-222356 (A) #102  CROC -> ACCEPT  path +0.117/sh    +6,069  counted
+     20261014-222356 (A) #402  CROC -> ACCEPT  path -0.146/sh    -7,889  replay != live
+     20261014-232037 (A) #202  TAME -> ACCEPT  path +0.087/sh    +4,622  counted
+     20261014-232037 (A) #402  TAME -> ACCEPT  path -0.532/sh   -28,738  counted
+     20261014-233647 (A) #102  CRZY -> ACCEPT  path +0.071/sh    +3,908  counted
+     20261014-235258 (A) #2    CROC -> ACCEPT  path +0.140/sh    +7,569  counted
+     20261014-235258 (A) #402  CRZY -> ACCEPT  path +0.187/sh    +9,517  counted
+     20261015-104905 (A) #209  TAME -> decline path -0.138/sh    +7,595  counted
+     20261015-134511 (C) #209  CRZY -> decline path +0.069/sh    -3,532  replay != live
+     20261015-135145 (D) #309  TAME -> ACCEPT  path +0.494/sh   +26,668  counted
+     20261015-141602 (D) #409  TAME -> ACCEPT  path -0.248/sh   -12,380  counted
+     20261015-142408 (H) #9    TAME -> ACCEPT  path +0.428/sh   +23,104  counted
+     20261015-144020 (C) #109  CROC -> ACCEPT  path +0.616/sh   +33,289  counted
+     20261015-144826 (D) #209  CROC -> ACCEPT  path +0.249/sh   +12,931  counted
+     20261015-150439 (A) #9    TAME -> ACCEPT  path +0.275/sh   +14,311  counted
+     20261015-151245 (B) #9    CRZY -> ACCEPT  path +0.240/sh   +12,230  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #109  CROC -> ACCEPT  path -0.154/sh    -8,147  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+     20261015-153705 (H) #109  CROC -> ACCEPT  path +0.247/sh   +12,847  counted
+     20261015-154511 (A) #9    CROC -> ACCEPT  path +0.155/sh    +8,205  counted
+D risk 0.15      flips counted 5 of 6 | mean +2,948/heat  t +2.05  better 4 worse 0  worst +0  best +26,668
+     20261015-134511 (C) #509  TAME -> ACCEPT  path +0.023/sh    +1,212  replay != live
+     20261015-135145 (D) #309  TAME -> ACCEPT  path +0.494/sh   +26,668  counted
+     20261015-142408 (H) #9    TAME -> ACCEPT  path +0.428/sh   +23,104  counted
+     20261015-152858 (D) #9    CRZY -> ACCEPT  path +0.318/sh   +17,507  counted
+     20261015-152858 (D) #209  CRZY -> ACCEPT  path +0.101/sh    +5,352  counted
+     20261015-153705 (H) #109  CROC -> ACCEPT  path +0.247/sh   +12,847  counted
+
+H extra sprints (H starts, A does not): 45
+   mid kept running against the block + 5 ticks: mean +0.037  t +2.71  n 45
+   mid kept running against the block +10 ticks: mean +0.041  t +1.98  n 45
+   mid kept running against the block +20 ticks: mean +0.083  t +2.77  n 45
+
+NLV by the profile each heat RAN (unpaired, different tenders and paths: noisy)
+   A: n 5  mean +58,515  min +9,931  max +122,309
+   B: n 4  mean +47,866  min +24,623  max +73,372
+   C: n 4  mean +38,582  min -3,784  max +75,472
+   D: n 4  mean +43,531  min -4,370  max +93,654
+   H: n 4  mean +41,571  min +1,505  max +93,804

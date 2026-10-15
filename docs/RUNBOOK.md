@@ -130,7 +130,9 @@ other teams there is no real crowd, so any "crowd" the bot sees there is noise; 
 ```bash
 git pull                                                     # once, before the first heat
 python scripts/review_batch.py check                         # OK = config/liability.toml is the frozen bot
-python -m ritc run liability --live -v --forever --record --profile rotate
+python -m ritc run liability --live -v --forever --record --profile alternate   # A/B: A, S, A, S... this session
+python -m ritc run liability --live -v --forever --record --profile S_staging   # staging every heat
+python -m ritc run liability --live -v --forever --record --profile rotate      # least-tried profile in logs/
 ```
 
 `--record` writes the whole market (books, tenders, time & sales) into each heat's journal, so the heats can be
@@ -155,26 +157,31 @@ speculation fines; a -$45k heat on 2026-10-12 is the suspected case). A second l
 while unwinding, so "slow loops" during unwinds are expected above ~120 ms per round trip.
 
 `--profile rotate` runs the profile from `config/liability_profiles.toml` with the fewest heats in `logs/` so
-far, prints `PROFILE <name>` and records it in the journal and the file names. The profiles take turns: A, B, C,
-... then A again. Start it before the heat opens, as always. To force one: `--profile A_default`. An
+far, prints `PROFILE <name>` and records it in the journal and the file names. The profiles take turns:
+A_default, S_staging, A_default, ... Start it before the heat opens, as always. To force one: `--profile A_default`. An
 explicit `--set` still wins over the profile.
 
-**One change per profile** (2026-10-15): every profile is the frozen bot plus ONE change, so a difference can be
-traced to its cause. Retired profiles stay in `config/liability_profiles.toml` as comments. With N profiles each
-runs about once every N heats, so judge on per-block numbers (made vs expected, rested vs crossed), not NLV alone.
-A quiet practice server (few teams) flatters the braver profiles: a crowd-sensitive profile also needs the
-simulator's rival-desk rows before it goes into a competition.
+**Staging (2026-10-15):** the changes that each held up alone are bundled into `S_staging`, which takes turns with the
+frozen `A_default`. `S_staging` becomes the competition default only if it beats A live. Single-change profiles stay in
+`config/liability_profiles.toml` as comments with their evidence (uncomment one to re-test it alone).
 
-| Profile | The one change vs the frozen bot | Evidence before the live test |
+| Profile | What it is | Evidence before the live test |
 |---|---|---|
-| `A_default` | nothing (b19e95c logic, config of commit b04253e) | the baseline |
-| `B_drift_cap20` | `strategy.drift_horizon_ticks = 20`: drift charged over at most 20 ticks of the unwind | real journals +$1.0k/heat (t 0.6); sim +$2.1k (t 7.7), rival markets +$0.1k |
-| `C_flow` | `strategy.liquidity_model = "flow"`: every tender priced off resting at the touch | real journals +$2.3k (t 0.9); sim rival markets -$4.9k (t -2.6), worst heat -$240k: not for a crowded competition |
-| `D_risk015` | `strategy.risk_aversion = 0.15` (was 0.3) | real journals -$0.5k (t -0.3); sim +$1.0k (t 3.1) but rival markets -$1.4k (t -2.7): not for a crowded competition |
-| ~~`E_budget20k`~~ retired | `execution.hold_risk_budget = 20000` (was 40000): crosses more | sim -$1.9k/heat (t -7.4), solo market maker -$11.5k (t -3.1); real 10-14: crossed blocks missed their estimate |
-| ~~`F_aclam1e6`~~ retired | `execution.ac_risk_aversion = 1e-6` (was 3e-7): front-loaded schedule | sim: no effect (the rest-only budget governs most unwinds) |
-| ~~`G_horizon1540`~~ retired | `execution.horizon_min_ticks = 15`, `horizon_max_ticks = 40` (was 30-90) | sim: no effect (-$32/heat) |
-| `H_sprint003` | `strategy.trend_cross_cost = 0.03` (was 0.05): sprints sooner | sim crowded markets +$0.7k (t 2.6), quiet markets -$2.8k..-$9.4k: looks worse on a quiet practice server; judge its sprinted blocks (did the price keep running after the sprint?) |
+| `A_default` | the frozen bot (b19e95c logic, config of commit b04253e) | baseline: 14 crowded evening heats mean $37k, never negative |
+| `S_staging` | `drift_horizon_ticks = 20` + `drift_zero_start = true` + `liquidity_model = "flow_guarded"` (flow pricing unless the crowd alarm is on) | real Rotman heats, paired replay (29 heats): +$6.9k/heat (t 3.6, 13 better / 1 worse, worst -$6.4k). Open risk: the simulator's rival markets reject flow pricing (-$6.7k/heat, worst heat -$240k) |
+
+Windows launchers (WINDOWS_SETUP.md section 5): `scripts\staging.bat` runs every heat with `S_staging`
+(`--profile S_staging --forever --record`); `scripts\ab_default_staging.bat` alternates A_default / S_staging heat by heat (`--profile alternate`). Either way the Mac
+replays each recorded heat under both A and S (`docs/results/screening_2026-10-15/paired.py`), so staging-only heats
+are still a paired comparison.
+
+**Promotion rule for `S_staging`** (judge the tenders it answers differently from A, not NLV alone):
+
+| After | If | Then |
+|---|---|---|
+| each batch | send `logs/data/*.jsonl` | `review_batch.py review` + `docs/results/screening_2026-10-15/paired.py` (every heat replayed under A and S) |
+| 4+ CROWDED heats of S (crowd alarm on, or 5+ traders) | S's extra tenders made money on balance there and no S block lost more than ~$30k | copy the three lines into `config/liability.toml`: the new default |
+| any crowded heat | an S block taken because of flow pricing loses more than ~$30k, or S trails A by > $20k in crowded heats | drop S; go to the competition with A (or A + the drift cap, which passes the sim's rival gate) |
 
 Don't run `ritc record` in a second window next to `--record`: the bot already records into its journal.
 
