@@ -452,3 +452,33 @@ def test_calibrate_reads_market_rows_from_a_bot_journal(tmp_path):
     old = tmp_path / "record-x.jsonl"                          # a plain `ritc record` file still loads
     old.write_text(json.dumps(snap) + "\n")
     assert load_snapshots(str(old)) == [snap]
+
+
+def test_front_cross_sprints_only_the_first_slice_of_each_block():
+    from conftest import make_book
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]}, "strategy": {"trend_exec": False},
+           "execution": {"front_cross": 0.25, "hold_risk_budget": 0}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    s.tickers = ["X"]
+    s.ex.dry_run = True
+
+    def at(pos: int, tick: int) -> Snapshot:
+        snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                        {"X": {"bid": 24.99, "ask": 25.01, "position": pos}})
+        snap._books["X"] = make_book([(24.99, 20000)], [(25.01, 20000)])
+        return snap
+
+    s.unwind_block(at(52_000, 5))
+    assert "X" in s.algo.sprint                                       # a new block: cross its first slice at once
+    s.unwind_block(at(42_000, 6))
+    assert "X" in s.algo.sprint                                       # 19% done: still crossing
+    s.unwind_block(at(38_000, 7))
+    assert "X" in s.algo.blocks and "X" not in s.algo.sprint          # 27% done: rest the remainder as usual
+    off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {**cfg, "execution": {"hold_risk_budget": 0}}))
+    off.tickers, off.ex.dry_run = ["X"], True
+    off.unwind_block(at(52_000, 5))
+    assert "X" not in off.algo.sprint                                 # off by default

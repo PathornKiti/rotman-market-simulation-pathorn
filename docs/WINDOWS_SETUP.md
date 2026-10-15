@@ -123,6 +123,8 @@ must print `OK` (the profile is added on top of it). To run one profile only: `-
 | **Practice: every heat, default, market recorded** | `ritc run liability --live --forever --record` |
 | **Default (= S) every heat, forever, market recorded** | `scripts\staging.bat` (= `ritc run liability --live --forever --record --profile A_default`) |
 | **A/B: default and previous bot take turns (A, P, A, P...), forever, market recorded** | `scripts\ab_default_staging.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,P_previous`) |
+| **ML + front-load A/B (practice only): default vs default + front-load 25% + ML sprint model (A, MF, A, MF...)** | `scripts\ab_ml_front.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,MF_ml_front25`) |
+| **Front-load A/B (practice only): default and default + cross the first 25% of each block at once take turns (A, F, A, F...)** | `scripts\ab_front_load.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,F_front25`) |
 | **ML sprint A/B (practice only): default and default + ML price model take turns (A, M, A, M...)** | `scripts\ab_ml_sprint.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,M_ml_sprint`) |
 | Practice, one profile only, market recorded | `ritc run liability --live --forever --record --profile A_default` |
 | Bot, default (safe) settings, one heat | `ritc run liability --live -v` |

@@ -362,6 +362,8 @@ class LiabilityStrategy(Strategy):
         self.mid_hist: dict[str, list[float]] = {}   # TREND: one mid per tick per stock (last 60)
         self.vol_hist: dict[str, list[float]] = {}   # ML: cumulative traded volume per tick per stock (last 60)
         self.ml_pred: dict[str, float] = {}          # ML: this tick's predicted 10-tick move per stock
+        self.front_seen: set[str] = set()            # FRONT-LOAD: blocks still crossing their first slice
+        self.front_sent0: dict[tuple[str, int], int] = {}   # FRONT-LOAD: (ticker, block start) -> shares sent before
         # ML SPRINT (`sprint_model`, 2026-10-15, practice only): the trained 10-tick price model (ritc.mlmodel) gives
         # the SPRINT rule's expected move against the block instead of the run + book model. Off when unset.
         self.ml_model = mlmodel.load(s["sprint_model"], s.get("sprint_model_key", "price_trees")) \
@@ -1517,9 +1519,30 @@ class LiabilityStrategy(Strategy):
             # rival markets +$8k..+$23k (t 2.4-5.4), solo markets -$13k..-$23k. `initial_sprint_gate` "crowded" (the
             # learned crowd impact > 2 sd) / "leaning" (> 1 sd): race only when other desks dump the same blocks.
             sprint |= {t for t, b in self.algo.blocks.items() if now - b.start_tick < first}
+        # FRONT-LOAD (`front_cross`, 2026-10-15, practice A/B): cross the first `front_cross` share of every new block
+        # at once (sprint mode: up to urgent_participation x depth per loop within max_slippage), then rest the rest as
+        # usual. Recorded paths + books, 189 real blocks: 25% about neutral on average (-$0.2k..+$2.8k/heat), worst heat
+        # -$44k -> -$9k (the losing runs start right after the tender). 0 = off.
+        front = float(self.cfg.get("execution", {}).get("front_cross", 0.0))
+        front_set: set[str] = set()
+        if front > 0:
+            for t, b in self.algo.blocks.items():
+                size = abs(b.start_pos - b.target)
+                # shares SENT to cross since the block started: positions lag in-flight orders (sim rehearsal: "25%"
+                # crossed 26-73% judged on positions alone), and an IOC never fills more than it was sent
+                sent = self.ex.tca.sent[(t, "aggressive")]
+                sent -= self.front_sent0.setdefault((t, b.start_tick), sent)
+                done = abs(b.start_pos - snap.positions.get(t, 0))
+                if size and max(sent, done) < front * size:
+                    front_set.add(t)
+            sprint |= front_set
         if self.sprint_walk:
             sprint = self.cap_sprint_walk(sprint, snap)
         for t in sprint - self.algo.sprint:
+            if t in front_set:
+                log.info("FRONT %s: crossing the first %.0f%% of our %+d block at once", t, 100 * front,
+                         snap.positions.get(t, 0))
+                continue
             log.info("SPRINT %s: next %s ticks expected %+.3f against our %+d block (run %+.3f, book asym %+.3f), "
                      "crossing costs %.3f: crossing%s", t, self.p.get("trend_window", 10),
                      self.predicted_against(t, snap.positions.get(t, 0), snap), snap.positions.get(t, 0),
@@ -1527,8 +1550,14 @@ class LiabilityStrategy(Strategy):
                      self.book_asym(t, snap) if self.book_signal_on() else 0.0,
                      self.cross_threshold(t, snap.positions.get(t, 0), snap), " [ML model]" if self.ml_model else "")
         for t in self.algo.sprint - sprint:
-            if t in self.algo.blocks:
+            if t in self.algo.blocks and t not in self.front_seen:
                 log.info("SPRINT %s off: resting again", t)
+        if front > 0:
+            for t in self.front_seen & set(self.algo.blocks) - front_set:
+                b = self.algo.blocks[t]
+                log.info("FRONT %s done: %+d of the %+d block crossed; resting the rest", t,
+                         b.start_pos - snap.positions.get(t, 0), b.start_pos - b.target)
+            self.front_seen = front_set
         self.algo.sprint = sprint
         self.algo.passive -= self.algo.sprint
         if self.algo.active and self.fresh_unwind and not self.ex.dry_run:

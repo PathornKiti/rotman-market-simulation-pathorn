@@ -1,4 +1,22 @@
-# Handoff: 2026-10-15 late — S PROMOTED TO DEFAULT (START HERE)
+# Handoff: 2026-10-15 night — ML batch reviewed, FRONT-LOAD added (START HERE)
+
+**ML batch (20:36-21:41, 5 A + 4 M_ml_sprint, 0 errors, no losing heat):** out of time the tree beats the linear model in
+9/9 heats (pooled R2 0.40 vs 0.34, paired t 6.6; top-10% signals 93% right): one heat short of score.py's verdict, all
+three pass rules met so far. Money: unmeasurable at n 4/5 (M $64.4k vs A $53.2k unpaired; the crowd alarm fired in 3 A
+heats and no M heat). M sprints 5.8/heat vs 4.0, right at +5 ticks 17/23 (t 2.4) vs 12/20 (t 1.8). M's -$16.2k TAME
+block: the model said cross at the first tick and did; the price ran 0.51 in 16 s on a 0.145 edge (price risk).
+**FRONT-LOAD:** `execution.front_cross` (0 = off): a new block stays in sprint mode until that share of it has been
+SENT to cross (positions lag in-flight orders), then rests. Profile `F_front25`, launcher `scripts\ab_front_load.bat`
+(`alternate:A_default,F_front25`). Evidence docs/results/exits_2026-10-15/ (189 real blocks: ~neutral mean, worst heat
+-$44k -> -$9k; stop-losses worse at every level). Sim rehearsal: 50k/30k blocks crossed 30-31% up front (25% target +
+one loop); 10k blocks up to 49%. Unknown until live: our crossing's later effect on the mid. 185 tests pass.
+**User's choice: A vs MF** (`MF_ml_front25` = front_cross 0.25 + ML sprint model), launcher `scripts\ab_ml_front.bat`.
+Calibrated-sim rehearsal (RITC_STRESS=real=1): front slices 16-32% of 50-64k blocks, no errors. Judge the two parts
+separately in MF heats: FRONT lines (slice size, fills vs mid) and [ML model] SPRINT lines (price kept running after?).
+
+---
+
+# Handoff: 2026-10-15 late — S PROMOTED TO DEFAULT
 
 **User decision:** S_staging is the default. `config/liability.toml` now has `drift_horizon_ticks = 20`,
 `drift_zero_start = true`, `liquidity_model = "flow_guarded"` (was "adaptive"). `review_batch.py check` = frozen b04253e +

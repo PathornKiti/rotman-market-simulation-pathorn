@@ -1,0 +1,16 @@
+EXIT RULES on recorded paths + books (2026-10-15, 189 single-tender fixed blocks, 46 real heats; exits.py)
+Losing blocks (27, -$222k live): 3 acceptance (every exit loses, -$19k), 6 unwind (a steady exit wins, -$13k),
+18 price risk (edge fine, the price ran ~0.5/sh against; only an instant exit wins, -$190k).
+
+                 resting 1250 sh/tick                       resting 2500 sh/tick
+rule         vs steady $/heat (t)  worst heat  heat sd   vs steady $/heat (t)  worst heat  heat sd
+steady            0                 -44.0k      37.2k        0                  -15.0k      27.8k
+stop 0.10      -6.9k (-2.65)        -17.6k      35.6k     -5.7k (-3.53)          -8.0k      27.8k
+stop 0.30      -7.7k (-3.93)          ...                 -4.6k (-3.77)
+front 25%      -0.2k (-0.11)         -8.9k      27.5k     +2.8k (+2.48)          +6.3k      22.7k
+front 50%      -1.2k (-0.39)         +5.0k      21.1k     +2.8k (+1.40)         +10.7k      19.5k
+front 100%    -12.2k (-2.73)                             -10.4k (-3.60)
+Stop-losses fire after the run and on noise that reverts: worse at every level. Front-loading 25-50% (cross that share
+right after accepting, rest the remainder): mean about neutral, heat sd -20..-43%, worst heat -44k -> -9k..+11k.
+Caveat: the path model charges the book walk but not our own crossing's later effect on the mid (the sim, which has
+impact, rejected initial_sprint_gate = "always" in solo markets -$13..23k; rival markets +$8..23k). Needs a live A/B.

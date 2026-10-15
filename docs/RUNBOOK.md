@@ -132,6 +132,8 @@ git pull                                                     # once, before the 
 python scripts/review_batch.py check                         # OK = config/liability.toml is the frozen bot (+ S, 10-15)
 python -m ritc run liability --live -v --forever --record --profile alternate:A_default,P_previous   # A/B: A, P, A, P... this session
 python -m ritc run liability --live -v --forever --record --profile alternate:A_default,M_ml_sprint  # ML sprint A/B (practice only)
+python -m ritc run liability --live -v --forever --record --profile alternate:A_default,F_front25    # front-load A/B (practice only)
+python -m ritc run liability --live -v --forever --record --profile alternate:A_default,MF_ml_front25  # ML + front-load A/B (user's pick)
 python -m ritc run liability --live -v --forever --record --profile A_default   # the default every heat
 python -m ritc run liability --live -v --forever --record --profile rotate      # least-tried profile in logs/
 ```
