@@ -26,6 +26,14 @@ drift_horizon_ticks = 20      # PROMOTED 2026-10-15 (user decision, S_staging): 
                               # unwind (was the whole unwind time). Real 17 journals +$1.0k (t 0.6); sim +$2.1k (t 7.7)
 drift_zero_start = true       # PROMOTED 2026-10-15 (S_staging): drift EWMA starts at 0, not the heat's first 1-tick change
                               # (early tenders were declined on a one-tick fluke). Sim +$0.5k (t 3.9), real 0
+sprint_model = "docs/results/ml_2026-10-16/models.json"   # PROMOTED 2026-10-16 (user decision, ADAPTIVE MF): v2 model, the
+                              # 10-tick price model drives the SPRINT rule (ritc.mlmodel). v2 = refit 10-16 on 81 heats
+                              # (docs/results/ml_2026-10-16/report.txt: held-out day R2 0.416 vs v1 0.412, linear 0.283).
+                              # v1 (ml_2026-10-15): out-of-time 35 heats R2 0.405 vs 0.279 linear, 33/35 (t 5.6). Live A vs MF, 26 quiet heats: MF $65.1k vs $50.1k
+                              # (t 1.7, mostly the tender draw), losing blocks 2/61 vs 12/67 (p 0.007). "" = off.
+sprint_model_crowd_guard = true   # ...but while the crowd alarm is on (crowded()), sprint on the run + book model again:
+                              # no crowded live heat has run the ML sprint; sim rival markets: ML part +$0.6k (t 0.8),
+                              # worst crowded market -$10.7k. Logs "ML SPRINT OFF/ON again" when it switches.
 unwind_ticks_per_share = 0.0005  # expected unwind time per share (drift exposure)
 min_ticks_to_unwind = 5       # 2027 brief: no end-of-case fine (closed at last price). 15 -> 5: +$1.1-1.8k (t 2.2-3.0), holdout +$0.4-0.6k (t 1.9-2.2), hostile +$0.5-2.0k (t 1.5-1.8)
 risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind ticks)
@@ -195,6 +203,13 @@ stuck_horizon_ticks = 30      # fills over the last `window` ticks need more tha
 trend_unwind_z = 0            # TREND: cross instead of resting when the drift runs this many sd against the block.
                               # 2: trending (Kyle) market +$1.1k (t 1.7), calibrated -$0.4k, hostile -$2.3k. Turn on only
                               # if `ritc calibrate` shows a variance ratio clearly above 1 on real recordings.
+front_cross = 0.25            # PROMOTED 2026-10-16 (ADAPTIVE MF): cross the first 25% of every new block at once (sent
+                              # shares, so ~28% live), then rest / sprint the rest. Live: losing blocks 12 -> 2. Recorded
+                              # crowded heats: about neutral, worst heat -$1.6k -> +$5k; sim rival markets +$3.0k (t 4.2),
+                              # but quiet / thin sim markets -$8k (the slice walks the book). 0 = off.
+front_skip_favourable = 0.0   # FRONT SKIP (2026-10-16, practice: profile K_front_skip = 0.03; 0 = off): skip a block's front
+                              # slice when the SPRINT predictor expects >= this $ move IN OUR FAVOUR over the next 10 ticks
+                              # (decided once per block). Recorded paths, 23 out-of-time A heats: +$1.7..2.8k/heat (t 3.0-3.6).
 initial_sprint_ticks = 3      # RACE THE CROWD (default since 2026-10-13, passes the testing rule): once the crowd learner has
 initial_sprint_gate = "crowded"   # detected other desks dumping the same blocks (crowded(): impact > 2 sd), cross the first
                               # 3 ticks of every new block (Obizhaeva-Wang-style initial trade), then the usual unwind.

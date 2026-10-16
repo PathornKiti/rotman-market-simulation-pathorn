@@ -1,0 +1,47 @@
+heats: TRAIN 62 (20261014-221557 .. 20261015-235026), TEST 19 (20261016-090017 .. 20261016-205127)
+price rows: TRAIN 70268, TEST 21594
+
+CV on TRAIN only (10-fold by heat), R2 of the 10-tick move:
+  depth 2 trees 100 leaf 20: CV +0.348   in-sample +0.359   gap +0.010
+  depth 2 trees 100 leaf 50: CV +0.348   in-sample +0.359   gap +0.010
+  depth 2 trees 200 leaf 20: CV +0.358   in-sample +0.376   gap +0.018
+  depth 2 trees 200 leaf 50: CV +0.359   in-sample +0.376   gap +0.018
+  depth 2 trees 400 leaf 20: CV +0.362   in-sample +0.391   gap +0.029
+  depth 2 trees 400 leaf 50: CV +0.364   in-sample +0.391   gap +0.027
+  depth 3 trees 100 leaf 20: CV +0.367   in-sample +0.394   gap +0.027
+  depth 3 trees 100 leaf 50: CV +0.367   in-sample +0.394   gap +0.027
+  depth 3 trees 200 leaf 20: CV +0.370   in-sample +0.413   gap +0.043
+  depth 3 trees 200 leaf 50: CV +0.371   in-sample +0.411   gap +0.040
+  depth 3 trees 400 leaf 20: CV +0.369   in-sample +0.438   gap +0.068
+  depth 3 trees 400 leaf 50: CV +0.371   in-sample +0.435   gap +0.063
+  depth 4 trees 100 leaf 20: CV +0.372   in-sample +0.427   gap +0.055
+  depth 4 trees 100 leaf 50: CV +0.372   in-sample +0.424   gap +0.053
+  depth 4 trees 200 leaf 20: CV +0.373   in-sample +0.452   gap +0.079
+  depth 4 trees 200 leaf 50: CV +0.372   in-sample +0.448   gap +0.077
+  depth 4 trees 400 leaf 20: CV +0.368   in-sample +0.487   gap +0.119
+  depth 4 trees 400 leaf 50: CV +0.368   in-sample +0.480   gap +0.112
+chosen: {'max_depth': 4, 'max_iter': 200, 'min_samples_leaf': 20} (CV +0.373); v1 used depth 3 / 200 trees / leaf 20
+
+TEST day (never used above), per heat R2:  linear_v2   trees_v1   trees_v2
+  20261016-090017  +0.220   +0.214   +0.229
+  20261016-090758  +0.273   +0.451   +0.438
+  20261016-091602  +0.319   +0.449   +0.443
+  20261016-092407  +0.340   +0.471   +0.479
+  20261016-093213  +0.228   +0.406   +0.409
+  20261016-094018  +0.261   +0.373   +0.388
+  20261016-094823  +0.284   +0.358   +0.336
+  20261016-095628  +0.251   +0.292   +0.298
+  20261016-100433  +0.302   +0.478   +0.502
+  20261016-101238  +0.132   +0.318   +0.328
+  20261016-102043  +0.194   +0.353   +0.343
+  20261016-102848  +0.274   +0.371   +0.364
+  20261016-103654  +0.401   +0.483   +0.509
+  20261016-104459  +0.191   +0.445   +0.440
+  20261016-105305  +0.436   +0.447   +0.464
+  20261016-110111  +0.203   +0.348   +0.297
+  20261016-203516  -0.041   +0.018   +0.053
+  20261016-204321  +0.297   +0.416   +0.440
+  20261016-205127  +0.099   +0.364   +0.380
+pooled TEST R2: linear +0.283, trees v1 +0.412, trees v2 +0.416; v2 better in 12/19 heats (paired t +0.90); top-10% signals right: v1 90%, v2 91%
+VERDICT: PASS - v2 replaces v1
+saved models.json: same hyperparameters refit on all 81 heats (CV +0.389); models_train_only.json = the artifact the TEST day scored

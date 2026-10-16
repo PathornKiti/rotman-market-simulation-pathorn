@@ -26,7 +26,10 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 FROZEN = "b04253e"          # commit whose config/liability.toml was the frozen bot until 2026-10-15
 PROMOTED = {"strategy.drift_horizon_ticks": 20, "strategy.drift_zero_start": True,     # S_staging, made the default
-            "strategy.liquidity_model": "flow_guarded"}                                # 2026-10-15 (user decision)
+            "strategy.liquidity_model": "flow_guarded",                                # 2026-10-15 (user decision)
+            "strategy.sprint_model": "docs/results/ml_2026-10-16/models.json",          # ADAPTIVE MF, made the default
+            "strategy.sprint_model_crowd_guard": True, "execution.front_cross": 0.25,   # 2026-10-16 (user decision)
+            "execution.front_skip_favourable": 0.0}                                    # FRONT SKIP: off by default
 SECTIONS = ("case", "strategy", "execution", "risk")
 OVERSTATE = 0.054           # the recorded-path estimate overstates real blocks by this much/share (17 evening heats)
 FEE = 0.02
@@ -85,7 +88,7 @@ def cmd_check(args: list[str]) -> int:
     if d:
         print("NOT the frozen bot - these trading settings differ:\n  " + "\n  ".join(d))
         return 1
-    print(f"OK: config/liability.toml{' + ' + ' '.join(sets) if sets else ''} = the frozen bot ({FROZEN} + S_staging)")
+    print(f"OK: config/liability.toml{' + ' + ' '.join(sets) if sets else ''} = the frozen bot ({FROZEN} + S_staging + adaptive MF)")
     return 0
 
 

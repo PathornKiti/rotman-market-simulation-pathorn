@@ -76,8 +76,9 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     from ritc.practice import load_profiles, pick_profile, variance_ratio
 
     profiles = load_profiles("liability")
-    assert list(profiles)[:2] == ["A_default", "P_previous"]         # the default (= S since 10-15) vs the previous bot
-    assert profiles["A_default"] == {}
+    assert list(profiles)[:3] == ["A_default", "S_previous", "P_previous"]   # the default (adaptive MF since 10-16), the
+    assert profiles["A_default"] == {}                                           # previous default and the bot before it
+    assert profiles["S_previous"] == {"execution.front_cross": 0.0, "strategy.sprint_model": ""}
     assert profiles["P_previous"]["strategy.liquidity_model"] == "adaptive"
     assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
     (tmp_path / "liability-0.jsonl").write_text(json.dumps(                              # Ctrl-C before the heat
@@ -86,7 +87,7 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
     (tmp_path / "liability-1.jsonl").write_text(json.dumps(
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n"
         + json.dumps({"k": "tick", "tick": 1}) + "\n")
-    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "P_previous"         # least-tried next
+    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "S_previous"         # least-tried next
     name, prof = pick_profile("liability", "P_previous", str(tmp_path))
     assert prof["strategy.drift_horizon_ticks"] == 0
     assert [pick_profile("liability", "alternate:A_default,P_previous", str(tmp_path), heat=h)[0]

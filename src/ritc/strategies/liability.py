@@ -364,6 +364,7 @@ class LiabilityStrategy(Strategy):
         self.ml_pred: dict[str, float] = {}          # ML: this tick's predicted 10-tick move per stock
         self.front_seen: set[str] = set()            # FRONT-LOAD: blocks still crossing their first slice
         self.front_sent0: dict[tuple[str, int], int] = {}   # FRONT-LOAD: (ticker, block start) -> shares sent before
+        self.front_skip: dict[tuple[str, int], bool] = {}    # FRONT SKIP: (ticker, block start) -> slice skipped
         # ML SPRINT (`sprint_model`, 2026-10-15, practice only): the trained 10-tick price model (ritc.mlmodel) gives
         # the SPRINT rule's expected move against the block instead of the run + book model. Off when unset.
         self.ml_model = mlmodel.load(s["sprint_model"], s.get("sprint_model_key", "price_trees")) \
@@ -371,6 +372,11 @@ class LiabilityStrategy(Strategy):
         if self.ml_model:
             log.info("ML SPRINT model: %s (%s, %d trees)", s["sprint_model"], s.get("sprint_model_key", "price_trees"),
                      len(self.ml_model.get("trees", [])))
+        # CROWD GUARD (`sprint_model_crowd_guard`, 2026-10-16): while crowded() the SPRINT rule uses the run + book model
+        # again, not the ML model. The model has no crowded live heats; sim rival markets: ML part +$0.6k (t 0.8), worst
+        # crowded market -$10.7k (worst heat -$244k -> -$312k). FRONT-LOAD is kept either way.
+        self.ml_crowd_guard = bool(s.get("sprint_model_crowd_guard", False))
+        self.ml_guarded = False                      # last logged state of the guard
         self.own_flow: dict[str, list[float]] = {}   # signed shares WE crossed per tick per stock (aligned to mid_hist)
         self.own_seen = 0                             # tca.fills already counted into own_flow
         # BOOK SIGNAL: features (run, asym, ofi) at the last window per stock, and the sums of x x', x y, y y, n over
@@ -464,6 +470,10 @@ class LiabilityStrategy(Strategy):
         self.last_tick = snap.tick
         if self.crowd_learn:
             self._learn_crowd(snap)
+        if self.ml_model is not None and self.ml_crowd_guard and self.crowded() != self.ml_guarded:
+            self.ml_guarded = self.crowded()
+            log.info("ML SPRINT %s", "OFF: crowd alarm on, sprinting on the run + book model" if self.ml_guarded
+                     else "ON again: no crowd")
         own: dict[str, float] = {}
         fills = self.ex.tca.fills
         for f in fills[self.own_seen:]:
@@ -778,11 +788,36 @@ class LiabilityStrategy(Strategy):
                                    (ask - bid) if bid and ask else 0.0, snap.tick, ticker)
         return mlmodel.predict(self.ml_model, f) if f else None
 
+    def skip_front(self, t: str, b, snap: Snapshot) -> bool:
+        """
+        FRONT SKIP (`front_skip_favourable`, 2026-10-16, practice A/B; 0 = off): decided once per block, at its first
+        loop: skip the front slice when the SPRINT predictor (ML model, or run + book model while the crowd guard is on)
+        expects the next 10 ticks to move at least this much IN OUR FAVOUR. Recorded paths, 23 out-of-time A heats,
+        105 blocks (33 skipped at 0.03): vs front 25% +$2.8k/heat (t 3.0) resting 1,250 sh/tick, +$1.7k (t 3.6) at
+        2,500; both halves positive, crowd-alarm heats +$2.9..5.0k (n 3), worst block unchanged. Bigger slices when the
+        prediction is against us added nothing (+$0.2..0.7k, t < 1). Predicted >= 0.03 our way: the mid moved our way.
+        """
+        thr = float(self.cfg.get("execution", {}).get("front_skip_favourable", 0.0))
+        if thr <= 0:
+            return False
+        key = (t, b.start_tick)
+        if key not in self.front_skip:
+            fav = -self.predicted_against(t, b.start_pos - b.target, snap)     # + = expected move in our favour
+            self.front_skip[key] = fav >= thr
+            if self.front_skip[key]:
+                log.info("FRONT %s skipped: next 10 ticks expected %+.3f our way (>= %.2f)%s", t, fav, thr,
+                         " [ML model]" if self.ml_on() else "")
+        return self.front_skip[key]
+
+    def ml_on(self) -> bool:
+        """The ML model drives the SPRINT rule now: loaded, and not switched off by the crowd guard."""
+        return self.ml_model is not None and not (self.ml_crowd_guard and self.crowded())
+
     def predicted_against(self, ticker: str, held: int, snap: Snapshot) -> float:
         """$ the next window is expected to move against a position of sign `held` (ML, book model or momentum)."""
         if not held:
             return 0.0
-        if self.ml_model is not None and ticker in self.ml_pred:
+        if self.ml_on() and ticker in self.ml_pred:
             return (-1 if held > 0 else 1) * self.ml_pred[ticker]
         m = self.book_model()
         if m is not None:
@@ -1533,7 +1568,7 @@ class LiabilityStrategy(Strategy):
                 sent = self.ex.tca.sent[(t, "aggressive")]
                 sent -= self.front_sent0.setdefault((t, b.start_tick), sent)
                 done = abs(b.start_pos - snap.positions.get(t, 0))
-                if size and max(sent, done) < front * size:
+                if size and max(sent, done) < front * size and not self.skip_front(t, b, snap):
                     front_set.add(t)
             sprint |= front_set
         if self.sprint_walk:
@@ -1548,7 +1583,7 @@ class LiabilityStrategy(Strategy):
                      self.predicted_against(t, snap.positions.get(t, 0), snap), snap.positions.get(t, 0),
                      self.run_against(t, snap.positions.get(t, 0)),
                      self.book_asym(t, snap) if self.book_signal_on() else 0.0,
-                     self.cross_threshold(t, snap.positions.get(t, 0), snap), " [ML model]" if self.ml_model else "")
+                     self.cross_threshold(t, snap.positions.get(t, 0), snap), " [ML model]" if self.ml_on() else "")
         for t in self.algo.sprint - sprint:
             if t in self.algo.blocks and t not in self.front_seen:
                 log.info("SPRINT %s off: resting again", t)

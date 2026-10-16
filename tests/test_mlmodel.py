@@ -55,3 +55,61 @@ def test_ml_sprint_model_drives_the_expected_move_against_the_block(tmp_path):
     assert s.predicted_against("X", -50_000, snap) == 0.2 and s.predicted_against("X", 50_000, snap) == -0.2
     assert [pick_profile("liability", "alternate:A_default,M_ml_sprint", heat=h)[0] for h in (1, 2, 3)] == \
         ["A_default", "M_ml_sprint", "A_default"]
+
+
+def test_crowd_guard_hands_the_sprint_back_to_the_run_and_book_model(tmp_path):
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.execution import Executor
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    leaf = [{"leaf": True, "value": 0.2, "f": 0, "thr": 0, "left": 0, "right": 0}]
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"models": {"price_trees": {"kind": "trees", "baseline": 0.0, "trees": [leaf],
+                                                           "cols": mlmodel.PRICE_COLS}}}))
+    for guard in (False, True):
+        cfg = {"case": {"tickers": ["X"]}, "strategy": {"sprint_model": str(path), "sprint_model_crowd_guard": guard,
+                                                        "crowd_learn": True, "trend_learn": True}}
+        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        s.sync_tickers(Snapshot({"tick": 1}, {"X": {"bid": 24.99, "ask": 25.01}}))
+        for tick in range(1, 26):
+            snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                            {"X": {"bid": 24.99, "ask": 25.01, "volume": 1000 * tick}})
+            snap._books["X"] = OrderBook("X")
+            s._update_drift(snap)
+        assert s.ml_on() and s.predicted_against("X", -50_000, snap) == 0.2       # quiet: the model decides
+        s.crowd.mean, s.crowd.sd, s.crowd.n = 0.03, 0.006, 8                        # crowd alarm on (> 2 sd)
+        assert s.crowded()
+        if guard:   # flat mids: the run + book model expects no move, so no sprint while crowded
+            assert not s.ml_on() and s.predicted_against("X", -50_000, snap) == 0.0
+        else:
+            assert s.ml_on() and s.predicted_against("X", -50_000, snap) == 0.2
+
+
+def test_front_skip_drops_the_slice_only_when_the_move_is_expected_our_way(tmp_path):
+    from ritc.core.algo import Block
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.execution import Executor
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    leaf = [{"leaf": True, "value": 0.2, "f": 0, "thr": 0, "left": 0, "right": 0}]      # the model: price up 20c
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"models": {"price_trees": {"kind": "trees", "baseline": 0.0, "trees": [leaf],
+                                                           "cols": mlmodel.PRICE_COLS}}}))
+    for thr, long_skipped in ((0.0, False), (0.03, True), (0.25, False)):
+        cfg = {"case": {"tickers": ["X"]}, "strategy": {"sprint_model": str(path)},
+               "execution": {"front_cross": 0.25, "front_skip_favourable": thr}}
+        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        s.sync_tickers(Snapshot({"tick": 1}, {"X": {"bid": 24.99, "ask": 25.01}}))
+        for tick in range(1, 26):
+            snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                            {"X": {"bid": 24.99, "ask": 25.01, "volume": 1000 * tick}})
+            snap._books["X"] = OrderBook("X")
+            s._update_drift(snap)
+        long_block = Block("X", 50_000, 0, 25, 60)          # we bought: a rise is in our favour -> skip the slice
+        short_block = Block("X", -50_000, 0, 26, 60)        # we sold: a rise is against us -> keep the slice
+        assert s.skip_front("X", long_block, snap) is long_skipped
+        assert s.skip_front("X", short_block, snap) is False
+        s.ml_pred["X"] = -0.2                                # decided once per block: a later prediction changes nothing
+        assert s.skip_front("X", long_block, snap) is long_skipped

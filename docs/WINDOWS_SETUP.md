@@ -89,43 +89,31 @@ Order-by-order lines are only in the data file (`-v` puts them back in the log).
 (started after the last one, or Ctrl-C while waiting) deletes its own empty files. Don't run `ritc record` next
 to it.
 
-**Default run (one window, every heat with the default = S since 2026-10-15, market recorded):** double-click
-`scripts\staging.bat`, or in the activated terminal:
-```powershell
-scripts\staging.bat
-```
-It checks the config (`review_batch.py check` must say OK), then runs
-`ritc run liability --live --forever --record --profile A_default` until Ctrl-C. Each heat's log and data file carry
-`__A_default` in the name. Every heat is still compared with the previous bot afterwards on the Mac (the replay runs
-each recorded heat under both), so a staging-only session is a fair test.
+**Default run (one window, every heat with the default = adaptive MF since 2026-10-16, market recorded):**
+double-click `scripts\staging.bat`. It checks the config (`review_batch.py check` must say OK), then runs
+`ritc run liability --live --forever --record --profile A_default` until Ctrl-C. Each heat's files carry `__A_default`.
 
-**A/B run (one window, the default and the previous bot take turns: A, P, A, P, ... counted from this session, market recorded):**
-`scripts\ab_default_staging.bat` (`--profile alternate:A_default,P_previous`, old logs do not matter), or the older least-tried rotation:
-```powershell
-ritc run liability --live --forever --record --profile rotate
-```
-Same as above, but each heat runs the profile from `config\liability_profiles.toml` with the fewest heats in
-`logs\` so far: `A_default` (the default, = S since 2026-10-15) and `P_previous` (the old frozen bot, RUNBOOK.md section 6) take
-turns: A, P, A, P, ... The heat's first lines print `PROFILE <name>`, and the file names carry it:
+**A/B run (one window, two profiles take turns, counted from this session, market recorded):**
+- **Next test:** `scripts\ab_front_skip.bat` = the default and the default + front skip (A, K, A, K, ...).
+- `scripts\ab_default_previous.bat` = the default and the previous default S (A, S, A, S, ...).
+
+The heat's first lines print `PROFILE <name>`, and the file names carry it:
 
 ```
-logs\liability-20261016-140512__P_previous__drift_horizon_ticks=0+drift_zero_start=False+liquidity_model=adaptive.log
-logs\data\liability-20261016-140512__P_previous__drift_horizon_ticks=0+drift_zero_start=False+liquidity_model=adaptive.jsonl
+logs\liability-20261017-140512__K_front_skip__front_skip_favourable=0.03.log
+logs\data\liability-20261017-140512__K_front_skip__front_skip_favourable=0.03.jsonl
 ```
 
-Before the session, after copying the old logs to the Mac: move the old `logs\` folder away (e.g. rename it
-`logs_2026-10-14`). `rotate` counts every journal in `logs\`, so old `A_default` heats would make it run B
-several heats in a row instead of alternating. Check the config first: `python scripts\review_batch.py check`
-must print `OK` (the profile is added on top of it). To run one profile only: `--profile A_default`.
+Copy both folders to the Mac after the batch; it runs `scripts/ab_compare.py` on them. `--profile rotate` (least-tried
+profile in `logs\`) still works, but move the old `logs\` folder away first: it counts every journal there.
 
 | What | Command |
 |---|---|
 | **Practice: every heat, default, market recorded** | `ritc run liability --live --forever --record` |
-| **Default (= S) every heat, forever, market recorded** | `scripts\staging.bat` (= `ritc run liability --live --forever --record --profile A_default`) |
-| **A/B: default and previous bot take turns (A, P, A, P...), forever, market recorded** | `scripts\ab_default_staging.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,P_previous`) |
-| **ML + front-load A/B (practice only): default vs default + front-load 25% + ML sprint model (A, MF, A, MF...)** | `scripts\ab_ml_front.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,MF_ml_front25`) |
-| **Front-load A/B (practice only): default and default + cross the first 25% of each block at once take turns (A, F, A, F...)** | `scripts\ab_front_load.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,F_front25`) |
-| **ML sprint A/B (practice only): default and default + ML price model take turns (A, M, A, M...)** | `scripts\ab_ml_sprint.bat` (= `ritc run liability --live --forever --record --profile alternate:A_default,M_ml_sprint`) |
+| **Default (= adaptive MF) every heat, forever, market recorded** | `scripts\staging.bat` (= `ritc run liability --live --forever --record --profile A_default`) |
+| **Next A/B: default vs default + front skip (A, K, A, K...)** | `scripts\ab_front_skip.bat` (= `... --profile alternate:A_default,K_front_skip`) |
+| **A/B: default vs previous default S (A, S, A, S...)** | `scripts\ab_default_previous.bat` (= `... --profile alternate:A_default,S_previous`) |
+| Older A/Bs (history): A vs P, A vs MF, A vs F, A vs M | `scripts\ab_default_staging.bat`, `ab_ml_front.bat`, `ab_front_load.bat`, `ab_ml_sprint.bat` |
 | Practice, one profile only, market recorded | `ritc run liability --live --forever --record --profile A_default` |
 | Bot, default (safe) settings, one heat | `ritc run liability --live -v` |
 | Bot, **aggressive profile** (see PRACTICE_PLAN.md decision rules) | `ritc run liability --live -v --set strategy.liquidity_model=flow` |

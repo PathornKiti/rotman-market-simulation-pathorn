@@ -9,29 +9,47 @@
 # crowded markets reject it, bundle -$7.5k/heat t -3.9, worst heat -$240k; live, S has not yet run with the crowd alarm on).
 # Single-change profiles below were screened against the OLD default; re-test any of them against the new A_default.
 
-[A_default]                           # THE DEFAULT (= S_staging since 2026-10-15): no overrides
+# PROMOTED 2026-10-16 (user decision): ADAPTIVE MF is the default = S + front_cross 0.25 + the ML sprint model, with the
+# ML sprint switched off while the crowd alarm is on (sprint_model_crowd_guard). S_previous = the default until 10-16.
 
-[P_previous]                          # the previous frozen bot (default until 2026-10-15)
+[A_default]                           # THE DEFAULT (= adaptive MF since 2026-10-16): no overrides
+
+[S_previous]                          # the default 2026-10-15 .. 10-16 (S_staging): no front-load, no ML sprint
+"execution.front_cross" = 0.0
+"strategy.sprint_model" = ""
+
+[P_previous]                          # the frozen bot before S (default until 2026-10-15)
+"execution.front_cross" = 0.0
+"strategy.sprint_model" = ""
 "strategy.drift_horizon_ticks" = 0
 "strategy.drift_zero_start" = false
 "strategy.liquidity_model" = "adaptive"
 # S vs P, real Rotman heats (paired replay): 29 heats +$6.9k/heat (t 3.6); 18-heat live A/S holdout (evening 10-15, quiet)
 # +$3.3k (t 1.2, 0.054 haircut) .. +$5.1k (t 1.9, live P&L for S-taken blocks); 47 pooled +$5.4k (t 3.5).
 
+[K_front_skip]                        # FRONT SKIP (2026-10-16, practice A/B vs the new default): no front slice for a block
+"execution.front_skip_favourable" = 0.03   # the predictor expects to move >= $0.03 our way in the next 10 ticks (log:
+# "FRONT X skipped"). Recorded paths + books, 23 out-of-time A heats, 105 blocks (33 skipped): vs front 25% +$2.8k/heat
+# (t 3.0) resting 1,250 sh/tick, +$1.7k (t 3.6) at 2,500; both halves +; crowd-alarm heats +$2.9..5.0k (n 3); worst block
+# unchanged. Live A/B: scripts\ab_front_skip.bat (A_default, K_front_skip, A, K...).
+
 [MF_ml_front25]                       # ML SPRINT + FRONT-LOAD together (user's choice 2026-10-15, practice only): cross the
 "strategy.sprint_model" = "docs/results/ml_2026-10-15/models.json"   # first 25% of every block at once, then the
 "execution.front_cross" = 0.25        # ML price model drives the SPRINT rule for the rest. Live A/B:
+"strategy.sprint_model_crowd_guard" = false   # since 10-16 = the default WITHOUT the crowd guard (what ran 10-15/16)
 # scripts\ab_ml_front.bat (A_default, MF_ml_front25, A, MF...). Judge the parts separately: FRONT lines (slice cost) and
 # [ML model] SPRINT lines (did the price keep running after each sprint).
 
 [F_front25]                           # FRONT-LOAD (2026-10-15, practice only): cross the first 25% of every block at once
 "execution.front_cross" = 0.25        # (sprint mode, within max_slippage), rest the remainder as usual. Recorded paths +
+"strategy.sprint_model" = ""          # since 10-16: = the default without the ML sprint
 # books, 189 real blocks: about neutral on average (-$0.2k..+$2.8k/heat), worst heat -$44k -> -$9k, losing blocks
 # -$217k -> -$61k (docs/results/exits_2026-10-15). Not in the sim/replay: our crossing's later effect on the mid.
 # Live A/B: scripts\ab_front_load.bat (A_default, F_front25, A, F...).
 
 [M_ml_sprint]                         # ML SPRINT (2026-10-15, practice only): the trained 10-tick price model (boosted
 "strategy.sprint_model" = "docs/results/ml_2026-10-15/models.json"   # trees, ritc.mlmodel) gives the SPRINT rule's
+"execution.front_cross" = 0.0         # since 10-16: = the default without the front-load
 # expected move against the block instead of the run + book model. Held-out heats: R2 0.35 vs 0.23 for the linear model,
 # top-10% signals 90% right. Replay of 12 heats: sprint starts 39 -> 61. Unwind P&L is NOT measurable offline: judge it
 # live with scripts\ab_ml_sprint.bat (A_default, M_ml_sprint, A, M...) + docs/results/ml_2026-10-15/score.py.
