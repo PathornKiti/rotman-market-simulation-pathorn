@@ -29,7 +29,10 @@ PROMOTED = {"strategy.drift_horizon_ticks": 20, "strategy.drift_zero_start": Tru
             "strategy.liquidity_model": "flow_guarded",                                # 2026-10-15 (user decision)
             "strategy.sprint_model": "docs/results/ml_2026-10-16/models.json",          # ADAPTIVE MF, made the default
             "strategy.sprint_model_crowd_guard": True, "execution.front_cross": 0.25,   # 2026-10-16 (user decision)
-            "execution.front_skip_favourable": 0.0}                                    # FRONT SKIP: off by default
+            "execution.front_skip_favourable": 0.0,                                    # FRONT SKIP: off by default
+            "execution.trend_hold_ticks": 0, "execution.trend_hold_check_ticks": 10,  # TREND HOLD (rsi_bot): off
+            "strategy.tender_model": "", "strategy.tender_model_threshold": 0.054,
+            "strategy.accept_touch_edge": -1.0}                                        # ACCEPT AT THE TOUCH: off    # CROWD TENDER MODEL: off
 SECTIONS = ("case", "strategy", "execution", "risk")
 OVERSTATE = 0.054           # the recorded-path estimate overstates real blocks by this much/share (17 evening heats)
 FEE = 0.02

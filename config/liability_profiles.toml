@@ -33,7 +33,22 @@
 # (t 3.0) resting 1,250 sh/tick, +$1.7k (t 3.6) at 2,500; both halves +; crowd-alarm heats +$2.9..5.0k (n 3); worst block
 # unchanged. Live A/B: scripts\ab_front_skip.bat (A_default, K_front_skip, A, K...).
 
-[MF_ml_front25]                       # ML SPRINT + FRONT-LOAD together (user's choice 2026-10-15, practice only): cross the
+[crowd_model]                         # CROWD TENDER MODEL (2026-10-18, tonight's practice before the competition): while the
+"strategy.tender_model" = "docs/results/ml_2026-10-16/models.json"   # crowd alarm is on, accept a fixed tender the bot
+# declined on price when the linear tender model values it > 0.054 $/sh (accept-only; never overrides a risk-room or
+# time decline). Quiet heats: identical to A_default. Out-of-time, 9 crowd-alarm heats: +$10.8k/heat (t 2.2), 4 heats
+# better / 0 worse, 9 extra accepts (3 lost: -$34k, -$15k, -$3k). Logs "TENDER MODEL X: crowded, ... ACCEPT".
+# Run: scripts\run_crowd_model.bat (every heat; judge the BLOCK P&L of the TENDER MODEL accepts).
+
+[rsi_bot]                             # THE COLLEAGUE'S LOGIC (2026-10-18, practice): (1) accept every fixed tender whose price
+"strategy.accept_touch_edge" = 0.0    # beats the market (BUY under the bid / SELL over the ask; log "TOUCH ACCEPT"), and
+"execution.trend_hold_ticks" = 10     # (2) HOLD each block while the trend runs our way, unwind when it turns (he read
+# the trend off RSI(10); the 10-tick momentum check replayed better: +$26k vs RSI 60/40 +$18k). Still held at the bell =
+# closed at the last price, no fine. Logs "TREND HOLD X: holding" / "TREND HOLD X off". Recorded real paths, 113 heats,
+# both parts: $86k/heat mean, median $73k, >= $70k in 51% of heats, worst 10% $24k (default ~$57k). Sim (hold only): all
+# +$5.3k (t 5.6) but RIVAL markets -$1.9k (30 better / 97 worse); real crowded heats 10-17 negative. Practice only.
+
+[MF_ml_front25]                      # ML SPRINT + FRONT-LOAD together (user's choice 2026-10-15, practice only): cross the
 "strategy.sprint_model" = "docs/results/ml_2026-10-15/models.json"   # first 25% of every block at once, then the
 "execution.front_cross" = 0.25        # ML price model drives the SPRINT rule for the rest. Live A/B:
 "strategy.sprint_model_crowd_guard" = false   # since 10-16 = the default WITHOUT the crowd guard (what ran 10-15/16)

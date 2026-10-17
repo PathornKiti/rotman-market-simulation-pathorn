@@ -482,3 +482,91 @@ def test_front_cross_sprints_only_the_first_slice_of_each_block():
     off.tickers, off.ex.dry_run = ["X"], True
     off.unwind_block(at(52_000, 5))
     assert "X" not in off.algo.sprint                                 # off by default
+
+
+def test_trend_hold_keeps_a_block_while_the_trend_runs_our_way_then_unwinds_for_good():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]}, "execution": {"trend_hold_ticks": 10, "trend_hold_check_ticks": 10}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    mids = [25.0 + 0.01 * k for k in range(40)] + [25.39 - 0.02 * k for k in range(1, 30)]   # up 40 ticks, then down
+
+    def at(tick: int) -> Snapshot:
+        snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                        {"X": {"bid": mids[tick] - 0.01, "ask": mids[tick] + 0.01}})
+        s._update_drift(snap)
+        return snap
+
+    for k in range(25):
+        snap = at(k)
+    assert s.trend_hold("X", 50_000, snap)                 # long while rising: hold
+    for k in range(25, 44):                                # first check at 24, then 34 (still up); falls from 40
+        snap = at(k)
+        assert s.trend_hold("X", 50_000, snap)
+    snap = at(44)
+    assert not s.trend_hold("X", 50_000, snap)             # check at 44: last 10 ticks down -> unwind
+    snap = at(45)
+    assert not s.trend_hold("X", 30_000, snap)             # released for good, even as it shrinks
+    assert s.trend_hold("X", -60_000, at(46))              # flipped by a new tender: a new decision (short, falling)
+    off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
+    assert not off.trend_hold("X", 50_000, snap)           # off unless configured
+
+
+def test_crowd_tender_model_accepts_a_price_decline_only_while_crowded(tmp_path):
+    import json as _json
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy, TenderDecision
+    from ritc import mlmodel
+
+    cols = ["edge", "qty", "mom_against", "mom20_against", "exit_depth", "vol20", "spread", "dtot", "flow10", "tick",
+            "dimb_our", "is_CRZY", "is_TAME", "sg"]
+    model = {"kind": "linear", "cols": cols, "mean": [0.0] * 14, "scale": [1.0] * 14,
+             "coef": [1.0] + [0.0] * 13, "intercept": 0.0, "alpha": 0.0}       # value = the edge vs the mid
+    path = tmp_path / "models.json"
+    path.write_text(_json.dumps({"models": {"tender_linear": model}}))
+    cfg = {"case": {"tickers": ["X"]}, "strategy": {"tender_model": str(path), "tender_model_threshold": 0.054}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    for tick in range(1, 26):
+        snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
+                        {"X": {"bid": 24.99, "ask": 25.01, "volume": 1000 * tick}})
+        snap._books["X"] = OrderBook("X", [Level(24.99, 5000)], [Level(25.01, 5000)])
+        s._update_drift(snap)
+    t = {"ticker": "X", "action": "BUY", "price": 24.80, "quantity": 50_000, "is_fixed_bid": True}
+    no = TenderDecision(False, 24.80, -0.05, 24.9, "profit/share -0.0500 < 0.0100")
+    assert abs(s.tender_model_value(t, snap) - 0.20) < 1e-9
+    s.crowded = lambda: False
+    assert s.crowd_override(t, no, snap) is no                                   # quiet: the bot's answer
+    s.crowded = lambda: True
+    assert s.crowd_override(t, no, snap).accept                                  # crowded and worth 0.20 > 0.054
+    room = TenderDecision(False, None, 0.0, 0.0, "exceeds risk room (50000 > 10000)")
+    assert s.crowd_override(t, room, snap) is room                               # never past the risk room
+    assert not s.crowd_override({**t, "price": 24.98}, no, snap).accept          # worth 0.02: declined
+    assert s.crowd_override({**t, "is_fixed_bid": False}, no, snap) is no        # auctions: untouched
+    off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
+    off.crowded = lambda: True
+    assert off.crowd_override(t, no, snap) is no                                 # off unless configured
+    assert mlmodel.load("docs/results/ml_2026-10-16/models.json", "tender_linear")["cols"] == cols
+
+
+def test_touch_accept_takes_price_declined_tenders_that_beat_the_market():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy, TenderDecision
+
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(),
+                                  {"case": {"tickers": ["X"]}, "strategy": {"accept_touch_edge": 0.0}}))
+    snap = Snapshot({"tick": 50, "period": 1, "ticks_per_period": 420}, {"X": {"bid": 24.99, "ask": 25.01}})
+    snap._books["X"] = OrderBook("X", [Level(24.99, 5000)], [Level(25.01, 5000)])
+    no = TenderDecision(False, 24.90, -0.05, 24.9, "profit/share -0.0500 < 0.0100")
+    buy = {"ticker": "X", "action": "BUY", "price": 24.90, "quantity": 50_000, "is_fixed_bid": True}
+    sell = {**buy, "action": "SELL", "price": 25.05}
+    assert s.touch_override(buy, no, snap).accept                                  # buy at 24.90 under a 24.99 bid
+    assert s.touch_override(sell, no, snap).accept                                 # sell at 25.05 over a 25.01 ask
+    assert not s.touch_override({**buy, "price": 25.00}, no, snap).accept          # 25.00 >= the bid: no edge
+    room = TenderDecision(False, None, 0.0, 0.0, "exceeds risk room (50000 > 10000)")
+    assert s.touch_override(buy, room, snap) is room                               # never past the risk room
+    off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
+    assert off.touch_override(buy, no, snap) is no                                 # off by default

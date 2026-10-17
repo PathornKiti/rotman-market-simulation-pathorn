@@ -365,6 +365,7 @@ class LiabilityStrategy(Strategy):
         self.front_seen: set[str] = set()            # FRONT-LOAD: blocks still crossing their first slice
         self.front_sent0: dict[tuple[str, int], int] = {}   # FRONT-LOAD: (ticker, block start) -> shares sent before
         self.front_skip: dict[tuple[str, int], bool] = {}    # FRONT SKIP: (ticker, block start) -> slice skipped
+        self.trend_holds: dict[str, dict] = {}       # TREND HOLD: ticker -> the hold of its current block
         # ML SPRINT (`sprint_model`, 2026-10-15, practice only): the trained 10-tick price model (ritc.mlmodel) gives
         # the SPRINT rule's expected move against the block instead of the run + book model. Off when unset.
         self.ml_model = mlmodel.load(s["sprint_model"], s.get("sprint_model_key", "price_trees")) \
@@ -376,6 +377,11 @@ class LiabilityStrategy(Strategy):
         # again, not the ML model. The model has no crowded live heats; sim rival markets: ML part +$0.6k (t 0.8), worst
         # crowded market -$10.7k (worst heat -$244k -> -$312k). FRONT-LOAD is kept either way.
         self.ml_crowd_guard = bool(s.get("sprint_model_crowd_guard", False))
+        # CROWD TENDER MODEL (`tender_model`, 2026-10-18, practice): see crowd_override(). Off when unset.
+        self.tender_model = mlmodel.load(s["tender_model"], "tender_linear") if s.get("tender_model") else None
+        if self.tender_model:
+            log.info("CROWD TENDER MODEL: %s (accept declined fixed tenders worth > %.3f/sh while crowded)",
+                     s["tender_model"], float(s.get("tender_model_threshold", 0.054)))
         self.ml_guarded = False                      # last logged state of the guard
         self.own_flow: dict[str, list[float]] = {}   # signed shares WE crossed per tick per stock (aligned to mid_hist)
         self.own_seen = 0                             # tca.fills already counted into own_flow
@@ -809,6 +815,47 @@ class LiabilityStrategy(Strategy):
                          " [ML model]" if self.ml_on() else "")
         return self.front_skip[key]
 
+    def trend_hold(self, t: str, held: int, snap: Snapshot) -> bool:
+        """
+        TREND HOLD (`trend_hold_ticks`, 2026-10-17, practice A/B; 0 = off): a colleague's manual technique. Do not unwind
+        a new block while the mid's last `trend_hold_ticks` move is in our favour; check at the block's first loop and
+        every `trend_hold_check_ticks` after; at the first check where it is against us, unwind as usual (front slice,
+        sprint, ...) and never hold that block again. A block still held at the bell is closed at the last price, no
+        fine (2027 brief). Holding an accepted tender is never speculation. Recorded real paths, 113 heats, gradual
+        exits: +$22..30k/heat vs unwinding at once (t 4.4-5.7), both halves +, crowded heats +$17..39k; skewed (median
+        +$3-5k, better in ~60% of heats), worst heat -$28..49k (docs/results/rsi_hold_2026-10-17). A new tender that
+        grows or flips the position starts a new decision.
+        """
+        ex = self.cfg.get("execution", {})
+        n = int(ex.get("trend_hold_ticks", 0))
+        if n <= 0 or not held:
+            self.trend_holds.pop(t, None)
+            return False
+        now = snap.abs_tick
+        h = self.trend_holds.get(t)
+        if h is None or (held > 0) != (h["held"] > 0) or abs(held) > abs(h["held"]):
+            h = self.trend_holds[t] = {"start": now, "next": now, "on": True, "mid0": snap.mid(t), "logged": False}
+        h["held"] = held
+        if not h["on"]:
+            return False
+        if now >= h["next"]:
+            hist = self.mid_hist.get(t, [])
+            if len(hist) > n:
+                run = (1 if held > 0 else -1) * (hist[-1] - hist[-1 - n])          # + = in our favour
+                if run < 0:
+                    h["on"] = False
+                    gained = (1 if held > 0 else -1) * ((snap.mid(t) or h["mid0"] or 0.0) - (h["mid0"] or 0.0))
+                    log.info("TREND HOLD %s off: last %d ticks %+.3f against our %+d; unwinding (held %d ticks, "
+                             "mid %+.3f our way since)", t, n, run, held, now - h["start"], gained)
+                    self.ex.journal.write("trend_hold", ticker=t, held=held, ticks=now - h["start"],
+                                          gained=round(gained, 3), run=round(run, 3))
+                    return False
+                if not h["logged"]:
+                    log.info("TREND HOLD %s: holding our %+d, last %d ticks %+.3f our way", t, held, n, run)
+                    h["logged"] = True
+            h["next"] = now + max(1, int(ex.get("trend_hold_check_ticks", 10)))
+        return True
+
     def ml_on(self) -> bool:
         """The ML model drives the SPRINT rule now: loaded, and not switched off by the crowd guard."""
         return self.ml_model is not None and not (self.ml_crowd_guard and self.crowded())
@@ -1072,7 +1119,70 @@ class LiabilityStrategy(Strategy):
                 return TenderDecision(False, None, 0.0, 0.0, f"auction while we unwind our {pos:+d} block")
         if self.liq_model == "ensemble":
             return self.decide_ensemble(t, snap, positions)
-        return self._evaluate(t, snap, positions)
+        return self.crowd_override(t, self.touch_override(t, self._evaluate(t, snap, positions), snap), snap)
+
+    def touch_override(self, t: dict, d: TenderDecision, snap: Snapshot) -> TenderDecision:
+        """
+        ACCEPT AT THE TOUCH (`accept_touch_edge`, 2026-10-18, practice: profile rsi_bot; < 0 = off): a colleague's rule,
+        "accept a tender whose price beats the market". ACCEPT a fixed tender the bot declined on price (never one
+        declined for risk room or time) when it beats the touch by more than this: a BUY tender's price under the best
+        bid, a SELL tender's over the best ask. Recorded real paths, 113 heats, with the momentum hold: $86k/heat mean,
+        median $73k, >= $70k in 51% of heats, worst 10% $24k; unwinding at once it adds ~$6k but failed a holdout
+        before (2026-10-16), so it belongs with the hold (docs/results/rsi_hold_2026-10-17).
+        """
+        thr = float(self.p.get("accept_touch_edge", -1.0))
+        if thr < 0 or d.accept or not t.get("is_fixed_bid", True) or not d.reason.startswith("profit/share"):
+            return d
+        book = snap.book(t.get("ticker"))
+        px = t.get("price")
+        buy = str(t.get("action", "BUY")).upper() == "BUY"
+        touch = book.best_bid if buy else book.best_ask
+        if px is None or touch is None:
+            return d
+        edge = (touch - float(px)) if buy else (float(px) - touch)
+        if edge <= thr:
+            return d
+        log.info("TOUCH ACCEPT %s: tender %.2f beats the %s %.2f by %.3f > %.3f: ACCEPT (the bot said: %s)",
+                 t.get("ticker"), float(px), "bid" if buy else "ask", touch, edge, thr, d.reason)
+        return TenderDecision(True, d.price, d.profit_per_share, d.unwind_vwap,
+                              f"touch edge {edge:+.3f} > {thr:.3f} (bot: {d.reason})")
+
+    def tender_model_value(self, t: dict, snap: Snapshot) -> float | None:
+        """The tender model's path value ($/share) of fixed tender `t` now; the features of ml_2026-10-15/features.py."""
+        ticker = t.get("ticker")
+        bid, ask = snap.quote(ticker)
+        book = snap.book(ticker)
+        f = mlmodel.price_features(self.mid_hist.get(ticker, []), self.vol_hist.get(ticker, []), book,
+                                   (ask - bid) if bid and ask else 0.0, snap.tick, ticker)
+        if not f or book.mid is None or t.get("price") is None:
+            return None
+        sg = 1 if str(t.get("action", "BUY")).upper() == "BUY" else -1
+        row = dict(edge=sg * (book.mid - float(t["price"])), qty=float(t.get("quantity", 0)), sg=float(sg),
+                   mom_against=-sg * f["r10"], mom20_against=-sg * f["r20"], dimb_our=sg * f["dimb"],
+                   exit_depth=f["bid_d"] if sg > 0 else f["ask_d"],
+                   **{k: f[k] for k in ("vol20", "spread", "dtot", "flow10", "tick", "is_CRZY", "is_TAME")})
+        return mlmodel.predict(self.tender_model, row)
+
+    def crowd_override(self, t: dict, d: TenderDecision, snap: Snapshot) -> TenderDecision:
+        """
+        CROWD TENDER MODEL (`tender_model`, 2026-10-18, practice; "" = off): while the crowd alarm is on, ACCEPT a fixed
+        tender the bot declined on price (never one declined for risk room or time) when the linear tender model
+        (ml_2026-10-16 models.json "tender_linear") values it above `tender_model_threshold` $/share (0.054 = the
+        recorded-path overstatement, fixed before testing). Accept-only: it never declines what the bot takes. Out-of-
+        time, 9 crowd-alarm heats, only tenders after the alarm came on: +$10.8k/heat (t 2.2), 4 heats better, 0 worse,
+        9 extra accepts (3 lost: -$34k, -$15k, -$3k). Quiet heats: -$0.5k/heat, hence crowded only.
+        """
+        if (getattr(self, "tender_model", None) is None or d.accept or not t.get("is_fixed_bid", True)
+                or not d.reason.startswith("profit/share") or not self.crowded()):
+            return d
+        v = self.tender_model_value(t, snap)
+        thr = float(self.p.get("tender_model_threshold", 0.054))
+        if v is None or v <= thr:
+            return d
+        log.info("TENDER MODEL %s: crowded, model values this tender %+.3f/sh > %.3f: ACCEPT (the bot said: %s)",
+                 t.get("ticker"), v, thr, d.reason)
+        return TenderDecision(True, d.price, d.profit_per_share, d.unwind_vwap,
+                              f"tender model {v:+.3f} > {thr:.3f} while crowded (bot: {d.reason})")
 
     def flow_pricing(self, t: dict, positions: dict[str, int]) -> bool:
         """Price this tender's exit off forward liquidity (resting at the touch) rather than the visible book walk?"""
@@ -1483,6 +1593,11 @@ class LiabilityStrategy(Strategy):
                     log.info("BLOCK P&L %s: %s since tender %s was accepted (flat now; expected %s)", t,
                              f"{made:+,.0f}", " + ".join(f"#{x}" for x in tids), f"{exp:+,.0f}")
                     self._block_done(t, snap, made, exp, tids)
+                self.trend_holds.pop(t, None)
+                continue
+            if self.trend_hold(t, pos - target, snap):
+                if b:
+                    self.algo.cancel(t)              # holding: no resting orders, no schedule
                 continue
             # New / grown / flipped exposure (e.g. another tender accepted): restart the schedule.
             if (b is None or b.target != target or (pos > 0) != (b.start_pos > 0)

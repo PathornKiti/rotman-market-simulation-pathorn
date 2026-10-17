@@ -34,6 +34,12 @@ sprint_model = "docs/results/ml_2026-10-16/models.json"   # PROMOTED 2026-10-16 
 sprint_model_crowd_guard = true   # ...but while the crowd alarm is on (crowded()), sprint on the run + book model again:
                               # no crowded live heat has run the ML sprint; sim rival markets: ML part +$0.6k (t 0.8),
                               # worst crowded market -$10.7k. Logs "ML SPRINT OFF/ON again" when it switches.
+accept_touch_edge = -1.0      # ACCEPT AT THE TOUCH (2026-10-18, practice: profile rsi_bot = 0.0; < 0 = off): also accept a
+                              # fixed tender declined on price when its price beats the touch by more than this.
+tender_model = ""             # CROWD TENDER MODEL (2026-10-18, practice: profile crowd_model; "" = off): while the crowd
+tender_model_threshold = 0.054   # alarm is on, ACCEPT a fixed tender the bot declined on price when the linear tender model
+                              # (docs/results/ml_2026-10-16/models.json) values it > 0.054 $/sh. Out-of-time, 9 crowd-alarm
+                              # heats: +$10.8k/heat (t 2.2), 4 better / 0 worse; quiet heats -$0.5k, hence crowded only.
 unwind_ticks_per_share = 0.0005  # expected unwind time per share (drift exposure)
 min_ticks_to_unwind = 5       # 2027 brief: no end-of-case fine (closed at last price). 15 -> 5: +$1.1-1.8k (t 2.2-3.0), holdout +$0.4-0.6k (t 1.9-2.2), hostile +$0.5-2.0k (t 1.5-1.8)
 risk_aversion = 0.3           # $ demanded per unit of GARCH vol x sqrt(unwind ticks)
@@ -210,6 +216,12 @@ front_cross = 0.25            # PROMOTED 2026-10-16 (ADAPTIVE MF): cross the fir
 front_skip_favourable = 0.0   # FRONT SKIP (2026-10-16, practice: profile K_front_skip = 0.03; 0 = off): skip a block's front
                               # slice when the SPRINT predictor expects >= this $ move IN OUR FAVOUR over the next 10 ticks
                               # (decided once per block). Recorded paths, 23 out-of-time A heats: +$1.7..2.8k/heat (t 3.0-3.6).
+                              # Live A/B 10-17 (28 heats): -$3.1k/heat, skips moved AGAINST us (-0.040, t -1.0): not adopted.
+trend_hold_ticks = 0          # TREND HOLD (2026-10-17, practice: profile rsi_bot = 10; 0 = off): keep a new block (no
+trend_hold_check_ticks = 10   # unwind) while the mid's last 10-tick move is in our favour, checked every 10 ticks; unwind
+                              # as usual from the first check against us; still held at the bell = closed at the last
+                              # price, no fine. Recorded real paths, 113 heats: +$22..30k/heat (t 4.4-5.7), skewed; worst
+                              # heat -$28..49k. Not live-tested (docs/results/rsi_hold_2026-10-17).
 initial_sprint_ticks = 3      # RACE THE CROWD (default since 2026-10-13, passes the testing rule): once the crowd learner has
 initial_sprint_gate = "crowded"   # detected other desks dumping the same blocks (crowded(): impact > 2 sd), cross the first
                               # 3 ticks of every new block (Obizhaeva-Wang-style initial trade), then the usual unwind.

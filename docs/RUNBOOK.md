@@ -130,7 +130,7 @@ other teams there is no real crowd, so any "crowd" the bot sees there is noise; 
 ```bash
 git pull                                                     # once, before the first heat
 python scripts/review_batch.py check                         # OK = config/liability.toml is the default (adaptive MF, 10-16)
-python -m ritc run liability --live -v --forever --record --profile alternate:A_default,K_front_skip   # NEXT A/B: front skip
+python -m ritc run liability --live -v --forever --record --profile alternate:A_default,rsi_bot        # NEXT A/B: rsi_bot (trend hold); front skip rejected 10-17
 python -m ritc run liability --live -v --forever --record --profile alternate:A_default,S_previous     # new vs previous default
 python -m ritc run liability --live -v --forever --record --profile A_default   # the default every heat
 python -m ritc run liability --live -v --forever --record --profile rotate      # least-tried profile in logs/

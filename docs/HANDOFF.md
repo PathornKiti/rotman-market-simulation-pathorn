@@ -1,10 +1,69 @@
 # Handoff — Liquidity Risk Case bot (`liability`)
 
-*Updated 2026-10-16 night. Start here. Graded heats: **Sunday 2026-10-18**, ranked on **average** heat P&L; goal =
+*Updated 2026-10-17 night. Start here. Graded heats: **Sunday 2026-10-18**, ranked on **average** heat P&L; goal =
 top 3 consistently. Expect a crowded market (rival bots unwinding the same stocks). Leaderboard is admin-only.*
 
 > **CASE RULE (organisers):** The speculation fine will increase from $0.40 to $0.60 per share for speculation exceeding
 > 5,000 shares. The fine for speculation of 5,000 shares or fewer remains unchanged at $0.20 per share.
+
+---
+
+## 00. 2026-10-18: tonight = last practice, competition tomorrow (read first)
+
+**Candidate to unlock: `crowd_model`** (profile; `strategy.tender_model` = ml_2026-10-16 models.json, `crowd_override()` in
+`liability.py`). While the crowd alarm is on, accept a fixed tender the bot declined ON PRICE when the linear tender model
+values it > $0.054/sh (never past risk room / time; never declines what the bot takes). Quiet heats = A_default exactly.
+Why: crowded heats pay less because the bot takes fewer tenders (3.5 vs 4.9 of ~7; `real_vs_quiet.py`), not because of
+execution (104% of expected). Out-of-time (9 crowd-alarm heats after the model's training): **+$10.8k/heat (t 2.2), 4
+better / 0 worse**, 9 extra accepts, 3 lost (−$34k, −$15k, −$3k); quiet heats −$0.5k (hence crowded only). Replay of
+20261017-231558 through the bot: same model value (+0.388 on the TAME tender), alarm timing gates out one loser.
+
+**Tonight (user's choice):** `scripts\rotate_default_rsi_crowd.bat` = `--profile alternate:A_default,rsi_bot,crowd_model`
+(heat 1 A, 2 rsi_bot, 3 crowd_model, 4 A, ...). `rsi_bot` is now the colleague's full logic: `accept_touch_edge = 0.0`
+(accept every fixed tender priced better than the touch; log "TOUCH ACCEPT") + `trend_hold_ticks = 10`. Replay of
+113 heats: $86k mean, median $73k, >= $70k in 51%, worst 10% $24k; sim rival markets negative for the hold.
+Review: `python scripts/ab_compare.py logs/data --since <first heat>` (per profile) + `review_crowd_model.py`.
+(`scripts\run_crowd_model.bat` = crowd_model every heat, if you only want that one.)
+**After:** `python scripts/review_crowd_model.py logs/data`. Rule fixed in advance: ON for the competition if the model's
+accepts made ≥ $0 in total, none lost > $25k, 0 fines; no crowded heat tonight → decide on the out-of-time result.
+To switch on: `tender_model = "docs/results/ml_2026-10-16/models.json"` in `config/liability.toml` + the same in
+`PROMOTED` of `scripts/review_batch.py` (or run `--profile crowd_model`).
+Not candidates: rsi_bot (sim rival markets −$1.9k, 30 better / 97 worse; real crowded heats negative), front skip,
+looser acceptance in general. Next after the competition: `sprint_model_crowd_guard = false` (ML R² better in 8/9
+crowded heats, $ t 0.8).
+
+## 0. 2026-10-17 night update
+
+**Default unchanged: ADAPTIVE MF.** `review_batch.py check` = OK. Front skip REJECTED live; `rsi_bot` built (off by default).
+
+**Front skip live A/B** (28 heats 10-17, 14 each; 8 crowd-alarm heats = MF's first crowded live heats; 0 fines):
+
+| | A_default | K_front_skip |
+|---|---|---|
+| NLV per heat | **$62.6k** (worst $31.2k) | $59.5k (worst $18.2k) |
+| no crowd alarm / crowd alarm | $64.5k (11) / **$55.7k** (3) | **$69.9k** (9) / $40.7k (5) |
+| 22-23h real heats, ~6 traders | **$50.0k** (4) | $40.3k (4) |
+| losing blocks | 3 / 70 | 6 / 71 |
+
+K's skips: mid 20 ticks later −$0.040 **against** us (t −1.0); K's non-skipped blocks −$3.7k vs expected (t −3.9).
+Script: `docs/results/rsi_hold_2026-10-17/ab_front_skip_review.py`.
+
+**Colleague's $221.9k heat (20261017-231558, our bot $18.2k).** Manual, 5k MKT clips: accept tenders, HOLD the block
+while the trend runs (read off RSI(10) on 10-tick candles), exit when it turns. Holding a tender is never fined; open
+positions close at the last price, no fine. Fixed tenders are private per team (his ≠ ours). His P&L = TAME +$124.6k,
+CROC +$64.7k, CRZY +$39.6k − $7k fines: ~$1.2/sh on TAME vs a ~$0.1-0.3 tender edge → the trend paid, not the edge.
+Findings on 113 recorded real heats (`docs/results/rsi_hold_2026-10-17/report.txt`):
+- Prices TREND: strongest 20% of 20-tick moves continue +$0.24/sh over the next 50 ticks (t 10.5). RSI ≥ 80 → +$0.22
+  more in the same direction. RSI is a trend signal here, not a reversal signal.
+- RSI-reversion exit (sell a long at RSI 70): −$54k/heat (t −4.7). Hold to the bell: no edge, sd ×10. Rejected.
+- **Momentum hold** (keep the block while the last 10 ticks moved our way, check every 10 ticks, unwind when it
+  turns): **+$22-30k/heat vs unwinding at once (t 4.4-5.7)**, both halves +, 19 crowded heats +$17-39k, tonight's 8
+  real heats −$8k..+$11k. Skewed: median +$3-5k, better in ~60% of heats; worst heat −$28-49k. NOT live-tested.
+
+**`rsi_bot` profile** = default + `execution.trend_hold_ticks = 10` (`trend_hold()` in `liability.py`; logs
+`TREND HOLD X: holding` / `TREND HOLD X off`; journal `trend_hold`). Live A/B: `scripts\ab_rsi_bot.bat`
+(A_default, rsi_bot, A, ...). Sim (49 markets x 16 seeds, stress_pair.txt): all +$5.3k (t 5.6), trend markets +$12-36k, but RIVAL/hostile -$1.9k (better 30 / worse 97; practice + rival desks -$10.9k t -2.2, rivals calm -$8.5k t -2.8): it loses where other desks dump the same blocks. Decision rule: only switch it on if real heats show
+held blocks gaining (`gained` in the TREND HOLD off lines) and no extra disaster heat; otherwise keep the default.
 
 ---
 
@@ -136,7 +195,7 @@ No overfitting sign (test R² above CV 0.373). Top-10% signals right 91%. Live f
 | `docs/results/exits_2026-10-15/exits.py` | exit rules on recorded paths + books |
 | `docs/results/journal_replay.py`, `screening_2026-10-15/valcf.py` | replay recorded heats under any override |
 
-Tests: `PYTHONPATH=src .venv/bin/python -m pytest -q` → **187 passed**. Git: everything since `59fb674` is
+Tests: `PYTHONPATH=src .venv/bin/python -m pytest -q` → **188 passed**. Git: everything since `a5d877a` is
 uncommitted; the user handles commits (Windows needs `git pull` before the next batch).
 
 ---
