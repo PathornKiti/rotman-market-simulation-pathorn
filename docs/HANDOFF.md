@@ -1,6 +1,6 @@
 # Handoff — Liquidity Risk Case bot (`liability`)
 
-*Updated 2026-10-17 night. Start here. Graded heats: **Sunday 2026-10-18**, ranked on **average** heat P&L; goal =
+*Updated 2026-10-18 (final dataset reviewed). Start here. Graded heats: **TODAY Sun 2026-10-18 13:00 (+07)**, ranked on **average** heat P&L; goal =
 top 3 consistently. Expect a crowded market (rival bots unwinding the same stocks). Leaderboard is admin-only.*
 
 > **CASE RULE (organisers):** The speculation fine will increase from $0.40 to $0.60 per share for speculation exceeding
@@ -8,7 +8,7 @@ top 3 consistently. Expect a crowded market (rival bots unwinding the same stock
 
 ---
 
-## 000. COMPETITION MORNING 2026-10-19 — checklist (read first)
+## 000. COMPETITION 2026-10-18 13:00 — checklist (read first; steps 1-3 done 10-18 morning)
 
 1. **Copy the final dataset** to the Mac: every `logs\*.log` -> `logs/`, every `logs\data\*.jsonl` -> `logs/data/`.
 2. **Tonight's rotation** (`alternate:A_default,rsi_bot,rsi_ml,crowd_model`):
@@ -24,6 +24,26 @@ top 3 consistently. Expect a crowded market (rival bots unwinding the same stock
 4. **Pick the competition profile** from step 2 (+ the 10-17/18 replays below): `A_default`, `rsi_bot` (momentum hold),
    `rsi_ml` (ML hold), or `crowd_model`. Run it with `ritc run liability --live --forever --record --profile <name>`.
 5. Commit, push; Windows `git pull` before the first graded heat. ONE bot window per account.
+
+**DONE 10-18 (final dataset, 22 heats; `logs/logs 2/` merged into `logs/` with `cp -n`) — `docs/results/rsi_live_2026-10-18/`:**
+- Live: **rsi_bot 8 heats mean $121.4k, median $117.4k, worst $58.9k, ≥ $70k 7/8** (best $243k = one 170-tick TAME hold
+  +$160k); rsi_ml 5 heats $89.3k (worst $29.9k); default/front skip ~$50k; crowd_model 2 heats $49.7k. 003847 A = NLV 0 in a REAL crowded
+  heat (the crowd charge declined all 7 fixed tenders, two with touch edge +0.375/+0.395; rsi_bot replay $77.8k). Only 1 crowd-alarm heat.
+- Same-heat replay, 62 heats out-of-sample for ML: rsi_bot − default **+$20.8k/heat (t 3.6)**, rsi_ml **+$24.7k (t 4.2)**,
+  ML − momentum +$3.8k (t 1.3, tie); crowded (n 10) +$6-12k, t ~1, worst −$30k. 10-18 alone (holdout): +$20.7k (t 1.9).
+- review_crowd_model: ON by the pre-set rule, but on a single accept (+$10.5k).
+- Retrain v3: **FAIL** (R² 0.340 = v2 0.340, better in 26/54, crowded tender $/heat 32.8k vs v2 37.8k) -> keep v2, no
+  config change. Log: `docs/results/ml_2026-10-19/train_output.txt`. 193 tests pass; `review_batch.py check` OK.
+- **Final upload 11:20 (8 more heats, 100349-110032; 110839 unfinished):** rsi_bot live **12 heats mean $117.2k, median
+  $117.4k, worst $58.9k, >= $70k 10/12**; rsi_ml 9 heats $88.5k. Replay 10-18 holdout (29 heats) rsi_bot − default
+  +$19.7k (t 2.3, passes); pooled 70 OOS heats +$20.4k (t 3.9); ~6-person sessions +$17.7k (t 2.5, n 41). 0 fines.
+  No retrain rerun (8 heats cannot flip 26/54, and no model change this close to the graded heats).
+- **Competition day: `docs/COMPETITION_RUNBOOK.md`** + `scripts\run_competition.bat` (preflight + rsi_bot),
+  `scripts\competition_status.bat` (scoreboard + switch rule), `scripts\run_competition_safe.bat` (A_default).
+- Strategy write-up: **`docs/RSI_STRATEGY.md`** (theory and methodology) + **`docs/RSI_TRADING_FLOW.md`** (trading flow). Operations + switch rule: this section.
+- **Recommendation: competition profile `rsi_bot`**: `scripts\run_competition.bat` (fallback: `scripts\run_competition_safe.bat` =
+  A_default). Both print `git log -1` / `git status` first; uncommitted files on Windows = stale code.
+  Risk: crowded heats are its weakest case (t ~1); the crowded start threshold 0.05 stays on.
 
 **rsi_bot vs rsi_ml (10-18):** out-of-sample replay (54 heats) a tie: ML hold +$25.4k/heat vs the default, momentum
 +$26.8k (ML − momentum −$1.5k, t −0.4); ML has the better floor (worst 10% $28.5k vs $23.8k). On the live 00:45 heat

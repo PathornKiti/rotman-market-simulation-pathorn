@@ -65,6 +65,9 @@ python -c "from ritc.pricing.news import parse_inventory_news as p; print(p('PAS
 
 ## 4. Competition day
 
+**Liability, Sun 2026-10-18 13:00: follow [COMPETITION_RUNBOOK.md](COMPETITION_RUNBOOK.md)** (rsi_bot, scripts,
+switch rule). The general checklist below still applies.
+
 The night before: `git pull`, `pip install -e .`, `python -m pytest -q` green, rehearse each case in the
 simulator, print the configs and briefs. Liability: follow [PRACTICE_PLAN.md](PRACTICE_PLAN.md).
 

@@ -1,0 +1,11 @@
+143 heats; base (rsi_bot) mean 83,602
+  C5       vs base   -1,699/heat (t -1.4) better  69/143 worse  53 worst   -87,982 | before 10-17 22h   -1,917 (t -1.6) | ~6-person sessions     -998 (t -0.3, n 34)
+  L5C5     vs base   -5,106/heat (t -2.3) better  77/143 worse  64 worst  -146,043 | before 10-17 22h   -5,682 (t -2.2) | ~6-person sessions   -3,258 (t -0.7, n 34)
+  own      vs base   -7,672/heat (t -4.3) better  31/143 worse  61 worst  -140,318 | before 10-17 22h   -8,587 (t -4.3) | ~6-person sessions   -4,739 (t -1.2, n 34)
+  rel0.10  vs base   +1,202/heat (t +0.7) better  31/143 worse   8 worst  -109,860 | before 10-17 22h     +539 (t +0.3) | ~6-person sessions   +3,324 (t +1.1, n 34)
+  rel0.20  vs base   +2,001/heat (t +1.7) better  24/143 worse   7 worst   -82,337 | before 10-17 22h   +1,738 (t +1.4) | ~6-person sessions   +2,842 (t +1.0, n 34)
+  half     vs base   -2,322/heat (t -1.0) better  74/143 worse  69 worst   -89,273 | before 10-17 22h   -3,395 (t -1.3) | ~6-person sessions   +1,117 (t +0.2, n 34)
+  now      vs base  -26,717/heat (t -6.2) better  53/143 worse  89 worst  -292,928 | before 10-17 22h  -29,859 (t -5.8) | ~6-person sessions  -16,646 (t -2.3, n 34)
+  now   mean   56,885 median   57,027 worst10%   27,852 >=70k 39/143
+  half  mean   81,280 median   73,750 worst10%   42,392 >=70k 79/143
+  base  mean   83,602 median   71,305 worst10%   20,545 >=70k 72/143

@@ -1,0 +1,137 @@
+heat            profile            NLV crowd taken touch   touch$ held     held$ lose  worstblk spec endpos
+20261018-000437 K_front_skip    63,395           6     0        0    0         0    1    -2,753    0      0
+20261018-001244 A_default       44,221           5     0        0    0         0    0     1,544    0      0
+20261018-002051 K_front_skip    29,562           4     0        0    0         0    0     2,920    0      0
+20261018-002858 A_default       52,576           4     0        0    0         0    0    10,120    0      0
+20261018-003704 K_front_skip    52,576           0     0        0    0         0    0         0    0     -1
+20261018-003847 A_default            0           0     0        0    0         0    0         0    0      0
+20261018-004511 rsi_bot        116,863           5     0        0    2         0    1      -979    0      0
+20261018-005317 crowd_model     38,740 YES       5     0        0    0         0    0     3,928    0      0
+20261018-010124 A_default       60,346           6     0        0    0         0    0     5,865    0      0
+20261018-010930 rsi_bot        118,891           5     0        0    3    36,100    0    16,062    0      0
+20261018-011737 crowd_model     60,715           6     0        0    0         0    0     2,769    0      0
+20261018-012656 rsi_bot         89,486           5     1   -3,185    3   -18,586    2   -18,586    0  28000
+20261018-084304 rsi_bot         75,981           6     3  -20,342    2         0    2   -18,537    0      0
+20261018-085053 rsi_ml          98,689           6     0        0    5    88,708    1    -1,887    0      0
+20261018-085859 rsi_bot        118,020           6     0        0    4    13,519    1    -2,366    0      0
+20261018-090705 rsi_ml          29,859           6     2   -3,747    2       895    2    -7,293    0      0
+20261018-091512 rsi_bot         58,876           6     1   -3,847    2     6,322    1    -3,847    0      0
+20261018-092317 rsi_ml         147,775           6     3   33,868    2    17,506    0     8,039    0      0
+20261018-093123 rsi_bot        150,020           5     0        0    3    95,536    0     7,485    0      0
+20261018-093930 rsi_ml          54,742           5     0        0    3    39,461    0     5,735    0      0
+20261018-094736 rsi_bot        243,226           4     0        0    3         0    0    20,280    0      0
+20261018-095542 rsi_ml         115,420           6     0        0    4    27,997    0     1,172    0      0
+20261018-100349 rsi_bot         64,914           6     1    8,266    1     2,526    0     2,526    0      0
+20261018-101155 rsi_ml         105,987           6     0        0    6   105,986    0     8,088    0      0
+20261018-102001 rsi_bot         89,153           6     0        0    2    56,937    0     1,562    0      0
+20261018-102807 rsi_ml          94,853           6     0        0    3    76,233    1    -3,972    0      0
+20261018-103613 rsi_bot        127,977           6     1    1,349    3    36,832    0     1,349    0      0
+20261018-104420 rsi_ml          52,618           5     0        0    3    34,815    0     4,120    0      0
+20261018-105226 rsi_bot        152,840           6     1    1,235    4   135,666    0     1,235    0      0
+20261018-110032 rsi_ml          96,951           6     1  -11,548    3    92,015    1   -11,548    0      0
+
+A_default     n  4  mean    39,286  median    48,399  worst         0  best    60,346  >=70k 0/4
+K_front_skip  n  3  mean    48,511  median    52,576  worst    29,562  best    63,395  >=70k 0/3
+crowd_model   n  2  mean    49,728  median    49,728  worst    38,740  best    60,715  >=70k 0/2
+rsi_bot       n 12  mean   117,187  median   117,442  worst    58,876  best   243,226  >=70k 10/12
+rsi_ml        n  9  mean    88,544  median    96,951  worst    29,859  best   147,775  >=70k 6/9
+
+=== replay, 10-18 heats only
+29 heats since 20261018-000000; replay $ (live NLV for reference)
+heat            live profile       live |   default   rsi_bot    rsi_ml  hold-end
+20261018-000437 K_front_skip     63,395 |    61,995    34,242    87,522    85,430
+20261018-001244 A_default        44,221 |    47,575    44,740    50,350   108,320
+20261018-002051 K_front_skip     29,562 |    37,072    46,910    48,217    66,180
+20261018-002858 A_default        52,576 |    54,565    20,545    57,320   188,500
+20261018-003847 A_default             0 |         0    77,837    77,837   137,760
+20261018-004511 rsi_bot         116,863 |    41,187   114,500    68,480   238,000
+20261018-005317 crowd_model      38,740 |    17,972     1,000      -230   118,350
+20261018-010124 A_default        60,346 |    59,632   105,345   102,440    66,280
+20261018-010930 rsi_bot         118,891 |    81,400    86,180    80,392   202,890
+20261018-011737 crowd_model      60,715 |    54,510    83,215    57,517    95,930
+20261018-012656 rsi_bot          89,486 |    30,465    -3,798    -3,798    66,440
+20261018-084304 rsi_bot          75,981 |    63,100    48,242    59,327  -117,940
+20261018-085053 rsi_ml           98,689 |    92,210   145,337    99,222   199,900
+20261018-085859 rsi_bot         118,020 |    95,718   102,718   102,283    89,670
+20261018-090705 rsi_ml           29,859 |    40,488    15,998     3,150    84,090
+20261018-091512 rsi_bot          58,876 |    67,563    45,478    45,478    57,680
+20261018-092317 rsi_ml          147,775 |    64,290   123,480   119,892    61,150
+20261018-093123 rsi_bot         150,020 |    68,590   149,537   151,152   360,980
+20261018-093930 rsi_ml           54,742 |    61,670    25,767    32,370    16,510
+20261018-094736 rsi_bot         243,226 |    58,597   219,725   265,935   229,710
+20261018-095542 rsi_ml          115,420 |    83,457   130,407   111,370   431,570
+20261018-100349 rsi_bot          64,914 |    64,100    61,280    66,235   -80,560
+20261018-101155 rsi_ml          105,987 |   100,785   101,655   107,802    66,580
+20261018-102001 rsi_bot          89,153 |    45,020    59,003    72,340   106,420
+20261018-102807 rsi_ml           94,853 |    69,995    93,900    58,902   -33,270
+20261018-103613 rsi_bot         127,977 |    64,915   127,742   122,412   194,590
+20261018-104420 rsi_ml           52,618 |    74,267    46,237    49,072    50,770
+20261018-105226 rsi_bot         152,840 |   120,513   157,078   156,070    87,330
+20261018-110032 rsi_ml           96,951 |    49,940    78,967    65,657  -153,430
+
+default   mean    61,089 median    61,995 worst         0 best   120,513  >=70k 7/29
+rsi_bot   mean    80,802 median    78,967 worst    -3,798 best   219,725  >=70k 16/29
+rsi_ml    mean    79,818 median    68,480 worst    -3,798 best   265,935  >=70k 14/29
+hold-end  mean   104,339 median    87,330 worst  -153,430 best   431,570  >=70k 17/29
+MOM10 - NOW: +19,713/heat (t +2.3), better in 18/29, worst -35,903
+MLT0.00 - NOW: +18,729/heat (t +2.1), better in 20/29, worst -37,338
+MLT0.00 - MOM10: -984/heat (t -0.2), better in 12/29, worst -46,115
+replay fidelity rsi_bot: live mean 117,187 vs replay 97,307 (n 12)
+replay fidelity rsi_ml: live mean 88,544 vs replay 71,938 (n 9)
+quiet    n 28 MOM10    - default: +21,023/heat (t +2.4) better 18/28 worst -35,903
+quiet    n 28 MLT0.00  - default: +20,048/heat (t +2.2) better 20/28 worst -37,338
+crowded  n  1 MOM10    - default: -16,973/heat (t +nan) better 0/1 worst -16,973
+crowded  n  1 MLT0.00  - default: -18,203/heat (t +nan) better 0/1 worst -18,203
+
+=== replay, all ML-out-of-sample heats (since 20261016-205128)
+default   mean    57,059 median    58,959 worst         0 best   120,513  >=70k 16/70
+rsi_bot   mean    77,465 median    69,166 worst    -3,798 best   252,230  >=70k 33/70
+rsi_ml    mean    80,483 median    67,495 worst    -3,798 best   265,935  >=70k 33/70
+hold-end  mean    91,275 median    82,530 worst  -220,320 best   431,570  >=70k 39/70
+MOM10 - NOW: +20,406/heat (t +3.9), better in 43/70, worst -35,903
+MLT0.00 - NOW: +23,423/heat (t +4.4), better in 49/70, worst -37,338
+MLT0.00 - MOM10: +3,018/heat (t +1.1), better in 41/70, worst -69,018
+replay fidelity rsi_bot: live mean 117,187 vs replay 97,307 (n 12)
+replay fidelity rsi_ml: live mean 88,544 vs replay 71,938 (n 9)
+quiet    n 60 MOM10    - default: +21,880/heat (t +3.7) better 37/60 worst -35,903
+quiet    n 60 MLT0.00  - default: +26,312/heat (t +4.4) better 43/60 worst -37,338
+crowded  n 10 MOM10    - default: +11,556/heat (t +1.1) better 6/10 worst -28,265
+crowded  n 10 MLT0.00  - default: +6,091/heat (t +0.9) better 6/10 worst -30,265
+
+=== by market busyness
+150 heats; other traders' volume: median 5.08M, busy cut 5.29M
+quiet third                  n  50  others 4.54M  default   51,061  rsi_bot   90,140  diff  +39,079 (t +4.6) better 33/50  worst -28,238
+middle third                 n  50  others 5.06M  default   53,697  rsi_bot   87,550  diff  +33,853 (t +4.3) better 37/50  worst -23,873
+busy third                   n  50  others 5.88M  default   53,040  rsi_bot   74,587  diff  +21,547 (t +3.5) better 31/50  worst -35,903
+10-17 22:00 on (~6 people)   n  41  others 5.85M  default   56,324  rsi_bot   73,980  diff  +17,656 (t +2.5) better 24/41  worst -35,903
+corr(others' volume, rsi_bot gain) -0.07
+
+=== gaps
+=== rsi: 21 heats since 10-17 22:00
+ 1 fixed tenders declined for risk room: 5 (0.2/heat), hindsight +50 ticks total +132,280 (+6,299/heat), winners 3
+     20261018-004511 BUY  CRZY 54,000 touch edge +0.310 ->    -5,670   holding {'TAME': 50000}
+     20261018-010930 SELL CROC 50,000 touch edge +0.040 ->    -4,250   holding {'CROC': -53000}
+     20261018-093123 SELL CROC 51,000 touch edge +0.140 ->   +65,790   holding {'TAME': -51000}
+     20261018-094736 SELL CRZY 54,000 touch edge +0.360 ->   +32,400   holding {'TAME': -53000}
+     20261018-094736 SELL TAME 54,000 touch edge +0.250 ->   +44,010   holding {'TAME': -53000}
+ 2 touch accepts: 14, realized +2,050, losers 6, worst -18,537
+ 3 holds that ran: 63, best gain during hold mean +0.407/sh, at the exit +0.265/sh -> giveback 0.143/sh = $471,325 total ($22,444/heat); exits below 0: 24
+ 4 held_blk n  62 rate  6,218 sh/s  mid move -0.102 our way  fills -0.0270 vs mid  made  +27,462
+ 4 now_blk  n  51 rate  7,134 sh/s  mid move -0.152 our way  fills -0.0273 vs mid  made   +8,208
+=== default: 21 heats since 10-17 22:00
+ 1 fixed tenders declined for risk room: 0 (0.0/heat), hindsight +50 ticks total +0 (+0/heat), winners 0
+ 4 now_blk  n 102 rate  4,556 sh/s  mid move -0.129 our way  fills -0.0321 vs mid  made   +9,132
+
+=== risks
+=== rsi: 21 heats
+  max gross used: mean 74,581, max 109,000 (limit 250k); max net: mean 64,759, max 91,811 (limit 100k)
+  ticks with 2+ stocks held on the same side: mean 3/420
+  shares held at tick 400: mean 6,142; at the bell: mean 1,333, heats with a position at the bell 1; |last - mid| cost at the bell total $280
+  latency p95 mean 74 ms, worst max 890 ms, 429s 0
+  worst blocks: 20261018-012656 -18,586, 20261018-084304 -18,537, 20261018-110032 -11,548
+=== default: 21 heats
+  max gross used: mean 51,619, max 55,000 (limit 250k); max net: mean 51,619, max 55,000 (limit 100k)
+  ticks with 2+ stocks held on the same side: mean 0/420
+  shares held at tick 400: mean 0; at the bell: mean 0, heats with a position at the bell 0; |last - mid| cost at the bell total $0
+  latency p95 mean 67 ms, worst max 984 ms, 429s 0
+  worst blocks: 20261017-230752 -17,540, 20261017-223528 -4,440, 20261017-234018 -3,780
