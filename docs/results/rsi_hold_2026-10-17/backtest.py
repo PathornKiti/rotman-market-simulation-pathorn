@@ -23,6 +23,7 @@ from collections import defaultdict
 TICKERS = ("CRZY", "TAME", "CROC")
 GROSS, NET = 250_000, 100_000
 FEE = 0.02
+PRED = {}  # ML hold: ticker -> {tick: predicted 10-tick mid move} for the heat being run (set by the caller)
 RATE = 0  # shares/tick for exits; 0 = instant at the exit tick's mid (set by --rate)
 
 
@@ -136,6 +137,31 @@ def run_heat(mid, last, tenders, edge_min, exit_rule, cost, only=None, hi=70, lo
                 r = rsi[t][j]
                 if (side > 0 and r < mid_) or (side < 0 and r > 100 - mid_):
                     return max(j, i0)
+            return None
+        if exit_rule.startswith("MLT"):   # ML hold: hold while the model predicts the next 10 ticks our way; START only
+            th = float(exit_rule[3:])     # if the prediction is >= th our way; ticks without a prediction: keep holding
+            for j in range(i0, 420, 10):
+                p = PRED.get(t, {}).get(j)
+                if p is not None and side * p < (th if j == i0 else 0.0):
+                    return j
+            return None
+        if exit_rule.startswith("MOMT"):  # MOM10, but START the hold only if the last 10 ticks moved >= th our way
+            th = float(exit_rule[4:])
+            for j in range(i0, 420, 10):
+                if j - 10 >= 0:
+                    run = side * (mid[t][j] - mid[t][j - 10])
+                    if run < (th if j == i0 else 0.0):
+                        return j
+            return None
+        if exit_rule.startswith("STOP"):  # MOM10 + trailing stop: also exit the first tick the mid gives back > g from
+            g = float(exit_rule[4:])      # its best (our way) since the hold began
+            best = side * mid[t][i0]
+            for j in range(i0, 420):
+                if (j - i0) % 10 == 0 and j - 10 >= 0 and side * (mid[t][j] - mid[t][j - 10]) < 0:
+                    return j
+                best = max(best, side * mid[t][j])
+                if best - side * mid[t][j] > g:
+                    return j
             return None
         if exit_rule.startswith("MOM"):  # trend: hold while the last L-tick move is our way (checked every 10 ticks)
             L = int(exit_rule[3:])

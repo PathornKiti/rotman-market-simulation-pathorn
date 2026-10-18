@@ -570,3 +570,63 @@ def test_touch_accept_takes_price_declined_tenders_that_beat_the_market():
     assert s.touch_override(buy, room, snap) is room                               # never past the risk room
     off = LiabilityStrategy(Context(None, Executor(None), RiskManager(), {"case": {"tickers": ["X"]}}))
     assert off.touch_override(buy, no, snap) is no                                 # off by default
+
+
+def test_trend_hold_min_start_needs_a_clear_trend_to_begin_a_hold():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    def run(step: float, min_start: float) -> bool:
+        cfg = {"case": {"tickers": ["X"]},
+               "execution": {"trend_hold_ticks": 10, "trend_hold_min_start": min_start}}
+        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        for k in range(25):
+            m = 25.0 + step * k
+            snap = Snapshot({"tick": k, "period": 1, "ticks_per_period": 420}, {"X": {"bid": m - 0.01, "ask": m + 0.01}})
+            s._update_drift(snap)
+        return s.trend_hold("X", 50_000, snap)
+
+    assert run(0.003, 0.0)                 # +0.03 over 10 ticks: rsi_bot holds
+    assert not run(0.003, 0.05)            # rsi_bot (min start 0.05): too weak to start a hold
+    assert run(0.01, 0.05)                 # +0.10 over 10 ticks: clear trend, hold
+
+
+def test_trend_hold_min_start_crowded_applies_only_while_crowded():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    def run(crowd: bool) -> bool:
+        cfg = {"case": {"tickers": ["X"]},
+               "execution": {"trend_hold_ticks": 10, "trend_hold_min_start_crowded": 0.05}}
+        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        s.crowded = lambda: crowd
+        for k in range(25):
+            m = 25.0 + 0.003 * k                       # +0.03 over 10 ticks: a weak trend our way
+            snap = Snapshot({"tick": k, "period": 1, "ticks_per_period": 420}, {"X": {"bid": m - 0.01, "ask": m + 0.01}})
+            s._update_drift(snap)
+        return s.trend_hold("X", 50_000, snap)
+
+    assert run(False)                          # quiet: aggressive, holds a weak trend
+    assert not run(True)                       # crowded: needs >= 0.05 to start a hold
+
+
+def test_trend_hold_ml_signal_follows_the_model_prediction():
+    from ritc.core.bot import Context, Snapshot
+    from ritc.core.risk import RiskManager
+    from ritc.strategies.liability import LiabilityStrategy
+
+    cfg = {"case": {"tickers": ["X"]},
+           "execution": {"trend_hold_ticks": 10, "trend_hold_signal": "ml", "trend_hold_min_start_crowded": 0.05}}
+    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    s.ml_model = {"kind": "stub"}                       # any loaded model; the prediction is set below
+    snap = Snapshot({"tick": 30, "period": 1, "ticks_per_period": 420}, {"X": {"bid": 24.99, "ask": 25.01}})
+    s.crowded = lambda: False
+    s.ml_pred["X"] = 0.03                               # predicted up 3c: hold a long (quiet: no threshold)
+    assert s.trend_hold("X", 50_000, snap)
+    s.trend_holds.clear()
+    assert not s.trend_hold("X", -50_000, snap)         # ...and unwind a short
+    s.trend_holds.clear()
+    s.crowded = lambda: True
+    assert not s.trend_hold("X", 50_000, snap)          # crowded: 0.03 < 0.05 to start a hold

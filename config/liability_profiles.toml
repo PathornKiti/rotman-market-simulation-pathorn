@@ -33,6 +33,13 @@
 # (t 3.0) resting 1,250 sh/tick, +$1.7k (t 3.6) at 2,500; both halves +; crowd-alarm heats +$2.9..5.0k (n 3); worst block
 # unchanged. Live A/B: scripts\ab_front_skip.bat (A_default, K_front_skip, A, K...).
 
+[rsi_ml]                              # rsi_bot WITH THE ML MODEL AS THE TREND SIGNAL (2026-10-18, practice): same accepts and
+"strategy.accept_touch_edge" = 0.0    # crowded safeguard as rsi_bot, but hold while the ML price model (sprint_model)
+"execution.trend_hold_ticks" = 10     # predicts the next 10 ticks our way, instead of the last 10 ticks' move. Out-of-
+"execution.trend_hold_signal" = "ml"  # sample replay (54 heats, model trained to 10-15): +$25.4k/heat vs the default
+"execution.trend_hold_min_start_crowded" = 0.05   # (momentum +$26.8k, a tie), worst 10% $28.5k (momentum $23.8k);
+# start >= 0.05 when crowded: crowded +$11.9k, worst crowded heat -$9.9k. Logs "TREND HOLD X: ... ML next 10 ticks".
+
 [crowd_model]                         # CROWD TENDER MODEL (2026-10-18, tonight's practice before the competition): while the
 "strategy.tender_model" = "docs/results/ml_2026-10-16/models.json"   # crowd alarm is on, accept a fixed tender the bot
 # declined on price when the linear tender model values it > 0.054 $/sh (accept-only; never overrides a risk-room or
@@ -40,13 +47,15 @@
 # better / 0 worse, 9 extra accepts (3 lost: -$34k, -$15k, -$3k). Logs "TENDER MODEL X: crowded, ... ACCEPT".
 # Run: scripts\run_crowd_model.bat (every heat; judge the BLOCK P&L of the TENDER MODEL accepts).
 
-[rsi_bot]                             # THE COLLEAGUE'S LOGIC (2026-10-18, practice): (1) accept every fixed tender whose price
-"strategy.accept_touch_edge" = 0.0    # beats the market (BUY under the bid / SELL over the ask; log "TOUCH ACCEPT"), and
-"execution.trend_hold_ticks" = 10     # (2) HOLD each block while the trend runs our way, unwind when it turns (he read
-# the trend off RSI(10); the 10-tick momentum check replayed better: +$26k vs RSI 60/40 +$18k). Still held at the bell =
-# closed at the last price, no fine. Logs "TREND HOLD X: holding" / "TREND HOLD X off". Recorded real paths, 113 heats,
-# both parts: $86k/heat mean, median $73k, >= $70k in 51% of heats, worst 10% $24k (default ~$57k). Sim (hold only): all
-# +$5.3k (t 5.6) but RIVAL markets -$1.9k (30 better / 97 worse); real crowded heats 10-17 negative. Practice only.
+[rsi_bot]                             # THE COLLEAGUE'S LOGIC, AGGRESSIVE + CROWD SAFEGUARD (2026-10-18, practice): (1) accept every
+"strategy.accept_touch_edge" = 0.0    # fixed tender whose price beats the market (BUY under the bid / SELL over the ask;
+"execution.trend_hold_ticks" = 10     # "TOUCH ACCEPT"); (2) HOLD each block while the trend runs our way, unwind when it
+"execution.trend_hold_min_start_crowded" = 0.05   # turns ("TREND HOLD"); (3) only while the crowd alarm is on, START a
+# hold only on a clear trend (last 10 ticks >= $0.05 our way). Quiet heats: as aggressive as before. He read the trend
+# off RSI(10); the 10-tick momentum check replayed better (+$26k vs RSI 60/40 +$18k). Held at the bell = closed at the
+# last price, no fine. Replay, 111 real heats: mean $83.9k (aggressive everywhere $86.8k), >= $70k in 49%; vs the
+# default +$33.4k/heat (t 6.4): quiet +$35.8k, crowded +$20.6k with the worst crowded heat -$11.4k (was -$28.3k).
+# Trailing stops and skipping the hold when crowded did not help. Live 20261018-004511 (quiet): $116.9k.
 
 [MF_ml_front25]                      # ML SPRINT + FRONT-LOAD together (user's choice 2026-10-15, practice only): cross the
 "strategy.sprint_model" = "docs/results/ml_2026-10-15/models.json"   # first 25% of every block at once, then the

@@ -839,19 +839,38 @@ class LiabilityStrategy(Strategy):
         if not h["on"]:
             return False
         if now >= h["next"]:
+            # SIGNAL (`trend_hold_signal`): "momentum" = the mid's last n-tick move; "ml" (profile rsi_ml, 2026-10-18) = the
+            # ML price model's predicted next-10-tick move (needs `sprint_model`; no prediction yet = keep holding).
+            # Out-of-sample replay, 54 heats: ML +$25.4k/heat vs the default (momentum +$26.8k; tie, t -0.4), worst 10%
+            # of heats $28.5k (momentum $23.8k); with a 0.05 start threshold, crowded +$11.9k, worst -$9.9k.
+            side = 1 if held > 0 else -1
+            use_ml = ex.get("trend_hold_signal", "momentum") == "ml" and self.ml_model is not None
             hist = self.mid_hist.get(t, [])
-            if len(hist) > n:
-                run = (1 if held > 0 else -1) * (hist[-1] - hist[-1 - n])          # + = in our favour
-                if run < 0:
+            run = None
+            if use_ml:
+                p = self.ml_pred.get(t)
+                run = None if p is None else side * p
+            elif len(hist) > n:
+                run = side * (hist[-1] - hist[-1 - n])                                 # + = in our favour
+            what = "ML next 10 ticks" if use_ml else f"last {n} ticks"
+            if run is not None:
+                # RISK DIAL (`trend_hold_min_start`, 2026-10-18): START a hold only on a clear trend our way; later
+                # checks only need it not against us. Replay, 111 heats: 0.05 -> +$26.9k/heat vs the default instead of
+                # +$36.2k, worst heat vs the default -$28.3k -> -$17.9k (crowded -$11.4k), worst 10% $23.8k -> $27.9k.
+                # `trend_hold_min_start_crowded`: the same, only while the crowd alarm is on (profile rsi_bot = 0.05): quiet
+                # heats keep the aggressive hold (+$35.8k vs the default), crowded heats' worst -$28.3k -> -$11.4k.
+                key = "trend_hold_min_start_crowded" if self.crowded() else "trend_hold_min_start"
+                need = float(ex.get(key, ex.get("trend_hold_min_start", 0.0))) if now == h["start"] else 0.0
+                if run < need:
                     h["on"] = False
                     gained = (1 if held > 0 else -1) * ((snap.mid(t) or h["mid0"] or 0.0) - (h["mid0"] or 0.0))
-                    log.info("TREND HOLD %s off: last %d ticks %+.3f against our %+d; unwinding (held %d ticks, "
-                             "mid %+.3f our way since)", t, n, run, held, now - h["start"], gained)
+                    log.info("TREND HOLD %s off: %s %+.3f against our %+d; unwinding (held %d ticks, "
+                             "mid %+.3f our way since)", t, what, run, held, now - h["start"], gained)
                     self.ex.journal.write("trend_hold", ticker=t, held=held, ticks=now - h["start"],
                                           gained=round(gained, 3), run=round(run, 3))
                     return False
                 if not h["logged"]:
-                    log.info("TREND HOLD %s: holding our %+d, last %d ticks %+.3f our way", t, held, n, run)
+                    log.info("TREND HOLD %s: holding our %+d, %s %+.3f our way", t, held, what, run)
                     h["logged"] = True
             h["next"] = now + max(1, int(ex.get("trend_hold_check_ticks", 10)))
         return True

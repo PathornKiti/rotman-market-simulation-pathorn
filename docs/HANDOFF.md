@@ -8,7 +8,28 @@ top 3 consistently. Expect a crowded market (rival bots unwinding the same stock
 
 ---
 
-## 00. 2026-10-18: tonight = last practice, competition tomorrow (read first)
+## 000. COMPETITION MORNING 2026-10-19 — checklist (read first)
+
+1. **Copy the final dataset** to the Mac: every `logs\*.log` -> `logs/`, every `logs\data\*.jsonl` -> `logs/data/`.
+2. **Tonight's rotation** (`alternate:A_default,rsi_bot,rsi_ml,crowd_model`):
+   `python scripts/ab_compare.py logs/data --since 20261018-000000` (per profile) + `python scripts/review_crowd_model.py`.
+   Check per profile: NLV, crowd-alarm heats, losing blocks, fines, `TREND HOLD ... off` gains, `TOUCH ACCEPT` blocks.
+3. **Retrain v3** (rules fixed 10-18 night, in the script's docstring; ~minutes):
+   `PYTHONPATH=$HOME/.cache/ritc-sklearn .venv/bin/python docs/results/ml_2026-10-19/train.py` (scikit-learn 1.9.1 is
+   installed in `~/.cache/ritc-sklearn`, outside the repo; takes ~18 min — rehearsed 10-18 night on 111 heats: v3 R² 0.361 vs live v2 0.363, better in 16/27 -> FAIL, keep v2). TEST = heats from 2026-10-17 on; PASS = v3 R² ≥ live v2 R²
+   and better in ≥ half of the test heats. PASS -> point `strategy.sprint_model` (config/liability.toml + `PROMOTED` in
+   scripts/review_batch.py) and, if its TEST tender line is not worse in crowd-alarm heats, `crowd_model`'s
+   `strategy.tender_model` at `docs/results/ml_2026-10-19/models.json`; FAIL -> no change. Then
+   `PYTHONPATH=src .venv/bin/python -m pytest -q` and `python scripts/review_batch.py check`.
+4. **Pick the competition profile** from step 2 (+ the 10-17/18 replays below): `A_default`, `rsi_bot` (momentum hold),
+   `rsi_ml` (ML hold), or `crowd_model`. Run it with `ritc run liability --live --forever --record --profile <name>`.
+5. Commit, push; Windows `git pull` before the first graded heat. ONE bot window per account.
+
+**rsi_bot vs rsi_ml (10-18):** out-of-sample replay (54 heats) a tie: ML hold +$25.4k/heat vs the default, momentum
++$26.8k (ML − momentum −$1.5k, t −0.4); ML has the better floor (worst 10% $28.5k vs $23.8k). On the live 00:45 heat
+momentum held TAME #3 (+$63k) where the ML predicted −0.002 and unwound. Both keep the crowded start threshold 0.05.
+
+
 
 **Candidate to unlock: `crowd_model`** (profile; `strategy.tender_model` = ml_2026-10-16 models.json, `crowd_override()` in
 `liability.py`). While the crowd alarm is on, accept a fixed tender the bot declined ON PRICE when the linear tender model
@@ -24,6 +45,13 @@ better / 0 worse**, 9 extra accepts, 3 lost (−$34k, −$15k, −$3k); quiet he
 113 heats: $86k mean, median $73k, >= $70k in 51%, worst 10% $24k; sim rival markets negative for the hold.
 Review: `python scripts/ab_compare.py logs/data --since <first heat>` (per profile) + `review_crowd_model.py`.
 (`scripts\run_crowd_model.bat` = crowd_model every heat, if you only want that one.)
+**First live rsi_bot heat (20261018-004511, quiet): $116.9k, 0 fines, flat at the bell** — two TAME holds (90 / 100 ticks,
++$0.72 / +$1.19 our way) made $103.5k vs ~$7k unwinding at once; replay of the same heat $114.5k (within 2% of live);
+default-style replay ~$56.6k. The hold blocked 2 tenders for risk room.
+**Risk management (replay, 111 heats):** trailing stops 0.10-0.30 and a crowd guard do NOT help (same worst heat; the guard
+throws away the crowded gain, +$38k t 2.9 on real crowded heats). What works is a start threshold:
+`execution.trend_hold_min_start_crowded` (IN profile **rsi_bot** = 0.05 while the crowd alarm is on, quiet heats stay aggressive; user decision 10-18: replay mean $83.9k vs $86.8k aggressive everywhere, crowded worst −$11.4k vs −$28.3k): +$26.9k/heat vs the default (rsi_bot +$36.2k), worst heat
+vs the default −$17.9k (rsi_bot −$28.3k), crowded worst −$11.4k.
 **After:** `python scripts/review_crowd_model.py logs/data`. Rule fixed in advance: ON for the competition if the model's
 accepts made ≥ $0 in total, none lost > $25k, 0 fines; no crowded heat tonight → decide on the out-of-time result.
 To switch on: `tender_model = "docs/results/ml_2026-10-16/models.json"` in `config/liability.toml` + the same in

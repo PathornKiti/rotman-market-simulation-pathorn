@@ -219,6 +219,11 @@ front_skip_favourable = 0.0   # FRONT SKIP (2026-10-16, practice: profile K_fron
                               # Live A/B 10-17 (28 heats): -$3.1k/heat, skips moved AGAINST us (-0.040, t -1.0): not adopted.
 trend_hold_ticks = 0          # TREND HOLD (2026-10-17, practice: profile rsi_bot = 10; 0 = off): keep a new block (no
 trend_hold_check_ticks = 10   # unwind) while the mid's last 10-tick move is in our favour, checked every 10 ticks; unwind
+trend_hold_signal = "momentum"   # "momentum" (the mid's last 10-tick move) or "ml" (the ML price model's next-10-tick
+                              # prediction, profile rsi_ml; out-of-sample replay a tie with momentum, better floor).
+trend_hold_min_start = 0.0    # RISK DIAL (2026-10-18): start a hold only if the last 10 ticks moved >= this $ our way; the
+trend_hold_min_start_crowded = 0.0   # _crowded value applies while the crowd alarm is on (profile rsi_bot = 0.05: quiet heats
+                              # stay aggressive; replay crowded worst heat vs the default -$28.3k -> -$11.4k, mean -$2.9k).
                               # as usual from the first check against us; still held at the bell = closed at the last
                               # price, no fine. Recorded real paths, 113 heats: +$22..30k/heat (t 4.4-5.7), skewed; worst
                               # heat -$28..49k. Not live-tested (docs/results/rsi_hold_2026-10-17).
