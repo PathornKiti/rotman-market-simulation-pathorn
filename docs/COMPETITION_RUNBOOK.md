@@ -84,7 +84,7 @@ Double-click `scripts\competition_status.bat` in a **second** window. It reads t
 | HTTP 429 in the log | add `RIT_MIN_INTERVAL=0.1` to `.env`, then restart the bot between heats |
 | Orders rejected "exceeds limit" | check `/limits` in `logs\doctor-competition.txt`; never above gross 250k / net 100k |
 | The bot window closed or crashed mid-heat | restart `scripts\run_competition.bat` at once. It picks up the current positions and unwinds them |
-| The bot is doing something clearly wrong | **Ctrl-C** (cancels all orders). Run `python -m ritc suggest` for read-only advice, and close positions by hand **only toward zero** |
+| The bot is doing something clearly wrong | **Ctrl-C** (cancels all orders). Switch to manual trading with `scripts\suggest_rsi.bat` (read-only rsi_bot advice) and close positions by hand **only toward zero** |
 | A position is stuck at the end | leave it: the case closes it at the last price, with no fine |
 
 ## 6. After the competition

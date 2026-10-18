@@ -169,6 +169,12 @@ class Advisor:
             out.append(f"{self.c(BOLD, t)}  pos {pos:+,}   {touch}")
             if t in frozen:
                 out.append(self.c(YELLOW, f"    HOLD: tender #{frozen[t]} still open, don't trade {t}"))
+            elif pos and (getattr(s, "trend_holds", {}).get(t) or {}).get("on"):
+                h = s.trend_holds[t]
+                n = int(s.cfg.get("execution", {}).get("trend_hold_ticks", 0))
+                out.append(self.c(YELLOW, f"    TREND HOLD: keep it, no order (held {now - h['start']} ticks, mid "
+                                          f"{(1 if pos > 0 else -1) * ((book.mid or 0) - (h['mid0'] or 0)):+.3f} our "
+                                          f"way); unwind when the last {n} ticks turn against us"))
             elif pos:
                 b = algo.blocks.get(t)
                 kids = algo._kids(t, b, book, pos, now) if b else []

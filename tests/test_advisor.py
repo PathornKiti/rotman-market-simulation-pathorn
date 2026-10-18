@@ -93,3 +93,16 @@ def test_runner_waits_for_the_server_and_ctrl_c_sends_nothing(monkeypatch):
     monkeypatch.setattr(bot.time, "sleep", nap)
     runner.run()
     assert len(naps) == 3 and runner.loops == 0 and runner.s.ex.sent == 0
+
+
+def test_order_lines_show_a_trend_hold():
+    """rsi_bot in suggest mode: a block the trend hold keeps shows TREND HOLD (keep it, no order), not a stale order."""
+    from types import SimpleNamespace as NS
+    book = NS(best_bid=25.00, best_ask=25.02, mid=25.01)
+    s = NS(tickers=["TAME"], algo=NS(passive_from=None, blocks={}, passive=set()),
+           trend_holds={"TAME": {"on": True, "start": 100, "mid0": 25.31}}, cfg={"execution": {"trend_hold_ticks": 10}})
+    snap = NS(positions={"TAME": -53_000}, book=lambda t: book, abs_tick=130)
+    view = advisor.Advisor.__new__(advisor.Advisor)
+    view.s, view.color = s, False
+    out = "\n".join(view.order_lines(snap, {}, []))
+    assert "TREND HOLD: keep it, no order (held 30 ticks, mid +0.300 our way)" in out and "LIMIT" not in out
