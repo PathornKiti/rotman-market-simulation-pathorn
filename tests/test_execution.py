@@ -105,21 +105,18 @@ def _port():
 
 def test_parallel_calls_and_feed_against_sim():
     port = _port()
-    srv, m = serve("commodity", port, speed=50, delay=0.0, seed=1, block=False)
+    srv, m = serve("liquidity", port, speed=50, delay=0.0, seed=1, block=False)
     try:
         c = RITClient(base_url=f"http://127.0.0.1:{port}/v1")
-        res = c.parallel([c.case, c.trader, lambda: c.book("CL"), lambda: 1 / 0])
-        assert res[0]["name"] == "SIM-COMMODITY" and "nlv" in res[1] and "bid" in res[2]
+        res = c.parallel([c.case, c.trader, lambda: c.book("CRZY"), lambda: 1 / 0])
+        assert res[0]["name"] == "SIM-LIQUIDITY" and "nlv" in res[1] and "bid" in res[2]
         assert isinstance(res[3], ZeroDivisionError)                  # errors returned, not raised
 
         feed = EventFeed(c, poll=0.02, news=True).start()
         deadline = time.time() + 5
-        while m.abs_tick < 21 and time.time() < deadline:            # first inventory report at tick 20
+        while m.abs_tick < 3 and time.time() < deadline:
             time.sleep(0.05)
-        assert feed.wait(2.0)
-        news = feed.drain_news()
-        assert news and "inventor" in news[0]["body"].lower()
-        assert feed.drain_news() == []                                # drained exactly once
+        assert feed.drain_news() == []
         feed.stop()
     finally:
         srv.shutdown()
@@ -160,16 +157,16 @@ def test_sim_passive_fills_are_common_random_numbers():
     from ritc.sim.server import Market
 
     def fills(extra: bool) -> list[int]:
-        m = Market("equity", 300, 1, seed=3)
+        m = Market("liquidity", 300, 1, seed=3)
         m.status = "ACTIVE"
         out = []
         for _ in range(40):
             for o in list(m.orders):
                 m.cancel(o)
-            s = m.secs["SMMR"]
-            m.submit("SMMR", "LIMIT", 5000, "BUY", s.bids[0][0])
+            s = m.secs["TAME"]
+            m.submit("TAME", "LIMIT", 5000, "BUY", s.bids[0][0])
             if extra:
-                m.submit("ATMN", "LIMIT", 5000, "SELL", m.secs["ATMN"].asks[0][0])
+                m.submit("CROC", "LIMIT", 5000, "SELL", m.secs["CROC"].asks[0][0])
             before = s.position
             m.advance()
             out.append(s.position - before)
@@ -191,17 +188,17 @@ def test_tail_metrics():
 
 def _queue_market(queue: bool):
     from ritc.sim.server import Market
-    m = Market("equity", 300, 1, seed=3, queue=queue)
+    m = Market("liquidity", 300, 1, seed=3, queue=queue)
     m.status = "ACTIVE"
-    s = m.secs["SMMR"]
+    s = m.secs["TAME"]
     s.bids, s.asks = [[24.97, 3000], [24.96, 2000]], [[25.03, 3000], [25.04, 2000]]
-    m._flow = lambda ticker, action: 2000 if ticker == "SMMR" and action == "BUY" else 0
+    m._flow = lambda ticker, action: 2000 if ticker == "TAME" and action == "BUY" else 0
     return m, s
 
 
 def test_queue_joins_behind_displayed_shares():
     m, s = _queue_market(True)
-    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.97)        # 3,000 shown ahead of us
+    m.submit("TAME", "LIMIT", 1000, "BUY", 24.97)        # 3,000 shown ahead of us
     m._fill_resting()
     assert s.position == 0                                # flow ate 2,000 of the queue
     m._fill_resting()
@@ -210,21 +207,21 @@ def test_queue_joins_behind_displayed_shares():
 
 def test_queue_improving_the_touch_is_first():
     m, s = _queue_market(True)
-    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.98)        # inside the spread: nobody ahead
+    m.submit("TAME", "LIMIT", 1000, "BUY", 24.98)        # inside the spread: nobody ahead
     m._fill_resting()
     assert s.position == 1000
 
 
 def test_queue_off_is_the_old_model():
     m, s = _queue_market(False)
-    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.97)
+    m.submit("TAME", "LIMIT", 1000, "BUY", 24.97)
     m._fill_resting()
     assert s.position == 1000
 
 
 def test_queue_decay_and_vanished_level():
     m, s = _queue_market(True)
-    m.submit("SMMR", "LIMIT", 1000, "BUY", 24.97)
+    m.submit("TAME", "LIMIT", 1000, "BUY", 24.97)
     oid = next(iter(m.orders))
     m._decay_queues()
     assert m.ahead[oid] == 3000 * 0.8                     # QUEUE_CANCEL of the queue leaves
@@ -239,15 +236,15 @@ def test_in_process_transport_answers_like_http():
     from ritc.tune import _free_port
 
     port = _free_port()
-    srv, m = serve("equity", port, speed=0, seed=5, block=False)
+    srv, m = serve("liquidity", port, speed=0, seed=5, block=False)
     try:
         url = f"http://127.0.0.1:{port}/v1"
         http, local = RITClient(url, max_retries=1), RITClient(url, max_retries=1)
         local.adapter = InProcessAdapter(m)
         for c in (http, local):
             assert c.case()["status"] == "ACTIVE"
-        assert http.securities() == local.securities() and http.book("SPNG") == local.book("SPNG")
-        local.limit_order("SPNG", "BUY", 100, 1.00)              # rests far below the market
+        assert http.securities() == local.securities() and http.book("TAME") == local.book("TAME")
+        local.limit_order("TAME", "BUY", 100, 1.00)              # rests far below the market
         assert [o["price"] for o in http.orders()] == [1.0]      # both see one market
     finally:
         srv.shutdown()

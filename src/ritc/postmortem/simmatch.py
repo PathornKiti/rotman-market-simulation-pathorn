@@ -40,7 +40,7 @@ def stream(seed: int, stress: str = "", hostile: float = 0.0, books: bool = Fals
     old = os.environ.get("RITC_STRESS")
     os.environ["RITC_STRESS"] = stress
     try:
-        m = _Quiet("liability", 420, 1, seed, hostile=hostile)
+        m = _Quiet("liquidity", 420, 1, seed, hostile=hostile)
     finally:
         if old is None:
             os.environ.pop("RITC_STRESS", None)

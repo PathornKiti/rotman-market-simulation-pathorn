@@ -1,5 +1,5 @@
 """
-LIABILITY TRADING - evaluate institutional tender offers, accept the profitable
+LIQUIDITY TRADING - evaluate institutional tender offers, accept the profitable
 ones, then unwind the resulting block into the market without moving it.
 
 The edge
@@ -96,9 +96,35 @@ from ..core.book import Level, OrderBook
 from ..core.bot import Snapshot, Strategy
 from ..pricing.stats import EWMA
 from ..pricing.timeseries import OnlineGarch
-from .commodity import BayesImpact
 
-log = logging.getLogger("ritc.liability")
+log = logging.getLogger("ritc.liquidity")
+
+
+@dataclass
+class BayesImpact:
+    """
+    Online Bayesian estimate of the price impact per unit of inventory surprise.
+
+    Model: move = beta * x + noise,  x = -surprise (a build is bearish),
+           noise ~ N(0, noise_sd^2),  prior beta ~ N(prior_mean, prior_sd^2).
+    The normal-normal posterior is closed-form (conjugate), so each report updates
+    it exactly:  precision += x^2 / noise^2,  beta = (prior terms + x * move / noise^2) / precision.
+    A mis-calibrated `impact_per_unit` is corrected by the market's own reactions
+    within a heat, and the posterior sd says how much to trust it.
+    """
+    mean: float
+    sd: float
+    noise_sd: float = 0.10
+    n: int = 0
+
+    def update(self, x: float, move: float) -> None:
+        if x == 0:
+            return
+        prec0, prec_obs = 1 / self.sd ** 2, x * x / self.noise_sd ** 2
+        prec = prec0 + prec_obs
+        self.mean = (self.mean * prec0 + (move / x) * prec_obs) / prec
+        self.sd = prec ** -0.5
+        self.n += 1
 
 
 @dataclass(frozen=True)
@@ -315,8 +341,8 @@ def unwind_slice(book: OrderBook, position: int, max_slippage: float, participat
     return action, qty, worst_px
 
 
-class LiabilityStrategy(Strategy):
-    name = "liability"
+class LiquidityStrategy(Strategy):
+    name = "liquidity"
     wants_tenders = True           # tenders via the real-time feed
 
     def __init__(self, ctx):

@@ -35,14 +35,14 @@ def test_ml_sprint_model_drives_the_expected_move_against_the_block(tmp_path):
     from ritc.core.execution import Executor
     from ritc.core.risk import RiskManager
     from ritc.practice import pick_profile
-    from ritc.strategies.liability import LiabilityStrategy
+    from ritc.strategies.liquidity import LiquidityStrategy
 
     leaf = [{"leaf": True, "value": 0.2, "f": 0, "thr": 0, "left": 0, "right": 0}]
     path = tmp_path / "models.json"
     path.write_text(json.dumps({"models": {"price_trees": {"kind": "trees", "baseline": 0.0, "trees": [leaf],
                                                            "cols": mlmodel.PRICE_COLS}}}))
     cfg = {"case": {"tickers": ["X"]}, "strategy": {"sprint_model": str(path)}}
-    s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+    s = LiquidityStrategy(Context(None, Executor(None), RiskManager(), cfg))
     s.sync_tickers(Snapshot({"tick": 1}, {"X": {"bid": 24.99, "ask": 25.01}}))
     for tick in range(1, 26):
         snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
@@ -53,15 +53,15 @@ def test_ml_sprint_model_drives_the_expected_move_against_the_block(tmp_path):
             assert "X" not in s.ml_pred                  # 20 ticks of history: the old predictor still decides
     assert s.ml_pred["X"] == 0.2                          # the model expects the price to rise 20c
     assert s.predicted_against("X", -50_000, snap) == 0.2 and s.predicted_against("X", 50_000, snap) == -0.2
-    assert [pick_profile("liability", "alternate:A_default,M_ml_sprint", heat=h)[0] for h in (1, 2, 3)] == \
-        ["A_default", "M_ml_sprint", "A_default"]
+    assert [pick_profile("liquidity", "alternate:A_default,rsi_ml", heat=h)[0] for h in (1, 2, 3)] == \
+        ["A_default", "rsi_ml", "A_default"]
 
 
 def test_crowd_guard_hands_the_sprint_back_to_the_run_and_book_model(tmp_path):
     from ritc.core.bot import Context, Snapshot
     from ritc.core.execution import Executor
     from ritc.core.risk import RiskManager
-    from ritc.strategies.liability import LiabilityStrategy
+    from ritc.strategies.liquidity import LiquidityStrategy
 
     leaf = [{"leaf": True, "value": 0.2, "f": 0, "thr": 0, "left": 0, "right": 0}]
     path = tmp_path / "models.json"
@@ -70,7 +70,7 @@ def test_crowd_guard_hands_the_sprint_back_to_the_run_and_book_model(tmp_path):
     for guard in (False, True):
         cfg = {"case": {"tickers": ["X"]}, "strategy": {"sprint_model": str(path), "sprint_model_crowd_guard": guard,
                                                         "crowd_learn": True, "trend_learn": True}}
-        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        s = LiquidityStrategy(Context(None, Executor(None), RiskManager(), cfg))
         s.sync_tickers(Snapshot({"tick": 1}, {"X": {"bid": 24.99, "ask": 25.01}}))
         for tick in range(1, 26):
             snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},
@@ -91,7 +91,7 @@ def test_front_skip_drops_the_slice_only_when_the_move_is_expected_our_way(tmp_p
     from ritc.core.bot import Context, Snapshot
     from ritc.core.execution import Executor
     from ritc.core.risk import RiskManager
-    from ritc.strategies.liability import LiabilityStrategy
+    from ritc.strategies.liquidity import LiquidityStrategy
 
     leaf = [{"leaf": True, "value": 0.2, "f": 0, "thr": 0, "left": 0, "right": 0}]      # the model: price up 20c
     path = tmp_path / "models.json"
@@ -100,7 +100,7 @@ def test_front_skip_drops_the_slice_only_when_the_move_is_expected_our_way(tmp_p
     for thr, long_skipped in ((0.0, False), (0.03, True), (0.25, False)):
         cfg = {"case": {"tickers": ["X"]}, "strategy": {"sprint_model": str(path)},
                "execution": {"front_cross": 0.25, "front_skip_favourable": thr}}
-        s = LiabilityStrategy(Context(None, Executor(None), RiskManager(), cfg))
+        s = LiquidityStrategy(Context(None, Executor(None), RiskManager(), cfg))
         s.sync_tickers(Snapshot({"tick": 1}, {"X": {"bid": 24.99, "ask": 25.01}}))
         for tick in range(1, 26):
             snap = Snapshot({"tick": tick, "period": 1, "ticks_per_period": 420},

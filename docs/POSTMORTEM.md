@@ -1,7 +1,7 @@
-# Liability bot: reviews and reports
+# Liquidity bot: reviews and reports
 
-Brief: `document/Liquidity Risk Case - for selection 2027.pdf`. Bot: `liability`. Reports: `reports/index.html`
-and one `reports/liability-<date>-<time>_<local|live>.html` + `.xlsx` per run (`python -m ritc report`).
+Brief: `document/Liquidity Risk Case - for selection 2027.pdf`. Bot: `liquidity`. Reports: `reports/index.html`
+and one `reports/liquidity-<date>-<time>_<local|live>.html` + `.xlsx` per run (`python -m ritc report`).
 
 Three reviews of the Liquidity Risk Case bot, newest first, and what each report contains. Assumptions and their
 checks: [ASSUMPTIONS.md](ASSUMPTIONS.md); practice-day plan: [PRACTICE_PLAN.md](PRACTICE_PLAN.md).
@@ -10,7 +10,7 @@ checks: [ASSUMPTIONS.md](ASSUMPTIONS.md); practice-day plan: [PRACTICE_PLAN.md](
 
 | Command | Files | What is in them |
 |---|---|---|
-| `python -m ritc report` | `reports/liability-<date>-<time>_<local\|live>.html` + `.xlsx` per bot log, `reports/index.html` | gap checks against the brief; from the run journal: P&L path, where it came from, the struggle distribution, tenders; for local runs also the simulator's truth and the current bot replayed on the same market with per-tender what-ifs |
+| `python -m ritc report` | `reports/liquidity-<date>-<time>_<local\|live>.html` + `.xlsx` per bot log, `reports/index.html` | gap checks against the brief; from the run journal: P&L path, where it came from, the struggle distribution, tenders; for local runs also the simulator's truth and the current bot replayed on the same market with per-tender what-ifs |
 | (same) | `reports/<log>_<mode>.json`, `reports/live-learnings.json` | each run's P&L, P&L parts, tender counts and struggles (count, $, severity, what to look at), for the next review |
 | `python -m ritc report --stress` | one `reports/stress-<date>-<time>_local.html`, `.xlsx` and `.json` | the current bot through every stress scenario, every seed side by side, vs the base market and the official template; per seed a "what happened" summary and the bot's full log |
 
@@ -23,7 +23,7 @@ auction bid rejected, accepted but never booked, slow booking, declined 10c+ ins
 undecided window, position through zero, near the limits, API errors by type, slow loops, drawdown, held at the
 bell. Each has a "look at" pointing to the setting or improvement below.
 
-## 2026-10-10: review of the eight liability logs
+## 2026-10-10: review of the eight liquidity logs
 
 ### What was analysed
 

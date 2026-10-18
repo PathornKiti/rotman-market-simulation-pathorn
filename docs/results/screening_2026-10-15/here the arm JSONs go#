@@ -1,1 +1,0 @@
-S=${OUT:-/tmp/screening}; mkdir -p $S      

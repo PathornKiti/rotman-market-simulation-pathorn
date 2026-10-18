@@ -1,11 +1,11 @@
 # Practice heats on the real server (2026-10-11)
 
-Five Liquidity Risk heats on the practice server (161.200.68.42), the bot running `ritc run liability --live` on
+Five Liquidity Risk heats on the practice server (161.200.68.42), the bot running `ritc run liquidity --live` on
 Windows next to the RIT client. Source files in `docs/practice_logs/`: `log1.txt`, `log2.txt`, `log3.txt`, `log4.txt`,
 `stable_but_loss_other_trader_log.txt` (bot console logs). All five ran **before** the fixes below.
 
 What the text logs do not contain: final P&L per heat, fines, and the close-out. Those are in RIT's Trader Info and
-Transaction Log, and in the run journals `logs\liability-*.jsonl` on the Windows machine (copy them here and run
+Transaction Log, and in the run journals `logs\liquidity-*.jsonl` on the Windows machine (copy them here and run
 `ritc report` for the per-tick P&L path and per-tender counterfactuals).
 
 ## 1. The five heats
@@ -155,6 +155,6 @@ heat with `--set strategy.liquidity_model=flow` if the practice shows no crowd (
 
 ## 6. Next practice heat: what to record
 
-1. Copy `logs\liability-*.jsonl` and the matching `.log` for every heat (P&L path, tender mids, our bids vs mid).
+1. Copy `logs\liquidity-*.jsonl` and the matching `.log` for every heat (P&L path, tender mids, our bids vs mid).
 2. Screenshot Trader Info (final NLV) and the Transaction Log (fines, close-out at the bell).
 3. Run one heat with `--set strategy.liquidity_model=flow` and compare the auction win rate.

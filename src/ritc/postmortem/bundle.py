@@ -118,7 +118,7 @@ def write_bundle(models: list[dict], stress: dict | None, out_dir: str = "report
     mode = "live" if any(m["mode"] == "live" for m in models) else "local"
     stamp = time.strftime("%Y%m%d-%H%M%S")
     stem = out / f"report-{stamp}_{mode}"
-    body = (f'<h1 id="top">Liability bot report {stamp} ({mode})</h1><p class=sub>Liquidity Risk Case (2027 selection) · '
+    body = (f'<h1 id="top">Liquidity bot report {stamp} ({mode})</h1><p class=sub>Liquidity Risk Case (2027 selection) · '
             f"{len(models)} bot run(s)" + (" · stress test of the current bot" if stress else "")
             + " · the same content is in this report's .xlsx and .json</p>" + EXPLAINER + overview(models)
             + "".join(run_section(m) for m in models))
@@ -126,7 +126,7 @@ def write_bundle(models: list[dict], stress: dict | None, out_dir: str = "report
         from .stress_report import stress_block
         body += stress_block(stress["results"], stress["sums"], stress["stamp"], stress["seeds"])
     body += catalogue(IMPROVEMENTS)
-    stem.with_suffix(".html").write_text(page(f"Liability report {stamp}", body, "Runs and stress test"))
+    stem.with_suffix(".html").write_text(page(f"Liquidity report {stamp}", body, "Runs and stress test"))
     from .live import learnings
     doc = {"generated": stamp, "mode": mode, "improvements": IMPROVEMENTS, "ab_results": AB_RESULTS,
            "runs": [{"stamp": m["stamp"], "mode": m["mode"], "mode_why": m["mode_why"], "run": m["run"],

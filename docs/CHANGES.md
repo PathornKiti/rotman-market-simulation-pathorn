@@ -59,17 +59,17 @@ shows them, and cancels its own orders the quote manager lost track of. Lock-ste
 ## 2026-10-11: manual-trading advisor (`python -m ritc suggest`)
 
 `src/ritc/advisor.py`: connects to the live RIT API READ-ONLY (every non-GET call refused at the client) and runs
-the liability bot in dry-run on your own positions. Each refresh shows every open tender's ACCEPT / DECLINE /
+the liquidity bot in dry-run on your own positions. Each refresh shows every open tender's ACCEPT / DECLINE /
 BID <price> with the $ edge and when to answer, each stock's limit orders (REST at the touch / CROSS), and red
 warnings for your resting orders that would be fined (through zero, wrong side, open tender). Tender pricing is
-the bot's own: `LiabilityStrategy.decide()` was split out of `handle_tenders` (no behaviour change, 152 tests).
+the bot's own: `LiquidityStrategy.decide()` was split out of `handle_tenders` (no behaviour change, 152 tests).
 No trading logic changed, so there is no A/B number for it.
 Also: DMA API support (`RIT_AUTH` = Authorization header, sent with every request; same `/v1` paths as the client
 API per the DMA swagger), and `suggest` waits for a connection, saying what is missing, re-reading `.env` every 2 s.
 
 ## 2026-10-10: post-trade gap reports (`python -m ritc report`)
 
-`src/ritc/postmortem/` turns each `logs/liability-*.log` into `reports/liability-<date>-<time>_<local|live>.html`
+`src/ritc/postmortem/` turns each `logs/liquidity-*.log` into `reports/liquidity-<date>-<time>_<local|live>.html`
 and a matching `.xlsx` (laid out like the case's `Liquidity help file.xlsx`, with a fixed and extended live RTD
 sheet), plus `reports/index.html`. Local runs are matched to their simulator seed, so each report shows the true
 mid, hidden auction reserves, a replay of the current bot on the same market with an exact P&L decomposition, and
@@ -84,7 +84,7 @@ RIT runs get a P&L path, a P&L split and a struggle distribution in their `_live
 official template and each heat's bot log, in one .html / .xlsx / .json); docs merged from 23 files to 13 (RUNBOOK, ARCHITECTURE, POSTMORTEM,
 RESEARCH, CHANGES absorbed the rest).
 
-## 2026-10-09 → 2026-10-11: Liquidity Risk Case, "for selection 2027" brief (`liability` bot)
+## 2026-10-09 → 2026-10-11: Liquidity Risk Case, "for selection 2027" brief (`liquidity` bot)
 
 The official brief for this week's trading (`document/Liquidity Risk Case - for selection 2027.pdf`) replaced
 the 2026 rules: 420 s, CRZY $10 / TAME $25 / CROC $20, $0.02 fees, max orders 25k / 10k / 20k, limits
@@ -149,7 +149,7 @@ Source: Rotman's own lab repo, [OFFICIAL_RULES.md](OFFICIAL_RULES.md). Two rules
 
 | Case | Change | Benign 1–16 / 101–116 | Hostile 1–16 / 101–116 | |
 |---|---|---|---|---|
-| Liability | **Trade the stocks `/securities` lists**, not only the config's. 2026 sub-heats each use different tickers; before, a tender on one was never unwound ($10/share uncovered fine). Fees and max order from the server row | identical on all 32 runs (same tickers) | identical | kept: a test renames the sim's stocks and checks every tender is unwound |
+| Liquidity | **Trade the stocks `/securities` lists**, not only the config's. 2026 sub-heats each use different tickers; before, a tender on one was never unwound ($10/share uncovered fine). Fees and max order from the server row | identical on all 32 runs (same tickers) | identical | kept: a test renames the sim's stocks and checks every tender is unwound |
 | Equity | **Sim: the 2026 case.** WNTR added, all four at $25, per-stock rebates 0.01/0.02/0.015/0.025, aggregate limit (10k/15k/20k) announced by news and fined $10/share over at each minute close, news shock after each close. Old bot on it: fined in 4/16 seeds, up to $55k | new baseline | | simulator |
 | Equity | **`close_every = 60`**: quote only the reducing side 5 ticks before each close, cross for anything over 90% of the limit 2 ticks before; limit parsed from news | **+$7.4k (t 2.1) / +$12.7k (t 2.4)**; worst −$49.1k → −$2.4k / −$56.5k → −$9.0k | **+$7.9k (t 2.6) / +$9.3k (t 2.6)**; worst −$38.7k → −$7.0k | kept |
 | Equity | `close_lead` 2/10/20 × `close_buffer` 0.7/1.0 | all within noise of 5 / 0.9 (best +$0.5k hostile, t 1.6) | | defaults kept |
@@ -190,14 +190,14 @@ was intercepting loopback HTTP and stretched a run to 12 minutes.
 |---|---|---|---|---|---|
 | Derivatives | weekly vol headlines | **`vol_term`**: each option's forecast is the variance-weighted mix over ITS remaining ticks: the rest of this week at this week's realised vol, the rest at next week's announced range mid. It used to blend the range into one number for every option. | **+$26.4k, t 6.3** / **+$26.0k, t 6.2**, 15/16; worst $32.8k → $43.3k | **+$30.6k, t 6.1** / **+$29.6k, t 6.1**, 16/16; worst −$1.0k → +$15.0k | kept |
 | Equity | assigned blocks (new in the sim, below) | **`block_cut`**: a position jump bigger than our quotes can fill is an assigned block; cut it at once instead of skewing it off | **+$1.8k, t 2.6** / **+$1.6k, t 3.0** | **+$2.4k, t 3.2** / **+$0.9k, t 2.1** | kept |
-| Liability | auction results | adaptive `competitive_margin` (+step on a fill, −step on a reject) | +$0.8k, t 1.6 / −$0.4k, t −1.9 | — | removed |
+| Liquidity | auction results | adaptive `competitive_margin` (+step on a fill, −step on a reject) | +$0.8k, t 1.6 / −$0.4k, t −1.9 | — | removed |
 | ETF | USD balance from the ETF leg | hedge it back to flat with the USD security past a band | −$1.8k, t −1.5 / −$2.7k, t −1.8 | — | removed |
 
 **Simulator corrections:**
-* **Liability auction bug.** A competitive tender filled when our bid was *below* the client's
+* **Liquidity auction bug.** A competitive tender filled when our bid was *below* the client's
   reserve, so a lower bid always won. Officially a bid must be *past* the reserve (at or above it
   when the client sells). The reserve is now also random per tender (0–15 cents through the mid,
-  own generator). The liability baseline (crowd learning off) drops from $42.1k to **$25.6k**
+  own generator). The liquidity baseline (crowd learning off) drops from $42.1k to **$25.6k**
   (benign): the old number included near-free auction wins.
 * **Equity block transfers** (CHANGES.md): about 3 times a heat, the case assigns an
   unannounced 5k–15k share block at the mid. The price then drifts 2–5 σ against the holder
@@ -205,7 +205,7 @@ was intercepting loopback HTTP and stretched a run to 12 minutes.
   case does this. If the brief says it doesn't, set `blocks = False` in the sim state, and
   `block_cut` never triggers anyway.
 
-**Liability crowd learning re-validated on the corrected auctions.** The first version (prior
+**Liquidity crowd learning re-validated on the corrected auctions.** The first version (prior
 0.06, weight 1.5, learning from every tender) cost **−$4.9k (t −3.0)** in the benign market:
 its own unwind looked like a crowd, and the old auctions had hidden that. The fix is to learn
 only from tenders not taken and charge only once the crowd is significant (`crowd_untaken_only`,
@@ -214,7 +214,7 @@ benign −$0.3k (t −1.0) / holdout **$0**. Details in ARCHITECTURE.md.
 
 | Case (16 seeds, benign / hostile) | Before today | Now |
 |---|---|---|
-| Liability | $25.6k / $8.6k (corrected auctions, crowd off) | **$25.2k / $19.9k** |
+| Liquidity | $25.6k / $8.6k (corrected auctions, crowd off) | **$25.2k / $19.9k** |
 | Derivatives | $117.4k / $116.3k | **$143.8k / $142.3k** |
 | Equity (with block transfers) | $1.9k / −$2.9k | **$3.6k / −$1.3k** |
 | ETF | $35.2k / $47.7k | unchanged |
@@ -226,7 +226,7 @@ benign −$0.3k (t −1.0) / holdout **$0**. Details in ARCHITECTURE.md.
 |---|---|---|---|---|
 | Derivatives | $143.8k / $43.3k, 0 | $138.1k / $15.0k, 0 | $142.3k / $41.3k, 0 | $136.8k / $18.1k, 0 |
 | ETF | $35.2k / $21.7k, 0 | $25.9k / −$1.5k, 1 | $47.7k / $23.2k, 0 | $47.9k / $6.5k, 0 |
-| Liability | $25.2k / $14.2k, 0 | $24.0k / $7.6k, 0 | $19.9k / −$10.3k, 2 | $18.2k / −$13.1k, 3 |
+| Liquidity | $25.2k / $14.2k, 0 | $24.0k / $7.6k, 0 | $19.9k / −$10.3k, 2 | $18.2k / −$13.1k, 3 |
 | Equity | $3.6k / −$9.1k, 2 | $2.2k / −$6.4k, 4 | −$1.3k / −$8.2k, 11 | −$2.7k / −$9.3k, 13 |
 | Commodity | $393 / $260, 0 | $363 / $252, 0 | $394 / $259, 0 | $378 / $281, 0 |
 
@@ -251,14 +251,14 @@ baseline still stands. Full write-up: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Case | Benign → hostile, before defences (16 seeds) |
 |---|---|
-| Liability | $42.1k → $7.4k (t −6.1), 7 losing seeds |
+| Liquidity | $42.1k → $7.4k (t −6.1), 7 losing seeds |
 | Equity | $6.8k → $1.5k (t −6.4), 6 losing seeds |
 | Derivatives / commodity | no significant change |
 | ETF | +$12.5k (arbitrage gains from dislocations) |
 
 | Change | Hostile, 16 seeds | Holdout 101–116 (hostile) | Benign (1–16 / 101–116) |
 |---|---|---|---|
-| Liability crowd learning, first version (prior 0.06 $/10k, weight 1.5, adaptive 12-tick race). **Superseded**: these numbers used the old, buggy auction rules. The gated version above replaces it. | **+$33.7k, t 5.1, 16/16**; worst −$10.3k → +$12.9k; 0 losing seeds | **+$51.3k, t 7.2, 16/16**; worst −$13.1k → +$34.3k | +$3.3k (t 1.3) / +$1.4k (t 0.6) |
+| Liquidity crowd learning, first version (prior 0.06 $/10k, weight 1.5, adaptive 12-tick race). **Superseded**: these numbers used the old, buggy auction rules. The gated version above replaces it. | **+$33.7k, t 5.1, 16/16**; worst −$10.3k → +$12.9k; 0 losing seeds | **+$51.3k, t 7.2, 16/16**; worst −$13.1k → +$34.3k | +$3.3k (t 1.3) / +$1.4k (t 0.6) |
 
 Removed (no improvement, code deleted; numbers in ARCHITECTURE.md and RESEARCH.md):
 price band on aggressive orders, spoof-capped book depth, equity queue fighting,
@@ -299,7 +299,7 @@ news, currencies). Derivatives are now scored like the judges score them, NLV �
 |---|---|---|---|---|---|
 | Derivatives | $117.4k | $32.8k | $49.8k | 0 | official fees/spread/strikes/news + parser fix |
 | ETF | $30.2k | $13.4k | $17.9k | 0 | USD-quoted RITC, 2× limit weight, rebates, NAV close-out |
-| Liability | $42.1k | $23.5k | $26.5k | 0 | none (compliance only) |
+| Liquidity | $42.1k | $23.5k | $26.5k | 0 | none (compliance only) |
 | Equity / Commodity | unchanged | | | | no official rule to apply |
 
 Paired checks (16 seeds; holdout = seeds 101–116):
@@ -309,7 +309,7 @@ Paired checks (16 seeds; holdout = seeds 101–116):
 | Vol-forecast parser reads *"between 27-30%"* | old parser ignored it. Without range news (`range_weight = 0`): **−$86.8k** | −7.44 | — | Official wording. Range news drives ~¾ of derivatives P&L |
 | `option_fee` 1.00 → **2.00** (official) | $1 assumption: −$3.4k, worse on 14/16 | −3.84 | −$3.9k, t −3.94 | official rule and better |
 | ETF `fx_ticker = "USD"`, `fx_mode = "divide"` | ignoring FX: −$7.4k, 2 losing seeds | −2.51 | −$4.7k, t −1.51 | official pricing equation (holdout not significant, but no worse anywhere) |
-| Liability `decline_explicitly = true` | identical on all 16 seeds | 0.00 | — | official front-running rule, at zero cost |
+| Liquidity `decline_explicitly = true` | identical on all 16 seeds | 0.00 | — | official front-running rule, at zero cost |
 
 Delta penalty, seeds 1–3: $85, $5, $0 per heat. The hedge band keeps delta well inside the limit.
 
@@ -327,7 +327,7 @@ small differences are within noise. Use these numbers as the reference from now 
 
 | Case | Mean final NLV | Worst seed | Stdev |
 |---|---|---|---|
-| Liability | $42.1k | $23.5k | $11.3k |
+| Liquidity | $42.1k | $23.5k | $11.3k |
 | Derivatives | $18.1k | **−$14.0k** | $16.8k |
 | ETF | $29.3k | $11.0k | $12.1k |
 | Equity | $6.8k | $3.5k | $1.7k |
@@ -341,7 +341,7 @@ was the $40k kill switch itself, which flattened a temporary vol-arb dip at the 
 
 | Case | Mean final NLV | Worst seed | CVaR (worst 25%) | Losing seeds |
 |---|---|---|---|---|
-| Liability | $42.1k | $23.5k | $26.5k | 0 |
+| Liquidity | $42.1k | $23.5k | $26.5k | 0 |
 | ETF | $29.3k | $11.0k | $13.1k | 0 |
 | Derivatives | **$21.7k** (was $18.1k) | **−$1.8k** (was −$14.0k) | **$5.5k** (was −$1.0k) | 1 (was 2) |
 | Equity | $6.8k | $3.5k | $4.9k | 0 |
@@ -352,16 +352,16 @@ was the $40k kill switch itself, which flattened a temporary vol-arb dip at the 
 | Case | Feature switched off | Effect of switching it off | Verdict |
 |---|---|---|---|
 | ETF | Executable exit (→ mid exit) | −$32.6k, t −11.0, 11 losing seeds | Confirmed |
-| Liability | Block unwind (→ always cross) | −$11.9k, t −9.7 | Confirmed |
-| Liability | Almgren–Chriss (→ old front-load curve) | −$3.3k, t −3.7, worst $23.5k → $19.0k | Confirmed |
-| Liability | `min_profit_per_share` 0.01 (→ 0.03) | −$2.4k, t −3.0 | Confirmed |
+| Liquidity | Block unwind (→ always cross) | −$11.9k, t −9.7 | Confirmed |
+| Liquidity | Almgren–Chriss (→ old front-load curve) | −$3.3k, t −3.7, worst $23.5k → $19.0k | Confirmed |
+| Liquidity | `min_profit_per_share` 0.01 (→ 0.03) | −$2.4k, t −3.0 | Confirmed |
 | Commodity | News stop-loss | −$5, t −1.8 | Small, kept |
 | ETF | Bertram thresholds (→ fixed) | −$0.5k, t −0.4 | Neutral; kept because it needs no tuning |
 | Equity | Jump guard | −$96, t −0.7, worst seed $3.5k → $2.3k | Neutral mean, better tail; kept |
 | Commodity | Bayesian impact (→ fixed, right prior) | $0 | Neutral; kept for robustness to a wrong prior |
 | Derivatives | Parity arb | $0: never fires in the simulator | Kept for the real case |
 | Derivatives | Hold-don't-trim (→ `exit_edge` 0.01) | +$7.1k, t 1.06, driven by one +$88k seed | Not significant; unchanged |
-| Liability, commodity | Kill switch and throttle | $0: never trip | Insurance only |
+| Liquidity, commodity | Kill switch and throttle | $0: never trip | Insurance only |
 | Equity | Kill switch and throttle | +$15, t 1.5 | ~free insurance |
 | **Derivatives** | **$40k kill switch** | **+$3.6k, worst −$14.0k → −$1.8k; held-out seeds +$0.3k, never worse** | **Raised to $80k (catastrophe-only)** |
 
@@ -373,7 +373,7 @@ earlier "$7.6k → $8.1k" was within noise.
 
 | Case | Starting point | Final |
 |---|---|---|
-| Liability | +$47.3k¹ / lock-step $31.6k (worst $16.9k) | **$37.6k (worst $22.5k)** |
+| Liquidity | +$47.3k¹ / lock-step $31.6k (worst $16.9k) | **$37.6k (worst $22.5k)** |
 | Derivatives | **−$20.3k**¹ | **$17.3k (worst +$0.3k)** |
 | ETF | **−$0.5k**¹ | **$33.0k (worst $15.9k)** |
 | Equity | +$1.3k¹ / lock-step $7.6k (worst $3.2k) | **$8.1k (worst $5.9k)** |
@@ -399,15 +399,15 @@ the large moves (derivatives and ETF going from losing to winning) are meaningfu
 | Change | Measured effect |
 |---|---|
 | **Graduated drawdown throttle**: new-risk sizes shrink from 50% of `max_drawdown`, kill switch at 100%; exits and hedges always run at full size | Losing streaks get smaller bets instead of an all-or-nothing stop |
-| **Kill-switch levels** at ~1.5–2× the worst normal drawdown: liability $15k, derivatives $40k (now $80k, see above), equity $4k, commodity $200; ETF off on purpose | Close to free in normal runs. Set tighter, it hurt badly (derivatives $20k turned the worst seed from +$0.3k to −$14.7k). |
+| **Kill-switch levels** at ~1.5–2× the worst normal drawdown: liquidity $15k, derivatives $40k (now $80k, see above), equity $4k, commodity $200; ETF off on purpose | Close to free in normal runs. Set tighter, it hurt badly (derivatives $20k turned the worst seed from +$0.3k to −$14.7k). |
 
 ### Per case
 
 | Case | Change | Measured effect |
 |---|---|---|
-| Liability | **Almgren–Chriss optimal execution** (λ = 3e-7, σ from GARCH, impact from book depth) | $34.1k → $37.6k, worst $16.9k → $22.5k |
-| Liability | `min_profit_per_share` 0.03 → 0.01 (raised automatically in a drawdown) | $31.6k → $34.1k, same worst seed |
-| Liability | Rejected competitive bids no longer counted as positions | Risk room stays free for the next tender |
+| Liquidity | **Almgren–Chriss optimal execution** (λ = 3e-7, σ from GARCH, impact from book depth) | $34.1k → $37.6k, worst $16.9k → $22.5k |
+| Liquidity | `min_profit_per_share` 0.03 → 0.01 (raised automatically in a drawdown) | $31.6k → $34.1k, same worst seed |
+| Liquidity | Rejected competitive bids no longer counted as positions | Risk room stays free for the next tender |
 | Derivatives | **Hold positions while the edge remains** (no trimming as IV converges) | Biggest single fix. Trimming was ~7,000 contracts of spread cost per run. |
 | Derivatives | Delta hedge from **fills**, counting **every held option** (incl. near expiry) | Stopped ±6–8k share hedge flip-flops |
 | Derivatives | Parity trades bounded by package risk room | No unbounded repeats |
@@ -427,7 +427,7 @@ the large moves (derivatives and ETF going from losing to winning) are meaningfu
 | Whalley–Wilmott hedge band | Derivatives | Mean up to +$5.3k, but worst seed +$0.3k → −$4.7k | Same mean/stdev (1.16 vs 1.18): more risk, not a better trade-off |
 | Vega cap (`max_vega`) | Derivatives | Mean $19.3k → $17.1k / $9.2k / $4.7k as the cap tightened | Cuts exposure exactly when the edge is largest |
 | End-of-period inventory skew | Equity | $8.1k → $7.6k, worse worst seed | No inventory drift risk to remove in this market |
-| Queue-aware tender pricing | Liability | Lower mean on 5 of 6 seeds | Declined profitable stacked tenders |
+| Queue-aware tender pricing | Liquidity | Lower mean on 5 of 6 seeds | Declined profitable stacked tenders |
 | Full Avellaneda–Stoikov quoting (spread and skew ∝ γσ²(T−t)) | Equity | −$1.3k to −$2.6k over 6 (γ, κ) settings, t −1.2 to −8.1; worst seed down to −$5.1k | Its skew fades to zero near the close, so inventory is carried to the end. The current constant skew is better. |
 | Scenario-CVaR position limit (stress the delta-hedged book under spot × vol shifts; cap CVaR 25%) | Derivatives | $5k–$20k limits: mean −$1.6k to −$6.7k, worst seed −$1.8k → −$4.1k to −$7.3k | Exposure is largest exactly when the vol edge is; capping it cuts winners (same lesson as the vega cap) |
 | VAMP / mid-price fair value instead of microprice | Equity | +$0.1k to +$0.6k, all t ≤ 1.0; mid's worst seed $2.8k vs $3.5k | No significant gain; simulator book sizes are random, so book-shape signals can't be validated here |
@@ -448,14 +448,14 @@ the large moves (derivatives and ETF going from losing to winning) are meaningfu
 
 1. Rescale the kill-switch levels (`[run] max_drawdown`) to ~1.5–2× the worst drawdown
    seen in the RIT practice case. Keep ETF at 0.
-2. Recalibrate `ac_risk_aversion` (liability). It's in 1/$, so it depends on the case's scale:
-   `python -m ritc tune liability --grid execution.ac_risk_aversion=...`
+2. Recalibrate `ac_risk_aversion` (liquidity). It's in 1/$, so it depends on the case's scale:
+   `python -m ritc tune liquidity --grid execution.ac_risk_aversion=...`
 3. Bertram (ETF) and Bayesian impact (commodity) re-fit themselves live. Check their log
    lines (`BERTRAM`, `IMPACT`) in practice.
 
 ## Open items
 
-Practice server (liability, measured with `ritc record` + `ritc calibrate`, see PRACTICE_PLAN.md): is the close at
+Practice server (liquidity, measured with `ritc record` + `ritc calibrate`, see PRACTICE_PLAN.md): is the close at
 the last price free; do resting orders fill and how far trades reach; is there a crowd and does it hit at arrival
 or expiry (private tenders vs auctions); real windows, `expires` semantics and booking delay; real vol / depth /
 tender edges to recalibrate the simulator; the `/limits` name (brief: LIMIT-STOCK). Waiting for a decision:

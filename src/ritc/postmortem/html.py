@@ -664,7 +664,7 @@ def run_section(m: dict) -> str:
     stamp = m["stamp"]
     when = f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}" if len(stamp) == 15 else stamp
     variants = "; ".join(f"seed {k}: " + ", ".join(v["scenario"] for v in vs) for k, vs in m["market"]["variants"].items())
-    title = f"Liability run {when} ({m['mode']})"
+    title = f"Liquidity run {when} ({m['mode']})"
     acc = run["accepts"]
     covered = "-" if run["first_tick"] is None else f"{max(0, run['first_tick'])}-{min(420, run['last_tick'])}"
     speed = f" · {run['ticks_per_s']:.1f} ticks/s" if run["ticks_per_s"] else ""
@@ -707,7 +707,7 @@ def run_section(m: dict) -> str:
                      "down.</p><div class=card>" + dm + "</div>")
         body += "<h2>Tender ledger (as logged, with the simulator's truth)</h2>" + _ledger_html(m["ledger"])
         if reps:
-            body += ("<h2>The current bot on the same market</h2><p>The current bot (config/liability.toml, live, lock-step) "
+            body += ("<h2>The current bot on the same market</h2><p>The current bot (config/liquidity.toml, live, lock-step) "
                      "replayed on this run's simulator seed and market variant, fully instrumented. This is what the bot "
                      "would do today on this exact market; compare it with the logged run above.</p>")
             for i, rep in enumerate(reps):

@@ -231,7 +231,7 @@ class BlockExecutor:
         """
         `step` for a slow loop against a live book. Resting orders keep filling while a loop runs, so
         positions read at the start are stale by the time orders go out, and an order sized from them
-        can take the position through zero (fined as speculation in the liability case). So:
+        can take the position through zero (fined as speculation in the liquidity case). So:
         1. plan from the loop's positions and cancel every resting quote that will not be kept;
         2. `refresh()` -> (open orders, positions), read in that order: a fill between the two reads is
            counted twice (safe), never missed;

@@ -10,7 +10,7 @@ direction, not as a forecast.
 
 ## Adopted (on by default)
 
-### Almgren–Chriss optimal execution (liability)
+### Almgren–Chriss optimal execution (liquidity)
 
 Almgren & Chriss (2000), *Optimal execution of portfolio transactions*. Unwinding a tender
 block trades off market impact (go slow) against price risk while holding (go fast). The
@@ -26,7 +26,7 @@ x(t) / X = sinh(κ (T − t)) / sinh(κ T),    κ = √(λ σ² / η)
 - **λ** is the risk aversion.
 
 Code: `core/algo.py` (`ac_kappa`, `book_eta`, `schedule_position(kappa=)`), wired in
-`strategies/liability.py`.
+`strategies/liquidity.py`.
 
 | Schedule | Mean NLV | Worst seed |
 |---|---|---|
@@ -95,7 +95,7 @@ this week. The old forecast moved one number halfway toward the range for every 
 16 seeds: +$26.4k (t 6.3) benign / +$26.0k (t 6.2) hostile; holdout +$30.6k / +$29.6k
 (t 6.1, 16/16). Pricing the weeks after next at a 25% long-run vol instead lost $59k (t −8.6).
 
-### Online crowd-impact learning for tenders (liability)
+### Online crowd-impact learning for tenders (liquidity)
 
 A crowded trade: every desk gets the same tender and unwinds it into the same book. The
 bot learns the post-tender price move against the unwind, per 10k shares, with the same
@@ -119,7 +119,7 @@ Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 | Whalley–Wilmott hedging band (derivatives) | No-trade band H = (3/2 · cost · Γ² / γ)^{1/3}, rebalance to the band edge; 8 seeds at γ = 1e-2 / 1e-3 / 1e-4 | Mean $18.2k / $19.6k / $22.6k vs $17.3k, but worst seed −$2.8k / −$2.8k / −$4.7k vs +$0.3k. Mean/stdev unchanged (1.15–1.17 vs 1.18). It's a wider band, so more risk for more return rather than a better trade-off. Removed. |
 | Vega budget (derivatives) | Cap on \|portfolio vega\| at 100 contracts: $4k / $2.5k / $1.5k per vol point | Mean $17.1k / $9.2k / $4.7k vs $19.3k uncapped. A binding cap cuts exposure exactly when the edge is biggest. Size is controlled by `max_contracts = 60` instead. Removed. |
 | End-of-period inventory skew (equity) | Avellaneda–Stoikov skew ramped up over the last 60 ticks | Mean $7.6k vs $8.1k, worse worst seed. The simulator has no drift, so there is little inventory risk to shed. Removed. |
-| Queue-aware tender pricing (liability) | Price a tender behind inventory still being unwound | Worst seed better, mean lower on 5 of 6 seeds. Removed. |
+| Queue-aware tender pricing (liquidity) | Price a tender behind inventory still being unwound | Worst seed better, mean lower on 5 of 6 seeds. Removed. |
 | Copula portfolio optimisation | Kendall τ and tail dependence across tickers; estimator noise | Tickers are independent in the simulator, except futures vs spot, which is already hedged exactly. One heat (300 ticks) estimates tail dependence ± 0.10, about the size of the effect, so ~10 heats are needed. Positions are hedged arbs or seconds-long inventory capped by exchange limits. |
 | Scenario stress test + CVaR position limit (derivatives): delta-hedged revaluation under a 5×5 spot × vol-shift grid (spot ±3σ√h, vol ±5 or ±10 pts, h = 75 ticks); each trade sized so CVaR₂₅ of scenario losses ≤ budget (Rockafellar–Uryasev) | Kill switch off in all rows. Limit $20k / $10k / $5k: mean −$1.6k / −$3.2k / −$5.1k (t −0.6 / −1.4 / −2.3); worst seed −$4.1k / −$3.0k / −$6.8k vs −$1.8k unlimited | Tighter limit = worse mean AND worse tail. Removed. The remaining losing seed isn't a vol-shock loss, and capping exposure blocks the trades with the largest edge. |
 | Full Avellaneda–Stoikov (2008) quoting (equity) | γ ∈ {3e-6, 1e-5, 3e-5}, κ ∈ {20, 33}: −$1.3k to −$2.6k vs baseline (16 seeds, paired t −1.2 to −8.1) | The closed form's inventory term γσ²(T−t) shrinks to zero at the close, the opposite of what the end-of-heat penalty needs. The constant `skew_per_share` beat it on every setting. Removed. |
@@ -128,7 +128,7 @@ Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 | ETF passive leg with a thin edge (`maker_edge` 0.02) | 16 seeds vs no passive leg | −$1.4k, t −2.1. The fills are thin and use up the risk room the taker arbs need. Wider edges win (kept at 0.15, see CHANGES.md). |
 | Guéant–Lehalle–Fernandez-Tapia quoting / order-flow imbalance (equity) | — | Needs a realistic fill-intensity curve and order flow. The simulator has neither (fixed fill probability at the touch, random book rebuilds), so it can't be validated here. Equity gets the jump guard instead (`docs/ARCHITECTURE.md`). |
 
-| Price band on aggressive orders (all cases, hostile sim) | Clamp every IOC limit to the 7-tick median mid ± (2 × median spread + 3 × EWMA tick move) | Commodity −$32 (t −3.5) in both markets; derivatives worst seed $33.7k → $24.4k; liability −$0.6k; ETF +$0.3k (t 1.3). It blocks real moves as often as fake ones. Removed. |
+| Price band on aggressive orders (all cases, hostile sim) | Clamp every IOC limit to the 7-tick median mid ± (2 × median spread + 3 × EWMA tick move) | Commodity −$32 (t −3.5) in both markets; derivatives worst seed $33.7k → $24.4k; liquidity −$0.6k; ETF +$0.3k (t 1.3). It blocks real moves as often as fake ones. Removed. |
 | Spoof-resistant books (all cases) | Cap each level at 3 × the median level size before every book calculation | ±$50 everywhere (equity hostile +$0.3k, t 1.2). Fake depth behind the touch barely enters walked-VWAP sizing. Removed. |
 | Queue fighting vs penny-jumpers (equity) | Step back in front of a competitor, keeping 1–2 cents to the reservation price | −$2.6k / −$3.0k, t −2.8 / −3.0 (hostile). The fills won at a 1-cent edge are toxic. Removed. |
 | Toxicity-adaptive spread (equity) | 5-tick markout of our passive fills (EWMA per side); widen the losing side by 1–2 × the loss, cap 5 cents | −$0.9k, t −0.9 (hostile). Removed. |
@@ -270,7 +270,7 @@ so the config is unchanged; the frontier became risk profiles in PRACTICE_PLAN.m
 transferable idea, WHERE to rest the unwind (fill probability decaying with distance from the mid), needs real
 fill data: `ritc record` now stores time and sales and `calibrate` estimates P(reach d) and kappa per stock.
 
-### 2026-10-10: post-trade review of the eight liability logs ([POSTMORTEM.md](POSTMORTEM.md))
+### 2026-10-10: post-trade review of the eight liquidity logs ([POSTMORTEM.md](POSTMORTEM.md))
 
 Every log was matched to its simulator seed and the current bot replayed on it; each tender decision was then
 flipped and replayed (skill = every P&L part except inventory moves). Pooled over the five base-market seeds,
@@ -430,7 +430,7 @@ Break-even: (c) N = 30 at ~$0.45/share, (b) at ~$0.85. Keep the hold while the b
 check 1 shows a bell fine of $0.45/share or more, run `--set execution.hold_budget_min_ticks=30 --set
 execution.close_hold_ticks=0 --set strategy.hold_valuation=false` (it dominates the A15 fallback at every fine).
 
-Default check for `python -m ritc run liability --live` (same seeds): `liquidity_model = "flow"` +$1.3k (t 0.4),
+Default check for `python -m ritc run liquidity --live` (same seeds): `liquidity_model = "flow"` +$1.3k (t 0.4),
 hostile -$0.5k (t -0.2); `"auctions"` +$1.5k (t 1.3), hostile -$1.6k (t -1.7). Neither earns a switch on its
 own; the adaptive combination below does.
 
@@ -783,7 +783,7 @@ Tried and dropped: per-tick "filled vs only held" split and block move vs durati
 
 ## Solo practice heats and the five gaps (2026-10-13 evening): new scenarios, nothing adopted as default
 
-**Real data** (7 heats, logs/liability-20261013-*.log, only us + the house market maker). 29 private tenders: raw
+**Real data** (7 heats, logs/liquidity-20261013-*.log, only us + the house market maker). 29 private tenders: raw
 edge vs mid $486k, the bot expected $304k, made $162k (made - raw: -$11.2k/tender, t -3.45). The mid ran against
 every unwind by +$0.29/share (n 27, t 3.19), while 48 lost auctions (nobody traded) moved 0.000. Fast blocks
 (<= 45 s) -$0.09, slow ones +$0.52: the five big losses were all slow blocks. The competitor heats of 2026-10-11/12
@@ -847,30 +847,30 @@ the two real CROC sprints cannot tell our impact from the trend (2 cases). To se
 ## Baselines and method results
 
 **Per-case results, current code at the time (2026-10-07, lock-step, official rules; tuning seeds 1-16 and held-out
-101-116).** Mean / worst over all 32 seeds: liability $45.8k / $23.5k (0 losing), ETF $30.6k / -$1.5k (1),
-derivatives $112.5k / -$1.0k (1), equity $6.0k / -$1.2k (2), commodity $378 / $252 (0). Liability's held-out
+101-116).** Mean / worst over all 32 seeds: liquidity $45.8k / $23.5k (0 losing), ETF $30.6k / -$1.5k (1),
+derivatives $112.5k / -$1.0k (1), equity $6.0k / -$1.2k (2), commodity $378 / $252 (0). Liquidity's held-out
 seeds beat its tuning seeds (no sign of overfitting); equity's were worse (the clearest overfit). The
-liability bot has moved on since (CHANGES.md); `ritc report --stress` gives its current numbers.
+liquidity bot has moved on since (CHANGES.md); `ritc report --stress` gives its current numbers.
 
-**Block execution vs always crossing** (liability, 8 seeds): block $49.7k (worst $22.6k, 8/8 wins) vs slice
+**Block execution vs always crossing** (liquidity, 8 seeds): block $49.7k (worst $22.6k, 8/8 wins) vs slice
 $24.1k ($8.2k). Resting children earned 1.5-1.9c/share vs the arrival mid, crossing slices cost 1.8-3.0c.
 
 **Common random numbers for passive fills** (equity, 16 seeds, paired SE): `imbalance_lean` $809 -> $234 (a
 "significant" +$1.7k turned out to be fill luck), `jump_sigmas` $821 -> $137.
 
-**What the hostile market costs** (16 seeds, before defences): liability $25.6k -> $8.6k (-$17.0k, t -3.9, the
+**What the hostile market costs** (16 seeds, before defences): liquidity $25.6k -> $8.6k (-$17.0k, t -3.9, the
 crowd is -$33.5k of it without crowd learning), equity $6.8k -> $1.5k (penny-jumpers -$4.7k), derivatives and
 commodity unchanged, ETF +$12.5k (other arbitrageurs leave 30% of each gap). Liquidity vacuums help resting bots.
 
-**Kill switch calibration** (8 seeds): liability $8k stop -$2.3k, $15k no cost, now off; derivatives $40k stop
+**Kill switch calibration** (8 seeds): liquidity $8k stop -$2.3k, $15k no cost, now off; derivatives $40k stop
 turned seed 11 from +$40.3k into -$14.0k, $80k never trips; equity $4k stop hunted (off: +$951, t 3.0); ETF off
 (a hedged convergence trade is worst exactly when the edge is widest).
 
 ## Reproduce
 
 ```bash
-python -m ritc tune liability   --seeds 8 --grid execution.schedule=front_load,almgren_chriss
+python -m ritc tune liquidity   --seeds 8 --grid execution.schedule=front_load,almgren_chriss
 python -m ritc tune etf         --seeds 8 --grid strategy.threshold_mode=fixed,bertram
 python -m ritc tune commodity   --seeds 8 --grid strategy.impact_mode=fixed,bayes --grid strategy.impact_per_unit=0.10,0.25
-python -m ritc tune liability   --hostile 1 --grid strategy.crowd_learn=false,true
+python -m ritc tune liquidity   --hostile 1 --grid strategy.crowd_learn=false,true
 ```

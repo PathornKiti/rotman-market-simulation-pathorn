@@ -91,7 +91,7 @@ For each new inventory block (a tender booked, or a position that grows or chang
 | θ_start (no crowding) | `execution.trend_hold_min_start` | 0.00 |
 | θ_start (crowding) | `execution.trend_hold_min_start_crowded` | 0.05 |
 
-All of these are off in the base configuration and turned on only by the `rsi_bot` profile. Implementation: `touch_override()` and `trend_hold()` in `src/ritc/strategies/liability.py`.
+All of these are off in the base configuration and turned on only by the `rsi_bot` profile. Implementation: `touch_override()` and `trend_hold()` in `src/ritc/strategies/liquidity.py`.
 
 ## 4. Methodology: validation
 

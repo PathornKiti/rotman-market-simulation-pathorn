@@ -5,8 +5,8 @@ The real RIT client is Windows-only and you get no practice run on the day.
 This serves the same endpoints on localhost:9999 with a simulated market so you
 can prove a bot works end-to-end, tune thresholds and read the logs first:
 
-    python -m ritc sim liability            # terminal 1
-    python -m ritc run liability --live     # terminal 2 (live = against the SIM)
+    python -m ritc sim liquidity            # terminal 1
+    python -m ritc run liquidity --live     # terminal 2 (live = against the SIM)
 
 It is a SIMULATOR, not an emulator. Fills are approximate and the "other
 traders" are noise, unless `--hostile` adds manipulative competitors (pump-and-dump,
@@ -15,10 +15,8 @@ Use it to debug logic and plumbing, not to predict a score.
 The tickers it creates match the default files in config/, so both work out of
 the box.
 
-Where an official RITC case package states a rule, the simulator follows it
-(see docs/OFFICIAL_RULES.md): derivatives fees, spreads, strikes, limits, news
-wording and the delta-limit penalty; the ETF case's USD-quoted ETF, 2x limit
-weight, rebates and close-out at fair value.
+Where the official case brief states a rule, the simulator follows it
+(see docs/OFFICIAL_RULES.md).
 """
 
 from __future__ import annotations
@@ -38,8 +36,6 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from ..pricing.options import bs_greeks, bs_price
-
 TRADER_ID = "SIMBOT"
 TICK = 0.01
 # QUEUE MODE (`--queue`): share of the displayed queue ahead of a resting order that is cancelled
@@ -47,13 +43,7 @@ TICK = 0.01
 QUEUE_CANCEL = 0.2
 
 
-EQUITY_CLOSE_TICKS = 60         # market-making case: each minute is one trading day
-EQUITY_OVER_LIMIT_FINE = 10.0   # $ per share over the aggregate limit at each close
 
-
-def delta_penalty(delta: float, limit: float, pct: float) -> float:
-    """Official volatility-case fine for one second: (|delta| - limit) x pct when over the limit."""
-    return max(0.0, abs(delta) - limit) * pct
 
 
 @dataclass
@@ -196,14 +186,14 @@ class Market:
         # over the limit (the downside case). Unset: the old check at bid time (LIMIT_EXCEEDED at once).
         # late_award=1: a competitive auction bid is never refused at once; a bid past the reserve books when the
         # window closes, as on the real server (practice: 0 of 18 bids answered success=false).
-        # kyle=k (liability): KYLE (1985) PRICE IMPACT OF OTHER TRADERS' FLOW. Each stock carries an order-flow
+        # kyle=k (liquidity): KYLE (1985) PRICE IMPACT OF OTHER TRADERS' FLOW. Each stock carries an order-flow
         # imbalance z (AR(1): z' = kyle_phi z + sqrt(1 - phi^2) kyle_sd e, clipped to +-1) that tilts the passive
         # flow (buyer-initiated x (1 + z), seller-initiated x (1 - z)), and the mid moves lambda x (buy - sell
         # flow) with lambda set so the flow explains a fraction k of each tick's variance (the random walk keeps
         # 1 - k; total vol unchanged). kyle_phi 0: the flow is noise, the price still a martingale. kyle_phi 0.9:
         # one-sided flow persists, so the price trends while our resting side stops filling (the two slow real
         # unwinds: 700-900 shares/s, ~3 sigma moves).
-        # mm_inv=L (liability): SOLO MARKET (practice 2026-10-13, only us + the house market maker): every share
+        # mm_inv=L (liquidity): SOLO MARKET (practice 2026-10-13, only us + the house market maker): every share
         # we trade, resting or crossing, lands in the market maker's inventory and it skews its quotes, so the
         # mid moves L $ per share against us, permanently (a 50k block at 6e-6 = $0.30).
         # kyle_fill_tilt=F (with kyle): OUR resting orders get the touch's flow x max(0, 1 + F z) (F=1: the same tilt
@@ -213,7 +203,7 @@ class Market:
         # max(0.15, 1 + B z), asks x max(0.15, 1 - B z), z = the persistent flow imbalance. Root-cause recordings
         # 2026-10-13: the cost to cross 25k on the ask minus the bid side predicts the next 10 ticks beyond
         # momentum (next = 0.40 x last 10 + 0.67 x asymmetry, t 8.5 / 8.5, R2 0.37 vs 0.24).
-        # hold_drift=D (liability): the price drifts D $/tick AGAINST whoever holds a position (ours), scaled by
+        # hold_drift=D (liquidity): the price drifts D $/tick AGAINST whoever holds a position (ours), scaled by
         # min(1, |position| / hold_drift_size). Solo practice 2026-10-13: while we held a block the mid moved $0.15 per
         # 30 s against us (t 3.2) whatever we traded; when nobody held (48 lost auctions) it moved 0.000.
         # edge_sd=S (with real=1): fixed tenders' edge vs mid ~ Normal(edge_mu, S) instead of U(-0.45, 0.90); the 49
@@ -245,7 +235,7 @@ class Market:
             s.rebuild(self.rng)
 
     # ===================================================== case universes
-    def _setup_liability(self) -> None:
+    def _setup_liquidity(self) -> None:
         # Liquidity Risk Case, 2027 selection brief: CRZY $10 high vol / medium-low liquidity, TAME $25
         # medium vol / medium-high liquidity, CROC $20 high vol / "varied" liquidity; $0.02 fees; max
         # orders 25k/10k/20k; 250k gross / 100k net. Vol and depth numbers are our guesses at "high" etc.
@@ -269,67 +259,10 @@ class Market:
         self.state["limit_rejects"] = 0
         self.limits = [{"name": "equity", "gross": 0, "net": 0, "gross_limit": 250_000, "net_limit": 100_000}]
 
-    def _setup_etf(self) -> None:
-        # Official Algo case (RITC 2019/2020/2023): BULL $10 + BEAR $15 in CAD, RITC $25 quoted in USD,
-        # P_RITC,USD * USD = P_BULL + P_BEAR. $0.02/share taker fee, $0.01 passive rebate. The ETF
-        # counts 2x towards the limits and closes out at fair value (the basket converted).
-        self.secs["USD"] = Sec("USD", 1.0, spread=0.0002, tick=0.0001, sigma=0.0003, fee=0.0, lot=1_000_000,
-                               max_trade=2_500_000, kind="CURRENCY")
-        self.secs["BULL"] = Sec("BULL", 10.0, sigma=0.03, fee=0.02, rebate=0.01, lot=2000)
-        self.secs["BEAR"] = Sec("BEAR", 15.0, sigma=0.03, fee=0.02, rebate=0.01, lot=2000)
-        self.secs["RITC"] = Sec("RITC", 25.0, sigma=0.0, fee=0.02, rebate=0.01, lot=1500, spread=0.05, ccy="USD")
-        self.state["premium"] = 0.0
-        # Private RITC tender offers (official: "participants will also receive private tender offers for the
-        # ETF"). Drawn from their own generator so the price path is the same as without tenders.
-        self.tender_rng = random.Random(f"{self.fill_seed}:etf-tenders")
-        self.limits = [{"name": "equity", "gross": 0, "net": 0, "gross_limit": 300_000, "net_limit": 200_000,
-                        "_weights": {"RITC": 2.0, "BULL": 1.0, "BEAR": 1.0}}]
 
-    def _etf_nav_usd(self) -> float:
-        return (self.secs["BULL"].mid + self.secs["BEAR"].mid) / self.secs["USD"].mid
 
-    def _setup_equity(self) -> None:
-        # Official Algo Market Making case (RITC 2026): four stocks starting at $25, $0.02/share taker fee,
-        # a different passive rebate on each. Volatilities are not published (a guess).
-        for t, sg, rebate in (("SPNG", 0.02, 0.01), ("SMMR", 0.03, 0.02), ("ATMN", 0.04, 0.015),
-                              ("WNTR", 0.03, 0.025)):
-            self.secs[t] = Sec(t, 25.0, spread=0.06, sigma=sg, fee=0.02, rebate=rebate, lot=1000)
-        self.limits = [{"name": "equity", "gross": 0, "net": 0, "gross_limit": 200_000, "net_limit": 100_000}]
-        # The CRO's AGGREGATE position limit, |SPNG| + |SMMR| + |ATMN| + |WNTR|, announced at the start of
-        # the heat and assessed at every market close (each minute): $10 per share over it. The package's
-        # example is 15,000; the range is a guess. Own generator: the price path's draws are unchanged.
-        self.state["agg_limit"] = random.Random(f"{self.fill_seed}:agg_limit").choice([10_000, 15_000, 20_000])
 
-    def _setup_derivatives(self) -> None:
-        # Official Volatility case (RITC 2019/2020/2023): RTM $50, 1- and 2-month calls/puts at strikes
-        # 45..54, market makers always quote a 2-cent spread for very large size, $0.02/share and
-        # $2.00/contract fees, limits RTM 50k/50k shares and options 2,500 gross / 1,000 net.
-        self.state.update(true_vol=0.20, next_vol=0.20, mkt_vol=0.20, week=-1,
-                          delta_limit=7000, penalty_pct=0.005)
-        self.secs["RTM"] = Sec("RTM", 50.0, spread=0.02, lot=20_000, fee=0.02, max_trade=10_000)
-        for exp, exp_tick in (("1", 300), ("2", 600)):
-            for k in range(45, 55):
-                for cp in "CP":
-                    t = f"RTM{exp}{cp}{k}"
-                    self.secs[t] = Sec(t, 1.0, spread=0.02, lot=500, fee=2.00, mult=100, kind="OPTION",
-                                       max_trade=100)
-                    self.state[t] = (exp_tick, cp == "C", float(k))
-        options = {t: 1.0 for t, s in self.secs.items() if s.kind == "OPTION"}
-        self.limits = [{"name": "options", "gross": 0, "net": 0, "gross_limit": 2500, "net_limit": 1000,
-                        "_weights": options},
-                       {"name": "etf", "gross": 0, "net": 0, "gross_limit": 50_000, "net_limit": 50_000,
-                        "_weights": {"RTM": 1.0}}]
-        self._price_options()
 
-    def _setup_commodity(self) -> None:
-        self.state.update(carry=0.002, basis_noise={}, pending=[])
-        self.secs["CL"] = Sec("CL", 70.0, spread=0.04, lot=50, sigma=0.04, fee=0.02, max_trade=50)
-        for t, exp in (("CL-1F", 300), ("CL-2F", 600)):
-            self.secs[t] = Sec(t, 70.0, spread=0.03, lot=50, sigma=0.0, fee=0.02, max_trade=50, kind="FUTURE")
-            self.state[t] = exp
-            self.state["basis_noise"][t] = 0.0
-        self.limits = [{"name": "crude", "gross": 0, "net": 0, "gross_limit": 500, "net_limit": 200}]
-        self._price_futures()
 
     # ===================================================== per-tick dynamics
     @property
@@ -349,17 +282,17 @@ class Market:
                 self.period, self.tick = self.period + 1, 1
             for t, off in self.adv_off.items():      # manipulation sits on top of the true price
                 self.secs[t].mid -= off
-            kyle = self.stress["kyle"] if self.case == "liability" else 0.0
+            kyle = self.stress["kyle"] if self.case == "liquidity" else 0.0
             for s in self.secs.values():
                 if s.sigma:
                     s.mid = max(0.5, s.mid + self.rng.gauss(0, s.sigma) * (1 - kyle) ** 0.5)
-            if self.case == "liability" and self.stress["real_impact"]:
+            if self.case == "liquidity" and self.stress["real_impact"]:
                 tmp = self.state["imp_tmp"]
                 for t, x in tmp.items():             # the transient part of our impact fades
                     self.secs[t].mid -= x * self.stress["impact_revert"]
                     tmp[t] = x * (1 - self.stress["impact_revert"])
             self._book_tenders()
-            if self.case == "liability" and self.stress["hold_drift"]:
+            if self.case == "liquidity" and self.stress["hold_drift"]:
                 for s in self.secs.values():
                     if s.position:
                         k = min(1.0, abs(s.position) / self.stress["hold_drift_size"])
@@ -369,7 +302,7 @@ class Market:
                 self._kyle_step(kyle)
             if self.hostile:
                 self._adversary()
-            tilt = self.stress["book_tilt"] if self.case == "liability" and kyle else 0.0
+            tilt = self.stress["book_tilt"] if self.case == "liquidity" and kyle else 0.0
             for s in self.secs.values():
                 s.last = s.mid
                 s.rebuild(self.rng)
@@ -396,9 +329,7 @@ class Market:
         """Typical one-tick move of a ticker, the unit manipulation sizes are drawn in."""
         if s.sigma:
             return s.sigma
-        if s.ticker == "RITC":
-            return 0.06
-        return s.mid * self.state.get("true_vol", 0.2) / 60       # RTM: annual vol over sqrt(3600) ticks
+        return 0.0
 
     def _adversary(self) -> None:
         """
@@ -439,7 +370,7 @@ class Market:
             if r.random() < 0.004 * h and t not in self.vacuums and "vacuum" in self.threats:
                 self.vacuums[t] = now + r.randint(2, 4)
         crowd_due = list(self.tenders.items())
-        if self.case == "liability" and self.stress["crowd_at_expiry"]:
+        if self.case == "liquidity" and self.stress["crowd_at_expiry"]:
             # The other desks also answer LATE: their unwind starts when the window closes, not on arrival.
             crowd_due = [(tid, t) for exp, tid, t in self.state["crowd_due"] if exp <= now]
         for tid, tender in crowd_due:
@@ -448,16 +379,11 @@ class Market:
             self.crowded.add(tid)
             unwind = -1 if tender["action"] == "BUY" else 1        # we BUY from the client -> the crowd SELLS
             q = tender["quantity"]
-            if self.case == "liability":
+            if self.case == "liquidity":
                 s = self.secs[tender["ticker"]]
                 amp = unwind * h * 3 * (s.impact or 2e-6) * q    # three other desks with the same block
                 self.episodes.setdefault(s.ticker, []).append(
                     Episode(now, amp, r.randint(6, 12), 3, 40, residual=0.5))
-            elif self.case == "etf":
-                # The crowd hedges its ETF tender in the basket: the opposite way to its ETF leg.
-                for t in ("BULL", "BEAR"):
-                    self.episodes.setdefault(t, []).append(
-                        Episode(now, unwind * h * 0.03 * q / 10_000, r.randint(2, 4), 2, 20, residual=0.3))
         self.spoofs = {t: v for t, v in self.spoofs.items() if v[1] >= now}
         self.vacuums = {t: u for t, u in self.vacuums.items() if u >= now}
         for t in list(self.episodes):
@@ -466,15 +392,6 @@ class Market:
             s = self.secs[t]
             s.mid = max(0.5, s.mid + off)
             self.adv_off[t] = off
-        if self.case == "etf":
-            # Everyone else arbitrages too: competing desks close 70% of any ETF/basket gap a
-            # manipulation of BULL or BEAR opens, before we see it.
-            follow = 0.7 * sum(self.adv_off.get(t, 0.0) for t in ("BULL", "BEAR")) / self.secs["USD"].mid
-            ritc = self.secs["RITC"]
-            ritc.mid += follow
-            self.adv_off["RITC"] = sum(e.offset(now) for e in self.episodes.get("RITC", [])) + follow
-        if self.case == "derivatives":
-            self._price_options()          # option market makers price off the RTM they see
 
     def _hostile_books(self) -> None:
         """Book-level manipulation, after the honest books are rebuilt: vacuums, spoofs, penny-jumps."""
@@ -521,7 +438,7 @@ class Market:
 
     def _over_limit(self, ticker: str, delta: int) -> bool:
         """Brief: 250,000 gross / 100,000 net shares across all stocks, enforced (orders refused)."""
-        if self.case != "liability":
+        if self.case != "liquidity":
             return False
         pos = {t: s.position for t, s in self.secs.items()}
         pos[ticker] = pos.get(ticker, 0) + delta
@@ -542,7 +459,7 @@ class Market:
             s.cost += sign * t["quantity"] * price
             self._settle(s.ccy, -sign * t["quantity"] * price)
 
-    def _tick_liability(self) -> None:
+    def _tick_liquidity(self) -> None:
         for tid in [k for k, v in self.tenders.items() if v["expires"] <= self.abs_tick]:
             self.tenders.pop(tid)
         # Depth: CROC's liquidity is "varied" (a regime redrawn every 40 ticks), and market makers
@@ -616,149 +533,12 @@ class Market:
             self.state["tender_log"].append((self.abs_tick, t, -qty if action == "BUY" else qty))
             self.state["crowd_due"].append((self.tenders[tid]["expires"], tid, dict(self.tenders[tid])))
 
-    def _tick_etf(self) -> None:
-        p = 0.92 * self.state["premium"] + self.rng.gauss(0, 0.06)
-        self.state["premium"] = p
-        self.secs["RITC"].mid = self._etf_nav_usd() + p
-        for tid in [k for k, v in self.tenders.items() if v["expires"] <= self.abs_tick]:
-            self.tenders.pop(tid)
-        r = self.tender_rng
-        if self.abs_tick % 20 == 7 and self.abs_tick < self.tpp * self.periods - 20:
-            # The package gives no sizes or prices; these are a guess: a fixed price near the
-            # market (USD), sometimes better than the basket, sometimes worse, open for 15 ticks.
-            action = r.choice(["BUY", "SELL"])
-            qty = r.choice([5_000, 10_000, 20_000, 30_000])
-            edge = r.uniform(-0.10, 0.20)
-            s = self.secs["RITC"]
-            tid = next(self.ids)
-            self.tenders[tid] = {
-                "tender_id": tid, "period": self.period, "tick": self.tick, "expires": self.abs_tick + 15,
-                "caption": f"Client wants you to {action} {qty} RITC", "quantity": qty, "action": action,
-                "is_fixed_bid": True, "price": round(s.mid - edge if action == "BUY" else s.mid + edge, 2),
-                "ticker": "RITC",
-            }
 
-    def _tick_equity(self) -> None:
-        if self.abs_tick == 1:
-            self._news("Position limit", f"The aggregate position limit for this week is "
-                                         f"{self.state['agg_limit']:,} shares")
-        if self.abs_tick % EQUITY_CLOSE_TICKS == 0:
-            # MARKET CLOSE: the aggregate limit is assessed on what we hold coming into it, then the
-            # overnight news (never shown to us) moves every stock: a common shock each stock reacts
-            # to with its own, changing sensitivity, plus its own news. 80% of closes bring news.
-            over = sum(abs(s.position) for s in self.secs.values()) - self.state["agg_limit"]
-            self.penalty += EQUITY_OVER_LIMIT_FINE * max(0, over)
-            r = random.Random(f"{self.fill_seed}:{self.abs_tick}:close")
-            if r.random() < 0.8:
-                common = r.gauss(0, 0.25)
-                for t in sorted(self.secs):
-                    self.secs[t].mid = max(0.5, self.secs[t].mid + r.uniform(-0.5, 1.5) * common + r.gauss(0, 0.15))
-        if self.rng.random() < 0.02:                   # occasional informed jump
-            s = self.rng.choice(list(self.secs.values()))
-            s.mid += self.rng.choice([-1, 1]) * self.rng.uniform(0.10, 0.30)
-        # BLOCK TRANSFERS (CHANGES.md): the case assigns market makers an unhedged block at the
-        # mid, unannounced - the bot only sees its position jump. Whoever dumped it knew something:
-        # the price then drifts 2-5 sigma against the holder over 10 ticks. Own generator, so the
-        # price path's draws are unchanged; `blocks = False` turns it off.
-        drift = self.state.setdefault("block_drift", [])
-        for d in drift:
-            self.secs[d[1]].mid += d[2]
-            d[0] -= 1
-        self.state["block_drift"] = [d for d in drift if d[0] > 0]
-        r = random.Random(f"{self.fill_seed}:{self.abs_tick}:block")
-        if self.state.get("blocks", True) and r.random() < 0.01:
-            t, side, qty = r.choice(sorted(self.secs)), r.choice([1, -1]), r.choice([5_000, 10_000, 15_000])
-            s = self.secs[t]
-            s.position += side * qty
-            s.cost += side * qty * s.mid
-            self.cash -= side * qty * s.mid
-            self.state["block_drift"].append([10, t, -side * r.uniform(2, 5) * s.sigma / 10])
 
-    def _tick_derivatives(self) -> None:
-        week = (self.abs_tick - 1) // 75
-        if week != self.state["week"]:
-            self.state["week"] = week
-            if week == 0:
-                self._news("Delta limit", f"The delta limit for this heat is {self.state['delta_limit']:,} and the "
-                           f"penalty percentage is {100 * self.state['penalty_pct']:g}%")
-                self.state["next_vol"] = self.rng.choice([0.15, 0.20, 0.25, 0.30, 0.35])
-            prev = self.state["true_vol"]
-            # Next week's vol is drawn a week in advance, so the mid-week analyst range is about the
-            # vol that will actually happen (as in the real case), not a copy of this week's.
-            self.state["true_vol"] = self.state["next_vol"]
-            self.state["next_vol"] = self.rng.choice([0.15, 0.20, 0.25, 0.30, 0.35])
-            # The market only half-believes the news: implied vol lags true vol.
-            self.state["mkt_vol"] = 0.5 * prev + 0.5 * self.state["true_vol"]
-            self._news(f"Volatility week {week + 1}",
-                       f"The realized volatility of RTM for this week will be {round(self.state['true_vol'] * 100)}%")
-        if (self.abs_tick - 1) % 75 == 37:
-            v = round(self.state["next_vol"] * 100)
-            lo = v - self.rng.randint(0, 3)           # official form: a 3-point range containing the truth
-            self._news("Volatility forecast",
-                       f"The realized volatility of RTM for next week will be between {lo}-{lo + 3}%")
-        self.state["mkt_vol"] += 0.05 * (self.state["true_vol"] - self.state["mkt_vol"]) + self.rng.gauss(0, 0.002)
-        rtm = self.secs["RTM"]
-        rtm.mid = max(1.0, rtm.mid * math.exp(self.rng.gauss(0, self.state["true_vol"] * math.sqrt(1 / 3600))))
-        self._price_options()
-        self.penalty += delta_penalty(self.portfolio_delta(), self.state["delta_limit"], self.state["penalty_pct"])
 
-    def portfolio_delta(self) -> float:
-        """Shares-equivalent delta of RTM + options (BS delta at the market makers' vol)."""
-        S = self.secs["RTM"].mid
-        d = float(self.secs["RTM"].position)
-        for t, s in self.secs.items():
-            if s.kind != "OPTION" or not s.position or not s.tradeable:
-                continue
-            exp, is_call, K = self.state[t]
-            T = max(exp - self.abs_tick, 1) / 3600
-            d += s.position * s.mult * bs_greeks(S, K, T, 0.0, self.state["mkt_vol"], is_call).delta
-        return d
 
-    def _price_options(self) -> None:
-        S = self.secs["RTM"].mid
-        for t, s in self.secs.items():
-            if s.kind != "OPTION":
-                continue
-            exp, is_call, K = self.state[t]
-            T = (exp - self.abs_tick) / 3600
-            if T <= 0:
-                if s.tradeable:            # settle at intrinsic
-                    intrinsic = max(S - K, 0) if is_call else max(K - S, 0)
-                    self.cash += s.position * s.mult * intrinsic
-                    s.position, s.cost, s.tradeable, s.mid = 0, 0.0, False, intrinsic
-                continue
-            s.mid = max(0.01, bs_price(S, K, T, 0.0, self.state["mkt_vol"], is_call))
 
-    def _tick_commodity(self) -> None:
-        for p in [p for p in self.state["pending"] if p[0] > 0]:
-            self.secs["CL"].mid += p[1]
-            p[0] -= 1
-        self.state["pending"] = [p for p in self.state["pending"] if p[0] > 0]
-        if self.abs_tick % 40 == 20:
-            exp = round(self.rng.uniform(-2, 2), 1)
-            act = round(exp + self.rng.gauss(0, 2), 1)
-            word = lambda x: "build" if x >= 0 else "draw"   # noqa: E731
-            self._news("EIA inventory report",
-                       f"Crude inventories show a {word(act)} of {abs(act)} million barrels vs expected "
-                       f"{word(exp)} of {abs(exp)} million barrels")
-            # Price reacts over 5 ticks: -0.25 $/mm bbl of surprise.
-            self.state["pending"].append([5, -0.25 * (act - exp) / 5])
-        self._price_futures()
 
-    def _price_futures(self) -> None:
-        S = self.secs["CL"].mid
-        for t in ("CL-1F", "CL-2F"):
-            s = self.secs[t]
-            ttx = self.state[t] - self.abs_tick
-            if ttx <= 0:
-                if s.tradeable:
-                    self.cash += s.position * s.mult * S     # cash-settle at spot
-                    s.position, s.cost, s.tradeable = 0, 0.0, False
-                    s.mid = S
-                continue
-            n = 0.9 * self.state["basis_noise"][t] + self.rng.gauss(0, 0.08)
-            self.state["basis_noise"][t] = n
-            s.mid = S + self.state["carry"] * ttx + n
 
     def _news(self, headline: str, body: str) -> None:
         self.news.append({"news_id": len(self.news) + 1, "period": self.period, "tick": self.tick,
@@ -767,7 +547,7 @@ class Market:
     # ===================================================== matching
     def _apply_fill(self, s: Sec, action: str, qty: int, px: float, maker: bool) -> None:
         sign = 1 if action == "BUY" else -1
-        if self.case == "liability":
+        if self.case == "liquidity":
             # Speculation fine (2027 brief): any shares that OPEN a position (grow it, or flip it through
             # zero) instead of reducing an accepted tender's. $0.20/share for the first 5,000, then $0.60
             # (raised from $0.40 by the organisers, 2026-10-11).
@@ -785,14 +565,14 @@ class Market:
         s.volume += qty
         if not maker:
             self._tas(s, px, qty)
-        maker_pays = maker and self.case == "liability" and self.stress["maker_fee"]
+        maker_pays = maker and self.case == "liquidity" and self.stress["maker_fee"]
         self._settle(s.ccy, -sign * qty * px * s.mult + (-s.fee if maker_pays or not maker else s.rebate) * qty)
         if not maker and s.impact:
             s.mid += sign * s.impact * qty
-            if self.case == "liability" and self.stress["real_impact"]:
+            if self.case == "liquidity" and self.stress["real_impact"]:
                 tmp = self.state["imp_tmp"]
                 tmp[s.ticker] = tmp.get(s.ticker, 0.0) + sign * s.impact * qty * self.state["imp_tmp_frac"][s.ticker]
-        if self.case == "liability" and self.stress["mm_inv"]:
+        if self.case == "liquidity" and self.stress["mm_inv"]:
             s.mid = max(0.5, s.mid + sign * self.stress["mm_inv"] * qty)
         if s.position == 0:
             s.realized -= s.cost       # back to flat: what the round trip made (before fees)
@@ -861,14 +641,14 @@ class Market:
     def _flow(self, ticker: str, action: str) -> int:
         """Shares of passive flow arriving at the touch on our side this tick (same for every setting)."""
         r = random.Random(f"{self.fill_seed}:{self.abs_tick}:{ticker}:{action}")
-        # stress `flow` scales how often passive flow arrives (liability only: how good resting orders are).
-        p = 0.35 * (self.stress.get("flow", 1.0) if self.case == "liability" else 1.0)
+        # stress `flow` scales how often passive flow arrives (liquidity only: how good resting orders are).
+        p = 0.35 * (self.stress.get("flow", 1.0) if self.case == "liquidity" else 1.0)
         q = self.secs[ticker].lot * r.randint(1, 2) if r.random() < p else 0
-        if q and self.case == "liability" and self.stress.get("real"):
+        if q and self.case == "liquidity" and self.stress.get("real"):
             # practice heats: our resting orders absorbed ~2,600 / 3,200 / 1,500 shares per tick on average
             target = {"CRZY": 2600, "TAME": 3200, "CROC": 1500}.get(ticker, 2500)
             q = int(q * target / (0.35 * 1.5 * self.state["base_lot"].get(ticker, self.secs[ticker].lot)))
-        if q and self.case == "liability" and self.stress.get("kyle"):
+        if q and self.case == "liquidity" and self.stress.get("kyle"):
             z = self.state.get("kyle_z", {}).get(ticker, 0.0)      # "SELL" = buyer-initiated (fills resting sells)
             q = int(q * max(0.0, 1 + z if action == "SELL" else 1 - z))
         return q
@@ -931,7 +711,7 @@ class Market:
                 if key not in flow:
                     flow[key] = self._flow(*key)
                     f = self.stress["kyle_fill_tilt"]
-                    if f != 1.0 and self.case == "liability" and self.stress["kyle"]:
+                    if f != 1.0 and self.case == "liquidity" and self.stress["kyle"]:
                         z = self.state.get("kyle_z", {}).get(o["ticker"], 0.0)
                         z = z if o["action"] == "SELL" else -z       # + = the run is toward our resting order
                         flow[key] = int(flow[key] * max(0.0, 1 + f * z) / max(1e-9, 1 + z))
@@ -973,8 +753,8 @@ class Market:
         for s in self.secs.values():
             if s.position and s.tradeable and s.kind != "CURRENCY":
                 # The official ETF case closes the ETF at fair value: the basket converted.
-                px = self._etf_nav_usd() if self.case == "etf" and s.ticker == "RITC" else s.mid
-                if self.case == "liability":      # brief: closed at the LAST TRADED price, at the bid or the ask
+                px = s.mid
+                if self.case == "liquidity":      # brief: closed at the LAST TRADED price, at the bid or the ask
                     side = random.Random(f"{self.fill_seed}:{s.ticker}:last").choice([-1, 1])
                     px = s.mid + side * s.spread / 2 - (1 if s.position > 0 else -1) * self.stress["close_slip"]
                 self._settle(s.ccy, s.position * px * s.mult)
@@ -1173,8 +953,7 @@ class InProcessAdapter(requests.adapters.BaseAdapter):
 
 
 CASE_SHAPE = {          # ticks_per_period, periods
-    "liability": (420, 1), "etf": (300, 1), "equity": (300, 1),
-    "derivatives": (300, 2), "commodity": (300, 2),
+    "liquidity": (420, 1),
 }
 
 

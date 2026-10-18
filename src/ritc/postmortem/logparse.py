@@ -1,5 +1,5 @@
 """
-Parse a `liability` bot log (logs/liability-<date>-<time>.log) into a structured run.
+Parse a `liquidity` bot log (logs/liquidity-<date>-<time>.log) into a structured run.
 
 Handles every format the bot has written so far:
 
@@ -204,7 +204,7 @@ def parse_lines(lines: list[str], path: str | Path = "<memory>") -> Run:
             if b:
                 run.blocks.append((w, b.group(1), b.group(2), int(b.group(3)), int(b.group(4)), int(b.group(5)),
                                    float(b.group(7)) if b.group(7) else None))
-        elif logger == "ritc.liability":
+        elif logger == "ritc.liquidity":
             if msg.startswith("CROWD"):
                 c = CROWD.search(msg)
                 if c:

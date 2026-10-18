@@ -9,31 +9,31 @@ from ritc.postmortem.replay import decompose, fine_schedule, replay, tender_tabl
 from ritc.postmortem.simmatch import find_seeds, stream
 
 V1 = """\
-22:46:56.242 INFO  ritc.bot | strategy=liability dry_run=False
-22:46:58.243 INFO  ritc.liability | TENDER 3 BUY TAME x30000 @ 25.51 -> ACCEPT (profit/share +0.0980 >= 0.0100)
-22:46:58.409 INFO  ritc.liability | TENDER 4 SELL CRZY x50000 @ 10.48 -> decline (profit/share -0.2752 < 0.0100)
+22:46:56.242 INFO  ritc.bot | strategy=liquidity dry_run=False
+22:46:58.243 INFO  ritc.liquidity | TENDER 3 BUY TAME x30000 @ 25.51 -> ACCEPT (profit/share +0.0980 >= 0.0100)
+22:46:58.409 INFO  ritc.liquidity | TENDER 4 SELL CRZY x50000 @ 10.48 -> decline (profit/share -0.2752 < 0.0100)
 22:46:58.410 INFO  ritc.algo | BLOCK start TAME +30000 -> +0 by tick 157
 22:46:58.412 INFO  ritc.exec | [LIVE] SELL TAME 5000 @ 25.67
-22:47:01.725 INFO  ritc.liability | TENDER 22 SELL CRZY x50000 @ None -> ACCEPT (competitive bid 10.40, profit/share +0.0500)
-22:47:01.726 INFO  ritc.liability | TENDER 22 not filled (competitive bid 10.4 rejected)
+22:47:01.725 INFO  ritc.liquidity | TENDER 22 SELL CRZY x50000 @ None -> ACCEPT (competitive bid 10.40, profit/share +0.0500)
+22:47:01.726 INFO  ritc.liquidity | TENDER 22 not filled (competitive bid 10.4 rejected)
 22:47:02.562 INFO  ritc.algo | BLOCK start CRZY -30000 -> +0 by tick 197 AC kappa*T 0.33
 22:47:05.270 INFO  ritc.algo | BLOCK start CRZY +2400 -> +0 by tick 223 AC kappa*T 0.30
 """
 
 V3 = """\
-10:53:13.628 INFO  ritc.bot | strategy=liability dry_run=False
-10:53:21.713 INFO  ritc.liability | TENDER 1 SELL CROC x20000 @ None seen at tick 17, expires 41: answering 3 ticks before it
-10:53:32.304 INFO  ritc.liability | TENDER 1 SELL CROC x20000 @ None -> ACCEPT (competitive bid 20.17, profit/share +0.0500)
-10:53:43.470 INFO  ritc.liability | VOL CRZY $0.0213/tick  TAME $0.0209/tick  CROC $0.0421/tick
-10:53:43.935 INFO  ritc.liability | TENDER 21 SELL CRZY x50000 @ None seen at tick 61, expires 82: answering 3 ticks before it
-10:53:53.071 INFO  ritc.liability | TENDER 21 SELL CRZY x50000 @ None -> ACCEPT (competitive bid 9.87, profit/share +0.0500)
-10:53:53.072 INFO  ritc.liability | TENDER 21 not filled (competitive bid 9.87 rejected)
+10:53:13.628 INFO  ritc.bot | strategy=liquidity dry_run=False
+10:53:21.713 INFO  ritc.liquidity | TENDER 1 SELL CROC x20000 @ None seen at tick 17, expires 41: answering 3 ticks before it
+10:53:32.304 INFO  ritc.liquidity | TENDER 1 SELL CROC x20000 @ None -> ACCEPT (competitive bid 20.17, profit/share +0.0500)
+10:53:43.470 INFO  ritc.liquidity | VOL CRZY $0.0213/tick  TAME $0.0209/tick  CROC $0.0421/tick
+10:53:43.935 INFO  ritc.liquidity | TENDER 21 SELL CRZY x50000 @ None seen at tick 61, expires 82: answering 3 ticks before it
+10:53:53.071 INFO  ritc.liquidity | TENDER 21 SELL CRZY x50000 @ None -> ACCEPT (competitive bid 9.87, profit/share +0.0500)
+10:53:53.072 INFO  ritc.liquidity | TENDER 21 not filled (competitive bid 9.87 rejected)
 10:54:03.488 INFO  ritc.bot | loop p50 7 ms, p95 38 ms, max 108 ms, feed 1 ms
 """
 
 
 def test_parses_v1_and_v3_formats():
-    r = parse_lines(V1.splitlines(), "logs/liability-20261009-224656.log")
+    r = parse_lines(V1.splitlines(), "logs/liquidity-20261009-224656.log")
     assert r.stamp == "20261009-224656" and r.version == "v1-instant" and r.bots == 1 and r.dry_run is False
     tl = r.tender_list()
     assert [t.tid for t in tl] == [3, 4, 22]
@@ -49,9 +49,9 @@ def test_parses_v1_and_v3_formats():
 
 
 def test_two_bots_in_one_file_are_kept_apart():
-    lines = ["10:04:06.715 INFO  ritc.bot | strategy=liability dry_run=True"] * 2 + [
-        "10:04:06.980 INFO  ritc.liability | TENDER 1 BUY TAME x10000 @ 24.92 -> ACCEPT (profit/share +0.1300 >= 0.0100)",
-        "10:04:06.981 INFO  ritc.liability | TENDER 1 BUY TAME x20000 @ 24.84 -> decline (profit/share -0.0100 < 0.0100)"]
+    lines = ["10:04:06.715 INFO  ritc.bot | strategy=liquidity dry_run=True"] * 2 + [
+        "10:04:06.980 INFO  ritc.liquidity | TENDER 1 BUY TAME x10000 @ 24.92 -> ACCEPT (profit/share +0.1300 >= 0.0100)",
+        "10:04:06.981 INFO  ritc.liquidity | TENDER 1 BUY TAME x20000 @ 24.84 -> decline (profit/share -0.0100 < 0.0100)"]
     r = parse_lines(lines, "x.log")
     assert r.bots == 2 and len(r.tenders) == 2      # same id, different tender: two keys
 
@@ -64,23 +64,23 @@ def test_overshoot_through_zero_is_flagged_but_a_rejected_bid_is_no_new_tender()
 
 def test_seed_is_found_from_a_dry_run_and_the_run_classified_local():
     tenders = stream(9)["tenders"][:8]
-    lines = ["12:00:00.000 INFO  ritc.bot | strategy=liability dry_run=True"]
+    lines = ["12:00:00.000 INFO  ritc.bot | strategy=liquidity dry_run=True"]
     for i, t in enumerate(tenders):
         px = f"{t['price']}" if t["fixed"] else "None"
-        lines.append(f"12:00:{i + 1:02d}.000 INFO  ritc.liability | TENDER {t['index']} {t['action']} {t['ticker']} "
+        lines.append(f"12:00:{i + 1:02d}.000 INFO  ritc.liquidity | TENDER {t['index']} {t['action']} {t['ticker']} "
                      f"x{t['qty']} @ {px} -> decline (profit/share -0.0500 < 0.0100)")
-    r = parse_lines(lines, "liability-20261012-120000.log")
+    r = parse_lines(lines, "liquidity-20261012-120000.log")
     seeds = find_seeds(r, seeds=range(0, 20))
     assert [s["seed"] for s in seeds] == [9]
     assert classify(r, seeds)[0] == "local"
 
 
 def test_an_unmatched_run_at_one_tick_per_second_is_live():
-    lines = ["09:00:00.000 INFO  ritc.bot | strategy=liability dry_run=False",
-             "09:00:01.000 INFO  ritc.liability | TENDER 5 BUY XYZ x10000 @ 9.9 seen at tick 10, expires 40: answering 3 ticks before it",
-             "09:00:11.000 INFO  ritc.liability | TENDER 6 SELL XYZ x10000 @ 10.1 seen at tick 20, expires 50: answering 3 ticks before it",
-             "09:00:21.000 INFO  ritc.liability | TENDER 7 BUY XYZ x20000 @ 9.8 seen at tick 30, expires 60: answering 3 ticks before it"]
-    r = parse_lines(lines, "liability-20261012-090000.log")
+    lines = ["09:00:00.000 INFO  ritc.bot | strategy=liquidity dry_run=False",
+             "09:00:01.000 INFO  ritc.liquidity | TENDER 5 BUY XYZ x10000 @ 9.9 seen at tick 10, expires 40: answering 3 ticks before it",
+             "09:00:11.000 INFO  ritc.liquidity | TENDER 6 SELL XYZ x10000 @ 10.1 seen at tick 20, expires 50: answering 3 ticks before it",
+             "09:00:21.000 INFO  ritc.liquidity | TENDER 7 BUY XYZ x20000 @ 9.8 seen at tick 30, expires 60: answering 3 ticks before it"]
+    r = parse_lines(lines, "liquidity-20261012-090000.log")
     assert classify(r, [])[0] == "live"
 
 
@@ -112,13 +112,13 @@ def test_run_journal_records_a_heat_and_the_live_analysis_reads_it(tmp_path):
 
     logging.disable(logging.CRITICAL)
     try:
-        m = Market("liability", 420, 1, 5)
+        m = Market("liquidity", 420, 1, 5)
         m.status = "ACTIVE"
-        runner, _ = build("liability", None, live=True)
+        runner, _ = build("liquidity", None, live=True)
         runner.client.adapter = InProcessAdapter(m)
         runner.interval = 0.0
         runner.on_loop = lambda: m.advance() if runner.loops % 4 == 0 else None
-        path = tmp_path / "liability-20261012-120000.jsonl"
+        path = tmp_path / "liquidity-20261012-120000.jsonl"
         runner.journal = runner.s.ex.journal = Journal(path)
         runner.run()
     finally:

@@ -275,7 +275,7 @@ def stress_block(results: dict, sums: dict, stamp: str, seeds: list[int]) -> str
                     f'<td class=n>{money(s["template_mean"]) if s["template_mean"] is not None else "-"}</td>'
                     f'<td class=n>{s["template_losing"]}/{s["n"]}</td></tr>')
     from ..stress import SCENARIOS
-    return (f'<h2 id="stress">Stress test (simulator, run {stamp})</h2><p>The current bot (config/liability.toml) through '
+    return (f'<h2 id="stress">Stress test (simulator, run {stamp})</h2><p>The current bot (config/liquidity.toml) through '
             f"every <code>ritc stress</code> scenario, seeds {seeds[0]}-{seeds[-1]}, the same seeds in every scenario. Click "
             "a scenario to open it; inside, click a seed for that heat's summary and the bot's full log.</p>"
             + bars([(k, v["mean"], f"worst {money(v['worst'])}") for k, v in sums.items()])

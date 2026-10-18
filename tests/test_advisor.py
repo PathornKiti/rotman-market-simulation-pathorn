@@ -46,7 +46,7 @@ def test_suggest_full_case_sends_nothing(monkeypatch, capsys, tmp_path):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     monkeypatch.setenv("RIT_URL", f"http://127.0.0.1:{port}/v1")
-    srv, market = serve("liability", port, speed=150, delay=0.2, seed=7, block=False)
+    srv, market = serve("liquidity", port, speed=150, delay=0.2, seed=7, block=False)
     try:
         advisor.suggest(interval=0.005, color=False)
     finally:
@@ -82,7 +82,7 @@ def test_runner_waits_for_the_server_and_ctrl_c_sends_nothing(monkeypatch):
     from ritc.cli import build
     from ritc.core import bot
     monkeypatch.setenv("RIT_URL", "http://127.0.0.1:9/v1")
-    runner, _ = build("liability", None, live=True)
+    runner, _ = build("liquidity", None, live=True)
     runner.client.max_retries, runner.client.timeout = 1, 0.2
     naps = []
 

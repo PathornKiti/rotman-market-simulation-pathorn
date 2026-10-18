@@ -1,11 +1,11 @@
 """
-MANUAL-TRADING ADVISOR (liability case): connect to the live RIT API READ-ONLY and show, every
+MANUAL-TRADING ADVISOR (liquidity case): connect to the live RIT API READ-ONLY and show, every
 loop, what the bot would do, so you can type it into the RIT client yourself.
 
     python -m ritc suggest                 # same RIT_URL / RIT_API_KEY as `run`
     python -m ritc suggest --set strategy.min_profit_per_share=0.03
 
-It runs the real LiabilityStrategy in dry-run against YOUR account, so your manual fills move the
+It runs the real LiquidityStrategy in dry-run against YOUR account, so your manual fills move the
 positions it plans from, and every non-GET call (orders, cancels, tender answers) is refused at
 the client. On screen:
 
@@ -16,7 +16,7 @@ the client. On screen:
     WARNINGS  your resting orders that would be fined: past zero (speculation), on the wrong
               side, or on a stock whose tender is still open (front-running)
 
-Decisions are logged to logs/suggest-liability-<time>.log (not picked up by `ritc report`).
+Decisions are logged to logs/suggest-liquidity-<time>.log (not picked up by `ritc report`).
 """
 
 from __future__ import annotations
@@ -232,12 +232,12 @@ def suggest(cfg_path: str | None = None, overrides: dict | None = None, interval
     real = {k for k in ENV_KEYS if k in os.environ}      # before .env is loaded: these beat .env
     if os.name == "nt":
         os.system("")                              # turn on ANSI colours / screen clearing in the Windows console
-    path = setup_logging("suggest-liability")
+    path = setup_logging("suggest-liquidity")
     root = logging.getLogger()
     root.handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]   # the screen is the dashboard
     warning = LastWarning()
     root.addHandler(warning)
-    runner, _ = build("liability", cfg_path, live=False, overrides=overrides)
+    runner, _ = build("liquidity", cfg_path, live=False, overrides=overrides)
     runner.s.ex.dry_run = True                     # belt and braces: RIT_DRY_RUN=0 must not matter here
     read_only(runner.client)
     runner.interval = interval
