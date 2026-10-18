@@ -13,9 +13,7 @@ from ritc.pricing.timeseries import (
     log_returns,
     nelder_mead,
 )
-from ritc.strategies.derivatives import blend_forecast
-from ritc.strategies.equity import QuoteParams, compute_quotes
-from ritc.strategies.liability import evaluate_tender
+from ritc.strategies.liquidity import evaluate_tender
 
 
 def simulate_garch(n, omega, alpha, beta, seed=1):
@@ -112,24 +110,7 @@ def test_fair_value_model_only_leans_when_mean_reverting():
     assert fv.value > fv.kalman.level                   # expects a move back up
 
 
-def test_blend_forecast():
-    assert blend_forecast(0.30, 0.20, 0.25, 0.1) == pytest.approx(0.275)
-    assert blend_forecast(None, 0.20, 0.25, 0.1) == 0.20
-    assert blend_forecast(0.30, None, 0.25, 0.1) == 0.30
-    assert blend_forecast(None, None, 0.25, 0.1) == 0.1
-
-
-def test_equity_fair_shift_leans_quotes_but_is_capped():
-    book = make_book([(9.90, 1000)], [(10.10, 1000)])
-    p = QuoteParams(min_half_spread=0.02, vol_mult=1.0, skew_per_share=0.0, imbalance_lean=0.0)
-    base = compute_quotes(book, 0, 0.0, p)
-    up = compute_quotes(book, 0, 0.0, p, fair_shift=0.01)
-    huge = compute_quotes(book, 0, 0.0, p, fair_shift=5.0)
-    assert up.bid > base.bid and up.ask > base.ask
-    assert huge.fair - base.fair == pytest.approx(0.02)       # capped at one half-spread
-
-
-def test_liability_volatility_raises_required_edge():
+def test_liquidity_volatility_raises_required_edge():
     book = make_book([(25.00, 20000), (24.98, 20000)], [(25.02, 20000), (25.04, 20000)])
     t = {"action": "BUY", "quantity": 20000, "price": 24.92, "is_fixed_bid": True}
     calm = evaluate_tender(t, book, 0.02, unwind_ticks_per_lot=0.001, price_vol_per_tick=0.01, risk_aversion=0.5)

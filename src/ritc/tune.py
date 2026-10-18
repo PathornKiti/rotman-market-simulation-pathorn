@@ -1,8 +1,8 @@
 """
 Parameter tuning / A-B testing on the offline simulator.
 
-    python -m ritc tune liability --grid execution.unwind_mode=block,slice --seeds 8
-    python -m ritc tune equity --grid strategy.min_half_spread=0.02,0.03,0.04 \\
+    python -m ritc tune liquidity --grid execution.unwind_mode=block,slice --seeds 8
+    python -m ritc tune liquidity --grid strategy.min_profit_per_share=0.03,0.05 \\
                                --grid strategy.size=1000,2000 --seeds 6 --workers 4
 
 By default the simulator runs in LOCK-STEP (`--speed 0`): the market advances one

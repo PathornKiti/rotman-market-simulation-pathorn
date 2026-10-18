@@ -1,6 +1,6 @@
-# Liability trading (tender offers)
+# Liquidity trading (tender offers)
 
-**Code:** `src/ritc/strategies/liability.py` · **Config:** `config/liability.toml`
+**Code:** `src/ritc/strategies/liquidity.py` · **Config:** `config/liquidity.toml`
 
 ## The case
 

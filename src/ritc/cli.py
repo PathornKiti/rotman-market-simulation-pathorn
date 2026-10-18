@@ -9,11 +9,11 @@ Command-line entry point.
     python -m ritc run <case>                   # DRY RUN (logs decisions, sends nothing)
     python -m ritc run <case> --live            # trade
     python -m ritc tune <case> --grid section.key=a,b --seeds 8   # A/B test on the simulator
-    python -m ritc stress [--only gap]          # liability bot across every adverse scenario
+    python -m ritc stress [--only gap]          # liquidity bot across every adverse scenario
     python -m ritc record                       # READ-ONLY: record a practice heat to logs/record-*.jsonl
     python -m ritc calibrate logs/record-*.jsonl  # measured vol / depth / tenders / booking delay
-    python -m ritc report [logs/liability-*.log]  # liability: gap report per run -> reports/*_local|_live.html/.xlsx
-    python -m ritc suggest                      # liability, READ-ONLY: live tender answers + limit orders to type in
+    python -m ritc report [logs/liquidity-*.log]  # liquidity: gap report per run -> reports/*_local|_live.html/.xlsx
+    python -m ritc suggest                      # liquidity, READ-ONLY: live tender answers + limit orders to type in
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ def _run_one_heat(a: argparse.Namespace, heat: int) -> Runner:
         name, prof = pick_profile(a.case, a.profile, heat=heat)
         sets = {**prof, "strategy.profile": name, **sets}          # an explicit --set still wins
     # The log / journal name says what this run changed, e.g.
-    # logs/liability-20261012-171840__C_auctions__crowd_robust=True+liquidity_model=auctions.log
+    # logs/liquidity-20261012-171840__C_auctions__crowd_robust=True+liquidity_model=auctions.log
     path = setup_logging(a.case, a.verbose, tag=file_tag(name, sets))
     if a.profile:
         print(f"PROFILE {name}: {prof or '(config defaults)'}")
@@ -132,7 +132,7 @@ def _run_one_heat(a: argparse.Namespace, heat: int) -> Runner:
     rec = None
     if a.record and not a.once:
         # RECORDER INSIDE THE BOT: the market snapshots `ritc record` takes, written into this heat's journal as
-        # "market" rows (read by `ritc calibrate logs/liability-*.jsonl`); one heat = one .log + one .jsonl.
+        # "market" rows (read by `ritc calibrate logs/liquidity-*.jsonl`); one heat = one .log + one .jsonl.
         import threading
 
         from .recorder import record_into
@@ -225,7 +225,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
                   "for a remote (DMA) server.")
     if not ok:
         print("\nSome calls failed. Is the RIT client running and logged in? Is RIT_API_KEY right?"
-              "\nOffline? Start the simulator:  python -m ritc sim equity")
+              "\nOffline? Start the simulator:  python -m ritc sim liquidity")
     return 0 if ok else 1
 
 
@@ -254,8 +254,7 @@ def cmd_analyze(a: argparse.Namespace) -> int:
         hl = f"{ou.half_life:>11.1f}" if ou and ou.half_life < 1e6 else f"{'inf':>11}"
         print(f"{t:<10}{len(r):>5}{vol:>10.5f}{q:>11.1f}{('YES' if clusters else 'no'):>10}{ab}"
               f"{(ou.t_stat if ou else 0):>8.2f}{hl}{('YES' if ou and ou.significant() else 'no'):>10}")
-    print("\nclusters=YES -> try vol_model = \"garch\" (equity) / garch_weight > 0 (derivatives, no-news periods)"
-          "\nmean-rev=YES -> ou_weight leans equity quotes toward the OU forecast automatically")
+    print("\nclusters=YES -> volatility clusters (GARCH forecasts help); mean-rev=YES -> prices mean-revert")
     return 0
 
 
@@ -359,7 +358,7 @@ def cmd_practice(a: argparse.Namespace) -> int:
 
     from .core.journal import journal_files
     from .practice import main as practice_main
-    return practice_main(a.journals or journal_files("logs", "liability"))
+    return practice_main(a.journals or journal_files("logs", "liquidity"))
 
 
 def cmd_suggest(a: argparse.Namespace) -> int:
@@ -375,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("list", help="list strategies").set_defaults(fn=cmd_list)
     sub.add_parser("doctor", help="check the API connection").set_defaults(fn=cmd_doctor)
-    st_ = sub.add_parser("stress", help="liability: the bot across every adverse scenario (docs/POSTMORTEM.md)")
+    st_ = sub.add_parser("stress", help="liquidity: the bot across every adverse scenario (docs/POSTMORTEM.md)")
     st_.add_argument("--seeds", type=int, default=16)
     st_.add_argument("--first-seed", type=int, default=1)
     st_.add_argument("--only", help="comma-separated groups (core / hostile / gap) and/or scenario names")
@@ -397,11 +396,11 @@ def main(argv: list[str] | None = None) -> int:
     ca.add_argument("--json", help="also write the full report (incl. every tender) to this file")
     ca.set_defaults(fn=cmd_calibrate)
 
-    pr = sub.add_parser("practice", help="liability: scoreboard of real practice heats by profile (+ trend test)")
-    pr.add_argument("journals", nargs="*", help="run journals (default: logs/liability-*.jsonl)")
+    pr = sub.add_parser("practice", help="liquidity: scoreboard of real practice heats by profile (+ trend test)")
+    pr.add_argument("journals", nargs="*", help="run journals (default: logs/liquidity-*.jsonl)")
     pr.set_defaults(fn=cmd_practice)
-    rp = sub.add_parser("report", help="liability: post-trade gap report per bot log (.html + .xlsx in reports/)")
-    rp.add_argument("logs", nargs="*", help="bot logs (default: logs/liability-*.log)")
+    rp = sub.add_parser("report", help="liquidity: post-trade gap report per bot log (.html + .xlsx in reports/)")
+    rp.add_argument("logs", nargs="*", help="bot logs (default: logs/liquidity-*.log)")
     rp.add_argument("--out", default="reports")
     rp.add_argument("--mode", choices=["auto", "local", "live"], default="auto",
                     help="local = the offline simulator, live = the RIT server (auto: detected from the log)")
@@ -414,8 +413,8 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--only", help="--stress: groups (core / hostile / gap) and/or scenario names")
     rp.set_defaults(fn=cmd_report)
 
-    sg = sub.add_parser("suggest", help="liability, READ-ONLY: connect live, suggest tender answers + limit orders")
-    sg.add_argument("--config", help="path to a TOML config (default config/liability.toml)")
+    sg = sub.add_parser("suggest", help="liquidity, READ-ONLY: connect live, suggest tender answers + limit orders")
+    sg.add_argument("--config", help="path to a TOML config (default config/liquidity.toml)")
     sg.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE", help="config override (repeatable)")
     sg.add_argument("--interval", type=float, default=0.5, help="screen refresh, seconds")
     sg.add_argument("--no-color", action="store_true", help="plain text (old Windows consoles)")
@@ -438,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--set", action="append", metavar="SECTION.KEY=VALUE",
                    help="override one config value for this run, e.g. --set strategy.min_profit_per_share=0.05")
     r.add_argument("--profile", metavar="NAME|rotate|alternate[:A,B]",
-                   help="liability practice: apply a profile from config/<case>_profiles.toml; 'rotate' runs the "
+                   help="liquidity practice: apply a profile from config/<case>_profiles.toml; 'rotate' runs the "
                         "least-tried one in logs/; 'alternate' takes the profiles in turn by this session's heat "
                         "number (A, S, A, S with --forever), ignoring older logs")
     r.add_argument("--forever", action="store_true",

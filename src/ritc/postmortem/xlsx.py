@@ -420,7 +420,7 @@ def write_xlsx(m: dict, path: Path) -> Path:
     summ.column_dimensions["A"].width = 30
     summ.column_dimensions["B"].width = 14
     summ.column_dimensions["C"].width = 110
-    _put(summ, "A1", f"Liability run {m['stamp']} ({m['mode']})", bold=True)
+    _put(summ, "A1", f"Liquidity run {m['stamp']} ({m['mode']})", bold=True)
     facts = [("Log file", m["file"]), ("Mode", f"{m['mode']}: {m['mode_why']}"), ("Bot version", run["version_label"]),
              ("Bots in the file", run["bots"]), ("Orders", "dry run" if run["dry_run"] else "live"),
              ("Simulator seed(s)", ", ".join(map(str, seeds)) or "-"),

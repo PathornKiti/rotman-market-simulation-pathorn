@@ -1,5 +1,5 @@
 """
-Gap checks for one run of the `liability` bot against the Liquidity Risk Case brief, and the catalogue of
+Gap checks for one run of the `liquidity` bot against the Liquidity Risk Case brief, and the catalogue of
 improvements they point to.
 
 Each check reads the parsed log and, for `local` runs, the simulator's ground truth for that seed (true mid,
@@ -44,7 +44,7 @@ IMPROVEMENTS: dict[str, dict] = {
     "start-early": {
         "title": "Start the bot before the heat opens",
         "area": "operations", "status": "do now",
-        "what": "Launch `ritc run liability --live` while the case is still PAUSED. The runner waits for ACTIVE, so "
+        "what": "Launch `ritc run liquidity --live` while the case is still PAUSED. The runner waits for ACTIVE, so "
                 "starting early costs nothing; joining late forfeits every tender that arrives before the bot does.",
         "evidence": "Run 20261009-224656 joined at about tick 106 of 420 and never saw tenders 1-2 (25% of the heat).",
     },

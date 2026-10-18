@@ -1,8 +1,8 @@
 """
-Practice-heat scoreboard (liability): one line per real heat from the bot's run journals, so profiles can be
-compared on the real server (docs/RUNBOOK.md, "Practice-heat A/B testing").
+Practice-heat scoreboard (liquidity): one line per real heat from the bot's run journals, so profiles can be
+compared on the real server (docs/MANUAL.md).
 
-    python -m ritc practice logs/liability-*.jsonl
+    python -m ritc practice logs/liquidity-*.jsonl
 
 Per heat: the profile it ran (liquidity model, crowd_robust, end-game and trend switches), final NLV, fixed
 tenders taken and their estimated edge, auction bids and WINS, crowd alarms and loop speed. Then every auction
@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 
-def load_profiles(case: str = "liability") -> dict[str, dict]:
+def load_profiles(case: str = "liquidity") -> dict[str, dict]:
     """config/<case>_profiles.toml -> {name: {"section.key": value}} in file order."""
     import tomllib
 
@@ -249,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     paths = argv if argv is not None else sys.argv[1:]
     paths = [p for p in paths if p.endswith(".jsonl")]
     if not paths:
-        print("usage: python -m ritc practice logs/liability-*.jsonl")
+        print("usage: python -m ritc practice logs/liquidity-*.jsonl")
         return 1
     print(report(paths))
     return 0

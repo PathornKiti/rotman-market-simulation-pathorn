@@ -1,5 +1,5 @@
-# LIABILITY TRADING (tender offers)
-# Defaults match `python -m ritc sim liability`. On the day, copy tickers, fees,
+# LIQUIDITY TRADING (tender offers)
+# Defaults match `python -m ritc sim liquidity`. On the day, copy tickers, fees,
 # order sizes and limits from the case brief.
 
 [case]

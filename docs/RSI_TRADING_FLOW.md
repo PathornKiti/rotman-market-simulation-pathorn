@@ -1,6 +1,6 @@
 # Trend-Hold Tender Strategy (`rsi_bot`): Trading Flow
 
-This note follows the strategy described in `docs/RSI_STRATEGY.md` step by step: how the bot moves from market data to a tender decision, then to inventory management, liquidation, and the end of the heat. Parameter values are the `rsi_bot` profile on top of `config/liability.toml`. Code references are to `src/ritc/strategies/liability.py`.
+This note follows the strategy described in `docs/RSI_STRATEGY.md` step by step: how the bot moves from market data to a tender decision, then to inventory management, liquidation, and the end of the heat. Parameter values are the `rsi_bot` profile on top of `config/liquidity.toml`. Code references are to `src/ritc/strategies/liquidity.py`.
 
 ---
 

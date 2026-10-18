@@ -52,7 +52,7 @@ Blocks are worked to a target by a deadline: rest an iceberg child at the touch 
 while on schedule, cross for the shortfall when behind (slice VWAP within `max_slippage` of the touch), cross
 everything in the last `urgent_ticks`. The schedule is Almgren-Chriss (`sinh` path from GARCH sigma and
 book-implied impact). Progress is measured from the position, so partial and resting fills are handled.
-Liability holds to the bell: inside `close_hold_ticks` and while the 1-sd $ risk is within `hold_risk_budget`
+Liquidity holds to the bell: inside `close_hold_ticks` and while the 1-sd $ risk is within `hold_risk_budget`
 it only rests. TCA (`core/tca.py`) compares every fill with the arrival mid and prints at shutdown.
 
 ## Risk controls
@@ -64,8 +64,8 @@ it only rests. TCA (`core/tca.py`) compares every fill with the arrival mid and 
    `drawdown_floor`; at `max_drawdown` the kill switch cancels, flattens and halts. Exits always run at full
    size. Calibrated as a catastrophe stop only: a stop near the normal drawdown sells reverting drawdowns
    (derivatives at $40k turned a +$40.3k heat into -$14.0k; equity's $4k stop was hunted by pumps and blocks,
-   off = +$951, t 3.0). Off for liability, ETF and equity; derivatives $80k, commodity $200.
-3. **Case guards**: liability GARCH risk premium, minimum ticks to unwind, risk room per tender, crowd
+   off = +$951, t 3.0). Off for liquidity, ETF and equity; derivatives $80k, commodity $200.
+3. **Case guards**: liquidity GARCH risk premium, minimum ticks to unwind, risk room per tender, crowd
    learning, front-running freeze, booking tracking, late answers; derivatives delta band from fills;
    ETF leg repair and slippage budget; equity hard inventory, size taper, jump guard; commodity spot re-hedge
    and news stop-loss.
@@ -76,8 +76,8 @@ equity end-of-period skew, price bands, spoof-capped depth, queue fighting, toxi
 ## Time-series models (`pricing/timeseries.py`)
 
 - **GARCH(1,1)** by maximum likelihood with variance targeting (only alpha, beta fitted); `OnlineGarch` uses
-  EWMA (lambda 0.94) until 60 returns, then refits every 50 ticks; `term_vol(h)` over a horizon. Liability's
-  risk premium and Almgren-Chriss speed use it. Perfect vol knowledge adds $0 to liability (oracle test), so no
+  EWMA (lambda 0.94) until 60 returns, then refits every 50 ticks; `term_vol(h)` over a horizon. Liquidity's
+  risk premium and Almgren-Chriss speed use it. Perfect vol knowledge adds $0 to liquidity (oracle test), so no
   better vol model is worth building.
 - **Kalman level** (denoised price) and **OU mean reversion** (AR(1); used only when the Dickey-Fuller-style
   t < -3.5: 1% false positives on random walks). Equity's fair-value shift.
@@ -87,14 +87,14 @@ equity end-of-period skew, price bands, spoof-capped depth, queue fighting, toxi
 ## The simulator (`sim/server.py`)
 
 One `Market` per case, serving the same endpoints as the RIT client. Rules from the official case packages
-where they exist ([OFFICIAL_RULES.md](OFFICIAL_RULES.md)); the liability market follows the 2027 brief.
+where they exist ([OFFICIAL_RULES.md](OFFICIAL_RULES.md)); the liquidity market follows the 2027 brief.
 `RITC_STRESS="k=v,..."` knobs push its unknowns (vol, depth, tender edge / size / gap, booking delay, strict
 front-running, resting-fill flow, maker fee, spread, close slip, bell dump, crowd at expiry, vol regimes,
 `anchor`); `ritc stress` runs 23 named scenarios built from them.
 
 **Hostile mode** (`--hostile 1`; 0 = exactly the benign market): pump-and-dump, spoofing (fake size behind
 the touch that never fills), liquidity vacuums, penny-jumpers in front of our resting quotes, crowded tenders
-(liability: three other desks unwind the same block; half the move stays) and competing ETF arbitrageurs. All
+(liquidity: three other desks unwind the same block; half the move stays) and competing ETF arbitrageurs. All
 from their own seeded generators, so settings compared on a seed meet the same manipulation.
 `RITC_HOSTILE_THREATS` switches threats one at a time. Use `anchor=1` (tenders priced off the visible mid):
 pricing off the true mid hands the bot a fake "displacement edge". A change must not cost money in the benign

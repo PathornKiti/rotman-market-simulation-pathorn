@@ -16,7 +16,7 @@ same in the real case, but check every number against the new brief on the day.
 [RotmanFRTL/RotmanFRTL.github.io](https://github.com/RotmanFRTL/RotmanFRTL.github.io)
 (`RITC 2026 Case Package.pdf`, `RITC 2026-Closing Thoughts.pdf`, the RITCx briefs and base
 scripts). It is copyrighted: as above, we record rules, never files. The 2026 cases are
-Liquidity Risk (`liability`), Volatility (`derivatives`), GBE Electricity (API orders disabled),
+Liquidity Risk (`liquidity`), Volatility (`derivatives`), GBE Electricity (API orders disabled),
 **Merger Arbitrage** (new, no bot yet) and Algorithmic Market Making (`equity`), 20% each.
 There is no ETF or BP commodity case in 2026; those live on in the RITCx events.
 
@@ -24,7 +24,7 @@ There is no ETF or BP commodity case in 2026; those live on in the RITCx events.
 |---|---|---|---|
 | `derivatives` | (MATLAB) Volatility Trading | 2019, 2020, 2023, 2024 | **enabled** |
 | `etf` | (Citadel Securities) Algorithmic Trading: ETF + FX + tenders | 2019, 2020, 2023 | **enabled** (algo only, no manual trading) |
-| `liability` | Liquidity Risk / Flow Traders ETF (tender offers) | 2019, 2020, 2023, 2024, 2026 | disabled 2019–2023, **enabled 2026** |
+| `liquidity` | Liquidity Risk / Flow Traders ETF (tender offers) | 2019, 2020, 2023, 2024, 2026 | disabled 2019–2023, **enabled 2026** |
 | `equity` | Algorithmic Market Making | 2024, 2026 | enabled (algo only, no manual trading) |
 | `commodity` | BP Commodities (role-based crude + carbon credits) | 2019, 2020, 2024 | **disabled** |
 
@@ -72,7 +72,7 @@ There is no ETF or BP commodity case in 2026; those live on in the RITCx events.
 | Tenders | Private tender offers on RITC arrive in this case too | The sim sends them; the bot accepts when the basket hedge clears `tender_min_edge` (2026-10-07, +$3.7k) |
 | FX | Hedge USD with the currency securities if desired | **Not** FX-neutral: the ETF closes at the CAD basket value, so in CAD the ETF leg is a CAD asset and the USD paid for it is a naked FX position (sim: ~$7k/heat of noise). Optional `fx_hedge_band` (off by default; CHANGES.md 2026-10-09) |
 
-## Liability: Liquidity Risk Case
+## Liquidity: Liquidity Risk Case
 
 | Rule | Official value | Ours |
 |---|---|---|

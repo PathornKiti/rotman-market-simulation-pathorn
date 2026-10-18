@@ -6,7 +6,7 @@ import random
 from conftest import make_book
 from ritc.core.algo import ac_kappa, book_eta, schedule_position
 from ritc.pricing.timeseries import bertram_band, ou_continuous, ou_passage_time
-from ritc.strategies.commodity import BayesImpact
+from ritc.strategies.liquidity import BayesImpact
 
 
 # ------------------------------------------------------------ Almgren-Chriss
@@ -75,23 +75,17 @@ def test_practice_profiles_rotate_and_variance_ratio(tmp_path):
 
     from ritc.practice import load_profiles, pick_profile, variance_ratio
 
-    profiles = load_profiles("liability")
-    assert list(profiles)[:3] == ["A_default", "S_previous", "P_previous"]   # the default (adaptive MF since 10-16), the
-    assert profiles["A_default"] == {}                                           # previous default and the bot before it
-    assert profiles["S_previous"] == {"execution.front_cross": 0.0, "strategy.sprint_model": ""}
-    assert profiles["P_previous"]["strategy.liquidity_model"] == "adaptive"
-    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
-    (tmp_path / "liability-0.jsonl").write_text(json.dumps(                              # Ctrl-C before the heat
-        {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n")
-    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "A_default"
-    (tmp_path / "liability-1.jsonl").write_text(json.dumps(
+    profiles = load_profiles("liquidity")
+    assert list(profiles) == ["A_default", "rsi_ml", "rsi_bot"]
+    assert profiles["A_default"] == {}
+    assert profiles["rsi_bot"]["execution.trend_hold_ticks"] == 10
+    assert pick_profile("liquidity", "rotate", str(tmp_path))[0] == "A_default"          # nothing run yet
+    (tmp_path / "liquidity-1.jsonl").write_text(json.dumps(
         {"k": "start", "dry_run": False, "cfg": {"strategy": {"profile": "A_default"}}}) + "\n"
         + json.dumps({"k": "tick", "tick": 1}) + "\n")
-    assert pick_profile("liability", "rotate", str(tmp_path))[0] == "S_previous"         # least-tried next
-    name, prof = pick_profile("liability", "P_previous", str(tmp_path))
-    assert prof["strategy.drift_horizon_ticks"] == 0
-    assert [pick_profile("liability", "alternate:A_default,P_previous", str(tmp_path), heat=h)[0]
-            for h in (1, 2, 3, 4)] == ["A_default", "P_previous", "A_default", "P_previous"]  # old logs do not matter
+    assert pick_profile("liquidity", "rotate", str(tmp_path))[0] == "rsi_ml"             # least-tried next
+    assert [pick_profile("liquidity", "alternate:A_default,rsi_bot", str(tmp_path), heat=h)[0]
+            for h in (1, 2, 3, 4)] == ["A_default", "rsi_bot", "A_default", "rsi_bot"]   # old logs do not matter
     rng = random.Random(1)
     walk = [0.0]
     for _ in range(2000):

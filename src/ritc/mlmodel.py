@@ -2,7 +2,7 @@
 ML PRICE MODEL (2026-10-15): predict the mid's move over the next 10 ticks from the last 20 ticks of mids, the spread,
 the visible book (others' orders, top 10) and traded volume. Trained offline (docs/results/ml_2026-10-15/train.py) and
 exported as plain JSON, so the bot needs no ML library. The SAME feature builder is used for training and live, so the
-model sees identical inputs in both. Used by the liability bot's SPRINT rule when `strategy.sprint_model` is set.
+model sees identical inputs in both. Used by the liquidity bot's SPRINT rule when `strategy.sprint_model` is set.
 """
 from __future__ import annotations
 

@@ -1,12 +1,12 @@
 """
 Post-trade gap reports for the Liquidity Risk Case bot.
 
-    python -m ritc report                                  # every logs/liability-*.log
-    python -m ritc report logs/liability-20261010-105313.log --mode live
+    python -m ritc report                                  # every logs/liquidity-*.log
+    python -m ritc report logs/liquidity-20261010-105313.log --mode live
     python -m ritc report --no-counterfactuals             # faster (no per-tender what-ifs)
     python -m ritc report --stress                         # every stress scenario, every seed (stress_report.py)
 
-Writes, per run, `reports/liability-<date>-<time>_<local|live>.html` and `.xlsx`, plus `reports/index.html`.
+Writes, per run, `reports/liquidity-<date>-<time>_<local|live>.html` and `.xlsx`, plus `reports/index.html`.
 
 `local` = the run traded the offline simulator (its tenders match a simulator seed, or it ran faster than RIT's
 1 tick per second, or on a port other than RIT's 9999); `live` = the RIT server. For local runs the report
@@ -208,8 +208,8 @@ def write_reports(paths: list[str], out_dir: str = "reports", mode: str = "auto"
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import glob
-    ap = argparse.ArgumentParser(prog="ritc report", description="post-trade gap reports for the liability bot")
-    ap.add_argument("logs", nargs="*", help="bot logs (default: logs/liability-*.log)")
+    ap = argparse.ArgumentParser(prog="ritc report", description="post-trade gap reports for the liquidity bot")
+    ap.add_argument("logs", nargs="*", help="bot logs (default: logs/liquidity-*.log)")
     ap.add_argument("--out", default="reports")
     ap.add_argument("--mode", choices=["auto", "local", "live"], default="auto")
     ap.add_argument("--no-counterfactuals", action="store_true")
@@ -224,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.stress:
         from .stress_report import run_stress
         stress = run_stress(list(range(a.first_seed, a.first_seed + a.seeds)), a.only, a.workers)
-    paths = [p for f in (a.logs or ["logs/liability-*.log"]) for p in (sorted(glob.glob(f)) or [f])]
+    paths = [p for f in (a.logs or ["logs/liquidity-*.log"]) for p in (sorted(glob.glob(f)) or [f])]
     print(f"report: {len(paths)} log(s) -> {a.out}/")
     for f in write_reports(paths, a.out, a.mode, not a.no_counterfactuals, a.workers, stress=stress):
         print(f"  wrote {f}")

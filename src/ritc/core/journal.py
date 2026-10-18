@@ -62,7 +62,7 @@ def find_journal(log_path: str | Path) -> Path | None:
     return None
 
 
-def journal_files(logs: str | Path = "logs", case: str = "liability") -> list[str]:
+def journal_files(logs: str | Path = "logs", case: str = "liquidity") -> list[str]:
     """Every run journal of a case, old (logs/) and new (logs/data/), oldest first."""
     d = Path(logs)
     return sorted({str(p) for p in list(d.glob(f"{case}-*.jsonl")) + list((d / "data").glob(f"{case}-*.jsonl"))},

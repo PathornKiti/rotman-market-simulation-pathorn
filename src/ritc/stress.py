@@ -143,10 +143,10 @@ def run_bot(seed: int, name: str, overrides: dict, config_path: str | None = Non
     os.environ["RITC_STRESS"] = stress
     port = _free_port()
     os.environ["RIT_URL"] = f"http://127.0.0.1:{port}/v1"
-    srv, m = serve("liability", port, speed=0, delay=0.2, seed=seed, block=False, hostile=hostile, queue=queue)
+    srv, m = serve("liquidity", port, speed=0, delay=0.2, seed=seed, block=False, hostile=hostile, queue=queue)
     peak, held = {"gross": 0, "hi": 0.0, "dd": 0.0}, {}
     try:
-        r, _ = build("liability", config_path, live=True, overrides=overrides)
+        r, _ = build("liquidity", config_path, live=True, overrides=overrides)
         r.client.adapter = InProcessAdapter(m)
         r.interval = 0.0
         r.client.min_interval = 0.0          # in-process: a user's RIT_MIN_INTERVAL only slows the run
@@ -177,7 +177,7 @@ def run_template(seed: int, name: str) -> dict:
 
     stress, hostile, queue, _, _ = SCENARIOS[name]
     os.environ["RITC_STRESS"] = stress
-    m = Market("liability", 420, 1, seed, hostile, queue)
+    m = Market("liquidity", 420, 1, seed, hostile, queue)
     m.status = "ACTIVE"
     peak, taken, seen = {"gross": 0, "hi": 0.0, "dd": 0.0}, 0, 0
     while m.status == "ACTIVE":

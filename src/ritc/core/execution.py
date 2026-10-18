@@ -265,7 +265,7 @@ class QuoteManager:
         self.ex = executor
         self.tolerance = tolerance
         # Never leave a resting order BIGGER than asked for (block unwinds: the excess would take the
-        # position through zero, and the liability case fines every share that opens a position).
+        # position through zero, and the liquidity case fines every share that opens a position).
         self.never_larger = never_larger
         self.live: dict[tuple[str, str], Quote] = {}
 

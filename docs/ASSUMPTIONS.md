@@ -1,6 +1,6 @@
-# Assumptions: Liquidity Risk Case bot (`liability`)
+# Assumptions: Liquidity Risk Case bot (`liquidity`)
 
-**As of 2026-10-10.** Bot: `src/ritc/strategies/liability.py` · Config: `config/liability.toml`
+**As of 2026-10-10.** Bot: `src/ritc/strategies/liquidity.py` · Config: `config/liquidity.toml`
 
 Every assumption the bot depends on, where it comes from, what relies on it, what happens if it is
 wrong, and how we check it. The official brief leaves out most of the numbers the bot depends on, so
@@ -75,7 +75,7 @@ Bot text logs only; P&L, fines and the close-out are in RIT's Trader Info / Tran
 | — | **real RIT books orders asynchronously**: duplicate unwind orders 20-250 ms apart took TAME past zero (+2,100 / +10,800 heat 1, +2,000 heat 2) | **fixed**: `execution.order_settle = 1.0` |
 
 Still unanswered by the logs: **A15** (any fine at the close), A8 / A10 / A11 (fines), A17 (passive commission).
-Read them from RIT's Transaction Log, or run `ritc report` on the run journals (`logs/liability-*.jsonl`).
+Read them from RIT's Transaction Log, or run `ritc report` on the run journals (`logs/liquidity-*.jsonl`).
 
 ## 2. Case rules and mechanics (A)
 
@@ -87,14 +87,14 @@ Read them from RIT's Transaction Log, or run `ritc report` on the run journals (
 | A4 | Orders through the API are enabled | Stated (Brief) | the whole bot | Medium: if disabled, run in dry-run mode as a decision aid and trade by hand | `OrdersDisabled` / 403 in the log |
 | A5 | Prices are a random walk; returns normal, centred near zero | Stated (Brief) | no directional trading; risk ∝ σ√T (C5); holding costs nothing on average (C11); value of answering late (C17) | Medium: mean reversion → the bot is too cautious; trends → holding costs money | `ritc analyze` → `mean-rev` column |
 | A6 | A tender's price is fixed for its whole window | Implied (Brief: "at the specified price"; RTD: a single price field) | `decide_late_ticks = 3` | Low: the bot re-reads the tender list each tick and prices at decision time | price in the `seen at tick X` log line = price in the `ACCEPT/decline` line |
-| A7 | `expires` is a tick on the case clock; windows ~15-30 s, may vary by stock | Stated (RTD: "tick at which the offer will expire", example 49 → 79; Brief: example t = 0 to 30, "may vary by security"); 15-30 s is 2026 precedent | `decide_late_ticks`, `decide_late_max_window = 30` | Low: guards answer at once if `expires` is missing, unreadable or > 30 ticks away (`liability.py:417`) | `calibrate` "windows (ticks)"; raise `decide_late_max_window` if longer |
+| A7 | `expires` is a tick on the case clock; windows ~15-30 s, may vary by stock | Stated (RTD: "tick at which the offer will expire", example 49 → 79; Brief: example t = 0 to 30, "may vary by security"); 15-30 s is 2026 precedent | `decide_late_ticks`, `decide_late_max_window = 30` | Low: guards answer at once if `expires` is missing, unreadable or > 30 ticks away (`liquidity.py:417`) | `calibrate` "windows (ticks)"; raise `decide_late_max_window` if longer |
 | A8 | Accepting or declining a tender ends its window, so the stock may be traded again at once | Implied (Brief: front-running is trading "before the tender decision is finalized"); Precedent (2026: "pending = not yet accepted or declined") | `decline_explicitly`, `respect_windows` (the stock is unfrozen once answered) | Medium: if the window runs to expiry whatever we answer, unwinding right after a decline could be flagged. No switch exists for this; it would need a small code change | Transaction Log fines = 0 (heat 2) |
 | A9 | An accepted private tender reaches the position within ~1 s | Stated as "executed immediately" (Brief); Precedent (2026: ~950 ms observed; hedging before booking was fined) | `booking_ticks = 3`, `track_bookings` | Low if immediate (harmless); Medium if > 3 s (simulator: up to $2.8k fines before tracking existed) | `calibrate` "booking delays"; set `booking_ticks` = delay + 1 |
 | A10 | Front-running is judged **per stock**: trading X is front-running only while a tender on X is undecided | Precedent (2026: "trading a ticker while a tender on it is pending"). Brief ambiguous: "any trades executed during this window" | `respect_windows` freezes only the tender's stock; other stocks keep unwinding | Medium-High: if trades in any stock count, unwinds during other stocks' windows are fined, and with a tender every ~12 s a window is open most of the heat | ask the organisers; Transaction Log fines = 0 |
 | A11 | Speculation = a trade that opens a new position; reducing an accepted-tender position is never fined | Stated (Brief) | unwinds never pass zero (orders capped at shares left; `unwind_target`) | Low | Transaction Log |
 | A12 | Competitive auction: any bid past the hidden reserve fills at our price; the award may only be final when the window closes | Fill rule Stated (Brief); timing Unknown ("automatically filled") | `freeze_rejected_bids` (stock frozen until expiry), booking wait = window | Low: if it fills at submission, freezing only costs some waiting | heat 2: when does `success` arrive; does the auction stay listed until expiry? |
 | A13 | Winner-take-all: best bid past the reserve wins, decided at window end | Award rule Stated (Brief); timing Implied | same as A12 | Low | heat 2 |
-| A14 | Tender JSON has `tender_id, period, tick, expires, caption, quantity, action, is_fixed_bid, price, ticker`; auctions have `is_fixed_bid = false` and maybe a 0 / empty price | Fields Stated (Template); how auctions look Unknown | `evaluate_tender`; a zero or absurd reference price is ignored (`liability.py:211`) | Low: worst case, auctions are missed (a missing `is_fixed_bid` is treated as a fixed tender) | heat 1 (dry run): tender JSON and captions |
+| A14 | Tender JSON has `tender_id, period, tick, expires, caption, quantity, action, is_fixed_bid, price, ticker`; auctions have `is_fixed_bid = false` and maybe a 0 / empty price | Fields Stated (Template); how auctions look Unknown | `evaluate_tender`; a zero or absurd reference price is ignored (`liquidity.py:211`) | Low: worst case, auctions are missed (a missing `is_fixed_bid` is treated as a fixed tender) | heat 1 (dry run): tender JSON and captions |
 | **A15** | **Open positions at the end are closed at the last traded price, with no fine** | Close-out Stated (Brief); "no fine" Implied (no fine listed); **Precedent against: 2026 fined $10/share for tender exposure open at the end** | `close_hold_ticks = 90`, `hold_risk_budget = 40000`, `hold_valuation`, `min_ticks_to_unwind = 5` | **High**: the bot ends heats holding up to ~125k shares (base simulator) | end of a live practice heat: Trader Info + Transaction Log. Fallback flags in section 1 |
 | A16 | The last traded price at the bell is close to the mid | Stated (Brief: market makers increase liquidity near the end so the close can't easily be manipulated) | `hold_valuation` values late tenders at the mid | Low-Medium: stress "close 5c against" −$1.4k/heat, "other desks dump at the bell" −$8.1k/heat (seeds 301-316), both still positive | compare the closing price with the mid in the recording |
 | A17 | The $0.02 commission is paid only by orders that take liquidity; resting fills are free | Unknown (Brief: "Commissions $0.02") | the economics of resting instead of crossing (C11-C13) | Low-Medium: stress `maker_fee=1` −$4.3k/heat (seeds 301-316), still positive | `/securities` `trading_fee`, `limit_order_rebate`; ask |
@@ -104,7 +104,7 @@ Read them from RIT's Transaction Log, or run `ritc report` on the run journals (
 ## 3. Market numbers: simulator guesses, measured in practice (B)
 
 The brief gives labels ("High", "Medium-low", "random intervals"), not numbers. The simulator
-(`sim/server.py`, `_setup_liability` and `_tick_liability`) fills them in with guesses. Settings tuned
+(`sim/server.py`, `_setup_liquidity` and `_tick_liquidity`) fills them in with guesses. Settings tuned
 to these guesses are retuned once the practice heats measure the real values.
 
 | ID | Quantity | Simulator guess | Brief says | Settings tuned to it | Result if different (stress, seeds 401-432 unless noted) | Measure with |
@@ -127,7 +127,7 @@ to these guesses are retuned once the practice heats measure the real values.
 
 Design choices, not facts about the case. Evidence is from the simulator (paired seeds; rule in section 5).
 
-**Pricing a tender** (`evaluate_tender`, `liability.py:117`)
+**Pricing a tender** (`evaluate_tender`, `liquidity.py:117`)
 
 | ID | Assumption | Evidence / why | Weakness |
 |---|---|---|---|

@@ -1,5 +1,5 @@
 """
-Instrumented lock-step replay of the CURRENT `liability` bot on a simulator seed, and the ledger maths.
+Instrumented lock-step replay of the CURRENT `liquidity` bot on a simulator seed, and the ledger maths.
 
 The replay records what a log cannot show: every fill (maker / taker, fee, the mid before and after it,
 shares that opened a position, shares traded while a tender on that stock was undecided), every tender
@@ -70,9 +70,9 @@ class Instrumented(Market):
                                          "qty": sign * t["quantity"], "price": float(price),
                                          "mid": self.secs[t["ticker"]].mid})
 
-    def _tick_liability(self):
+    def _tick_liquidity(self):
         before = set(self.tenders)
-        super()._tick_liability()
+        super()._tick_liquidity()
         for tid in set(self.tenders) - before:
             t = self.tenders[tid]
             s = self.secs[t["ticker"]]
@@ -141,7 +141,7 @@ def decision_hook(market: Market, force_tid: int | None = None, force_mode: str 
     "decline" an accepted tender, or "accept" a declined one (an auction at its hidden reserve, a
     winner-take-all one cent past the rival). Restores the strategy module on exit.
     """
-    import ritc.strategies.liability as liab
+    import ritc.strategies.liquidity as liab
     orig = liab.evaluate_tender
     evals: dict[int, dict] = {}
 
@@ -190,14 +190,14 @@ def replay(seed: int, stress: str = "", hostile: float = 0.0, overrides: dict | 
     root = logging.getLogger()
     saved = root.handlers[:], root.level, logging.root.manager.disable
     try:
-        m = Instrumented("liability", 420, 1, seed, hostile, queue)
+        m = Instrumented("liquidity", 420, 1, seed, hostile, queue)
         m.status = "ACTIVE"
         h = _ListHandler(m)
         root.handlers = [h] if keep_log else [logging.NullHandler()]
         root.setLevel(logging.INFO)
         logging.disable(logging.NOTSET)
         with decision_hook(m, force_tid, force_mode) as evals:
-            runner, cfg = build("liability", config_path, live=not dry, overrides=overrides or {})
+            runner, cfg = build("liquidity", config_path, live=not dry, overrides=overrides or {})
             if dry:
                 runner.s.ex.dry_run = True
             runner.client.adapter = RecordingAdapter(m)

@@ -1,26 +1,11 @@
 """
-Strategy registry. One module per RITC case family:
+Strategy registry. One module per RITC case:
 
-    liability    tender offers: accept profitable blocks, unwind them cheaply
-    derivatives  options volatility arbitrage, delta-hedged
-    etf          ETF vs basket arbitrage
-    equity       inventory-aware market making
-    commodity    futures cost-of-carry arbitrage + inventory-news momentum
+    liquidity    tender offers: accept profitable blocks, unwind them cheaply
 """
 
-from .commodity import CommodityStrategy
-from .derivatives import DerivativesStrategy
-from .equity import EquityStrategy
-from .etf import ETFStrategy
-from .liability import LiabilityStrategy
+from .liquidity import LiquidityStrategy
 
-REGISTRY = {
-    "liability": LiabilityStrategy,
-    "derivatives": DerivativesStrategy,
-    "etf": ETFStrategy,
-    "equity": EquityStrategy,
-    "commodity": CommodityStrategy,
-}
+REGISTRY = {"liquidity": LiquidityStrategy}
 
-__all__ = ["REGISTRY", "CommodityStrategy", "DerivativesStrategy", "ETFStrategy",
-           "EquityStrategy", "LiabilityStrategy"]
+__all__ = ["REGISTRY", "LiquidityStrategy"]
